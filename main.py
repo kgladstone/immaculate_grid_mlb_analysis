@@ -9,29 +9,32 @@ import pandas as pd
 import unidecode
 import random
 
-# Build team master data
-# primary key: franchID
-teams_db = pd.DataFrame()
-THIS_YEAR = 2023
-
-print("(1) Loading team master data...")
-for i in range(1876,THIS_YEAR+1):
-    teams_i = pb.team_ids(i)
-    teams_db = pd.concat([teams_db, teams_i])
-teams_db = teams_db[["yearID","teamID", "franchID"]].drop_duplicates()
-print("Team master data loaded!")
+def initialize_data():
+    # Build team master data
+    # primary key: franchID
+    team_master = pd.DataFrame()
+    THIS_YEAR = 2023
     
-# Build player master data
-print("(2) Loading player master data...")
-player_master = pb.chadwick_register()
-player_master.name_last = player_master['name_last'].apply(lambda x: unidecode.unidecode(str(x)))
-player_master.name_first = player_master['name_first'].apply(lambda x: unidecode.unidecode(str(x)))
-print("Player master data loaded!")
+    print("(1) Loading team master data...")
+    for i in range(1876,THIS_YEAR+1):
+        teams_i = pb.team_ids(i)
+        team_master = pd.concat([team_master, teams_i])
+    team_master = team_master[["yearID","teamID", "franchID"]].drop_duplicates()
+    print("Team master data loaded!")
+        
+    # Build player master data
+    print("(2) Loading player master data...")
+    player_master = pb.chadwick_register()
+    player_master.name_last = player_master['name_last'].apply(lambda x: unidecode.unidecode(str(x)))
+    player_master.name_first = player_master['name_first'].apply(lambda x: unidecode.unidecode(str(x)))
+    print("Player master data loaded!")
+    
+    # Build player appearances master data
+    print("(3) Loading player appearances master data...")
+    appearances_master = pb.lahman.appearances()
+    print("Player appearances master data loaded!")
 
-# Build player appearances master data
-print("(3) Loading player appearances master data...")
-appearances_master = pb.lahman.appearances()
-print("Player appearances master data loaded!")
+    return(team_master, player_master, appearances_master)
 
 #-----------------------------------------------------------------------------------------------------------------------
 
@@ -58,7 +61,7 @@ def get_appearances_from_player(last, first):
 def get_franchises_from_player(last, first):
     appearances = get_appearances_from_player(last, first)
     appearances = pd.DataFrame(appearances)
-    teams = pd.merge(appearances, teams_db, on=["teamID", "yearID"], how="left")["franchID"].unique()
+    teams = pd.merge(appearances, team_master, on=["teamID", "yearID"], how="left")["franchID"].unique()
     return(teams)
 
 # Check Answers - Team Intersection
@@ -80,7 +83,7 @@ def is_player_team_intersection(team1, team2, last, first):
 def play_one_square():
     # Initialize random square
     MAX_YEAR = 2021
-    current_teams = list(teams_db.loc[teams_db['yearID'] == MAX_YEAR]["franchID"])
+    current_teams = list(team_master.loc[team_master['yearID'] == MAX_YEAR]["franchID"])
     teams = random.sample(current_teams, 2)
     
     # User interface
@@ -95,6 +98,7 @@ def play_one_square():
         print("Nope! Try again")
 
 def main():
+    team_master, player_master, appearances_master = initialize_data()
     while True:
         play_one_square()
         play_again = input("Play again? Type Y to continue: ")
