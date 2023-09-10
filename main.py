@@ -33,8 +33,13 @@ def initialize_data():
     print("(3) Loading player appearances master data...")
     appearances_master = pb.lahman.appearances()
     print("Player appearances master data loaded!")
+    
+    master_data = dict()
+    master_data['team_master'] = team_master
+    master_data['player_master'] = player_master
+    master_data['appearances_master'] = appearances_master
 
-    return(team_master, player_master, appearances_master)
+    return(master_data)
 
 #-----------------------------------------------------------------------------------------------------------------------
 
@@ -43,46 +48,51 @@ def initialize_data():
 # --- players with duplicate names
 # --- no way to show players with fuzzy match names, need exact spelling
 # --- data stops at 2021
-def get_player_id(last, first):
+def get_player_id(master_data, last, first):
+    player_master = master_data['player_master']
     row = player_master.loc[(player_master['name_last'] == last.title()) & (player_master['name_first'] == first.title())]
     if len(row) > 1:
           raise Exception("Sorry, no players with duplicate names")
     return(row.key_bbref.iloc[0])
 
-def get_appearances_from_player_id(player_id):
+def get_appearances_from_player_id(master_data, player_id):
+    appearances_master = master_data['appearances_master']
     rows = appearances_master.loc[appearances_master['playerID'] == player_id]
     return(rows)
     
-def get_appearances_from_player(last, first):
-    player_id = get_player_id(last, first)
-    appearances = get_appearances_from_player_id(player_id)
+def get_appearances_from_player(master_data, last, first):
+    player_id = get_player_id(master_data, last, first)
+    appearances = get_appearances_from_player_id(master_data, player_id)
     return(appearances)
 
-def get_franchises_from_player(last, first):
-    appearances = get_appearances_from_player(last, first)
+def get_franchises_from_player(master_data, last, first):
+    appearances = get_appearances_from_player(master_data, last, first)
     appearances = pd.DataFrame(appearances)
+    team_master = master_data['team_master']
     teams = pd.merge(appearances, team_master, on=["teamID", "yearID"], how="left")["franchID"].unique()
     return(teams)
 
 # Check Answers - Team Intersection
-def is_player_in_db(last, first):
+def is_player_in_db(master_data, last, first):
+    player_master = master_data['player_master']
     row = player_master.loc[(player_master['name_last'] == last.title()) & (player_master['name_first'] == first.title())]
     return (len(row) != 0)
         
-def is_player_team_intersection(team1, team2, last, first):
-    if not is_player_in_db(last, first):
+def is_player_team_intersection(master_data, team1, team2, last, first):
+    if not is_player_in_db(master_data, last, first):
         print("Sorry, player does not exist in database (with this spelling of name)")
         return False
     team1 = team1.upper()
     team2 = team2.upper()
-    player_franchises = get_franchises_from_player(last, first)
+    player_franchises = get_franchises_from_player(master_data, last, first)
     return (team1 in player_franchises and team2 in player_franchises)
 
 # Gameplay
 # Team intersection only
-def play_one_square():
+def play_one_square(master_data):
     # Initialize random square
     MAX_YEAR = 2021
+    team_master = master_data['team_master']
     current_teams = list(team_master.loc[team_master['yearID'] == MAX_YEAR]["franchID"])
     teams = random.sample(current_teams, 2)
     
@@ -91,16 +101,16 @@ def play_one_square():
     print(teams)
     first = input("Enter first name: ")
     last = input("Enter last name: ")
-    check = is_player_team_intersection(teams[0], teams[1], last, first)
+    check = is_player_team_intersection(master_data, teams[0], teams[1], last, first)
     if check:
         print("Yes! You got it!")
     else:
         print("Nope! Try again")
 
 def main():
-    team_master, player_master, appearances_master = initialize_data()
+    master_data = initialize_data()
     while True:
-        play_one_square()
+        play_one_square(master_data)
         play_again = input("Play again? Type Y to continue: ")
         if play_again.upper() != "Y":
             break
