@@ -28,6 +28,6 @@ def main():
     grid_data = list()
     for i in range(1, MAX_GRID_ID):
         grid_data.append(get_grid_as_list(i))
-    write_lists_of_lists_csv(data, "immaculate_grid_prompt_data.csv")
+    write_lists_of_lists_csv(grid_data, "immaculate_grid_prompt_data.csv")
     
 main()
