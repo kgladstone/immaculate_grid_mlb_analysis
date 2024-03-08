@@ -34,7 +34,8 @@ def write_lists_of_lists_csv(list_of_lists, output_fn):
 
 def main():
     grid_data = list()
-    for i in range(1, MAX_GRID_ID):
+    today_grid_id = get_today_grid_id()
+    for i in range(1, today_grid_id + 1):
         grid_data.append(get_grid_as_list(i))
     write_lists_of_lists_csv(grid_data, "immaculate_grid_prompt_data.csv")
     
