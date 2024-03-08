@@ -2,8 +2,16 @@
 import requests
 from bs4 import BeautifulSoup
 import csv
+from datetime import datetime
 
-MAX_GRID_ID = 340
+def get_today_grid_id():
+    # The Immaculate Grid started on April 3, 2023
+    # Calculate the number of days from April 3, 2023, to today
+    today = datetime.now()
+    START_DATE = datetime(2023, 4, 2)
+    # Calculate the difference in days
+    grid_id_today = (today - START_DATE).days
+    return grid_id_today
 
 def get_grid_as_list(grid_id):
     print("Attempting to pull Immaculate Grid #{}".format(str(grid_id)))
@@ -18,7 +26,7 @@ def get_grid_as_list(grid_id):
     return list_of_labels
 
 def write_lists_of_lists_csv(list_of_lists, output_fn):
-    with open(output_fn, 'w', newline='') as file:
+    with open(output_fn, 'w', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
         writer.writerows(list_of_lists)
     print(f'Data written to {output_fn}')
