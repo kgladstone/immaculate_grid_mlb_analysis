@@ -1,0 +1,2 @@
+- Simulator --> interactive game for users to test their skills
+- Prompt scraper --> webscraper to compile dataset of all daily grid prompts
