@@ -2,12 +2,12 @@ import pandas as pd
 import sqlite3
 import re
 from pydantic import BaseModel
-import json
+import json, pickle
 
 # --------------------------------------------------------------------------------------
 # Global Variables
 DB_PATH = '/Users/samarnesen/Library/Messages/chat.db'
-OUTPUT_PATH ='~/Desktop/'
+OUTPUT_PATH ='./output.p'
 MY_NAME = 'Sam'
 
 # --------------------------------------------------------------------------------------
@@ -29,9 +29,9 @@ def _convert_timestamp(ts):
   unix_timestamp_seconds = apple_timestamp_seconds + 978307200
   return pd.to_datetime(unix_timestamp_seconds, unit='s').date().strftime('%m/%d/%Y')
 
-def _row_to_name(row, my_name):
+def _row_to_name(row):
     if row.is_from_me:
-        return my_name
+        return MY_NAME
     elif row.phone_number == "+17736776982":
         return "Sam"
     elif row.phone_number == "+17736776717":
@@ -92,7 +92,7 @@ def process_immaculate_grid_results(messages_df):
           grid_number = int(parsed[0])
           correct = int(parsed[1])
           score = int(re.search(r"Rarity: (\d{1,3})", row.text).groups()[0])
-          date = convert_timestamp(row.date)
+          date = _convert_timestamp(row.date)
   
           # get specific correctness
           matrix = []
@@ -117,20 +117,16 @@ def process_immaculate_grid_results(messages_df):
               reversed.setdefault(grid_number, {}).setdefault(name, obj)
           if grid_number >= current_grid_number:
               current_grid_number = grid_number
+  return texts
 
-def write_to_json(file_path, data):
+def pickle_dump(file_path, data):
     # Convert pydantic models to dicts
-    def model_to_dict(obj):
-        if isinstance(obj, ImmaculateGridResult):
-            return obj.dict()
-        return obj
-
-    with open(file_path, 'w') as f:
-        json.dump(data, f, indent=4, default=model_to_dict)
+    with open(file_path, 'wb') as f:
+        pickle.dump(data, f)
 
 def main():
     messages_df = extract_messages(DB_PATH)
     texts = process_immaculate_grid_results(messages_df)
-    write_to_json(OUTPUT_PATH, texts)
+    pickle_dump(OUTPUT_PATH, texts)
 
 main()
