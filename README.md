@@ -1,2 +1,3 @@
 - Simulator --> interactive game for users to test their skills
-- Prompt scraper --> webscraper to compile dataset of all daily grid prompts
+- Prompt Scraper --> webscraper to compile dataset of all daily grid prompts
+- Apple Message Parser --> process grid results that are sent over text and stored locally in a chat database
