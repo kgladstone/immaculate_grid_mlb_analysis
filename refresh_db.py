@@ -294,6 +294,9 @@ if __name__ == "__main__":
     
     # Drop duplicates to keep only unique rows
     data_combined_unique = data_combined.drop_duplicates()
+
+    # Sort by 'date' first, then by 'name'
+    data_sorted = data_combined_unique.sort_values(by=['date', 'name'])
     
     # Count unique rows in the combined DataFrame
     final_unique_count = data_combined_unique.shape[0]
@@ -304,4 +307,4 @@ if __name__ == "__main__":
     # Print the result
     print(f"Number of new unique rows created: {new_unique_rows_count}")
     
-    write_results_to_csv(CSV_PATH, data_combined_unique)  # Write to CSV
+    write_results_to_csv(CSV_PATH, data_sorted)  # Write to CSV
