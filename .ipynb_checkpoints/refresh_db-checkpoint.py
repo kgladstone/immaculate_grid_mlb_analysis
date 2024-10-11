@@ -285,6 +285,23 @@ if __name__ == "__main__":
         data_previous = pd.DataFrame()  # Create an empty DataFrame if the file doesn't exist
 
     data_latest = process_immaculate_grid_results(extract_messages(APPLE_TEXTS_DB_PATH))
-    data_combined = pd.concat([data_previous, data_latest], ignore_index=True).drop_duplicates()
-
-    write_results_to_csv(CSV_PATH, data_combined)  # Write to CSV
+    
+    # Count the unique rows in old DataFrame before combining
+    initial_unique_previous = data_previous.drop_duplicates().shape[0]
+    
+    # Combine the data
+    data_combined = pd.concat([data_previous, data_latest], ignore_index=True)
+    
+    # Drop duplicates to keep only unique rows
+    data_combined_unique = data_combined.drop_duplicates()
+    
+    # Count unique rows in the combined DataFrame
+    final_unique_count = data_combined_unique.shape[0]
+    
+    # Calculate the number of new unique rows created
+    new_unique_rows_count = final_unique_count - initial_unique_previous
+    
+    # Print the result
+    print(f"Number of new unique rows created: {new_unique_rows_count}")
+    
+    write_results_to_csv(CSV_PATH, data_combined_unique)  # Write to CSV
