@@ -34,7 +34,7 @@ class ImmaculateGridResult(BaseModel):
     matrix: list[list[bool]] = None
     text: str
     name: str  # New field for player name (grid player; not MLB player)
-
+    
     def to_dict(self):
         """
         Convert the ImmaculateGridResult instance to a dictionary format for easy CSV export.
@@ -47,8 +47,59 @@ class ImmaculateGridResult(BaseModel):
             "date": self.date,  # Date will now be in YYYY-MM-DD format
             "matrix": json.dumps(self.matrix),  # Convert matrix to JSON string for CSV
             "text": self.text,
-            "name": self.name  # Include the name in the dictionary
+            "name": self.name,  # Include the name in the dictionary
         }
+
+class ImmaculateGridUtils:
+    @staticmethod
+    def df_to_immaculate_grid_objs(df):
+        """
+        Convert a DataFrame into a dictionary of ImmaculateGridResult objects grouped by name.
+    
+        Parameters:
+            df (pd.DataFrame): The DataFrame containing the necessary columns to create ImmaculateGridResult objects.
+    
+        Returns:
+            dict: A dictionary where the key is the player's name and the value is a list of ImmaculateGridResult objects.
+        """
+        results = {}
+        for _, row in df.iterrows():
+            try:
+                # Extract values from the row
+                correct = row['correct']
+                score = row['score']
+                date = row['date']
+                matrix = json.loads(row['matrix']) if pd.notna(row['matrix']) else None
+                text = row['text']
+                name = row['name']
+    
+                # Add the result to the list for the specific player name
+                result = ImmaculateGridResult(
+                    correct=correct,
+                    score=score,
+                    date=date,
+                    matrix=matrix,
+                    text=text,
+                    name=name
+                )
+    
+                if name not in results:
+                    results[name] = []
+                results[name].append(result)
+    
+            except Exception as e:
+                print(f"Error processing row: {row.to_dict()}\nField causing error: {e}")
+                continue
+    
+        return results
+
+    @staticmethod
+    def extract_grid_number_from_text(text):
+        """
+        Function to extract grid number from the text of ImmaculateGridResult
+        """
+        match = re.search(r"Immaculate Grid (\d+)", text)
+        return int(match.group(1)) if match else None
 
 # --------------------------------------------------------------------------------------
 # Helper Functions
