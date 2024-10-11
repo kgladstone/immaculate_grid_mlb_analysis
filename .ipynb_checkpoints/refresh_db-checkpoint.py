@@ -226,7 +226,14 @@ def read_results_from_csv(file_path):
 # --------------------------------------------------------------------------------------
 # Main Execution
 if __name__ == "__main__":
-    data_previous = read_results_from_csv(CSV_PATH)
+    
+    # Check if the CSV file exists
+    if os.path.exists(CSV_PATH):
+        data_previous = read_results_from_csv(CSV_PATH)
+    else:
+        data_previous = pd.DataFrame()  # Create an empty DataFrame if the file doesn't exist
+
     data_latest = process_immaculate_grid_results(extract_messages(APPLE_TEXTS_DB_PATH))
     data_combined = pd.concat([data_previous, data_latest], ignore_index=True).drop_duplicates()
+
     write_results_to_csv(CSV_PATH, data_combined)  # Write to CSV
