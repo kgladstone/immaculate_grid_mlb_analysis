@@ -193,6 +193,14 @@ def extract_messages(db_path):
     conn.close()
     return messages_df
 
+def test_messages_available(messages_df):
+    for idx, row in messages_df[["text", "date", "phone_number", "is_from_me"]].iterrows():
+        name = _row_to_name(row)
+        if _is_valid_message(name, row.text):
+            print("********************************************")
+            print("Message from {} on {}: ".format(name, _convert_timestamp(row.date)))
+            print(row.text)
+
 def process_immaculate_grid_results(messages_df):
     """
     Process the messages dataframe to extract and organize Immaculate Grid results.
@@ -284,6 +292,10 @@ if __name__ == "__main__":
     else:
         data_previous = pd.DataFrame()  # Create an empty DataFrame if the file doesn't exist
 
+    # Validate data from text messages
+    #test_messages_available(extract_messages(APPLE_TEXTS_DB_PATH))
+
+    # Extract formatted data from text messages
     data_latest = process_immaculate_grid_results(extract_messages(APPLE_TEXTS_DB_PATH))
     
     # Count the unique rows in old DataFrame before combining
