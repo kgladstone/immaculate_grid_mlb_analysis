@@ -470,6 +470,7 @@ grid_number,correct,score,date,matrix,name
 204,8,186,2023-10-23,"[[true, true, true], [true, true, true], [false, true, true]]",Will
 205,5,415,2023-10-24,"[[false, true, true], [false, true, true], [false, false, true]]",Cliff
 205,7,375,2023-10-24,"[[true, true, true], [true, true, true], [false, false, true]]",Keith
+205,7,390,2023-10-24,"[[true, true, true], [true, true, true], [false, false, true]]",Keith
 205,5,547,2023-10-24,"[[false, true, true], [false, true, true], [false, true, false]]",Rachel
 205,7,359,2023-10-24,"[[false, true, true], [true, true, true], [false, true, true]]",Sam
 205,7,357,2023-10-24,"[[false, true, true], [true, true, true], [false, true, true]]",Will
@@ -707,6 +708,7 @@ grid_number,correct,score,date,matrix,name
 250,8,194,2023-12-08,"[[true, true, true], [true, true, true], [true, false, true]]",Will
 251,9,8,2023-12-09,"[[true, true, true], [true, true, true], [true, true, true]]",Cliff
 251,8,179,2023-12-09,"[[true, true, true], [true, true, false], [true, true, true]]",Keith
+251,8,186,2023-12-09,"[[true, true, true], [true, true, false], [true, true, true]]",Keith
 251,8,213,2023-12-09,"[[true, true, true], [true, true, false], [true, true, true]]",Rachel
 251,9,105,2023-12-09,"[[true, true, true], [true, true, true], [true, true, true]]",Sam
 251,9,88,2023-12-09,"[[true, true, true], [true, true, true], [true, true, true]]",Will
@@ -901,6 +903,7 @@ grid_number,correct,score,date,matrix,name
 289,9,157,2024-01-16,"[[true, true, true], [true, true, true], [true, true, true]]",Will
 290,7,261,2024-01-17,"[[true, true, true], [false, true, true], [false, true, true]]",Cliff
 290,9,88,2024-01-17,"[[true, true, true], [true, true, true], [true, true, true]]",Keith
+290,9,84,2024-01-17,"[[true, true, true], [true, true, true], [true, true, true]]",Keith
 290,7,338,2024-01-17,"[[true, true, true], [false, true, true], [false, true, true]]",Rachel
 290,8,249,2024-01-17,"[[true, true, true], [true, true, true], [false, true, true]]",Sam
 290,7,348,2024-01-17,"[[true, true, true], [false, true, true], [false, true, true]]",Will
@@ -975,6 +978,7 @@ grid_number,correct,score,date,matrix,name
 304,5,548,2024-01-31,"[[false, true, true], [false, true, true], [false, false, true]]",Sam
 304,8,243,2024-01-31,"[[true, true, true], [true, true, true], [true, false, true]]",Will
 305,9,136,2024-02-01,"[[true, true, true], [true, true, true], [true, true, true]]",Cliff
+305,9,86,2024-02-01,"[[true, true, true], [true, true, true], [true, true, true]]",Cliff
 305,9,266,2024-02-01,"[[true, true, true], [true, true, true], [true, true, true]]",Keith
 305,7,456,2024-02-01,"[[true, false, true], [true, true, false], [true, true, true]]",Rachel
 305,6,436,2024-02-01,"[[true, false, false], [true, true, false], [true, true, true]]",Sam
@@ -1902,6 +1906,7 @@ grid_number,correct,score,date,matrix,name
 490,7,299,2024-08-04,"[[true, true, true], [false, false, true], [true, true, true]]",Sam
 491,8,260,2024-08-05,"[[true, true, true], [true, true, true], [true, false, true]]",Cliff
 491,8,235,2024-08-05,"[[true, true, true], [true, false, true], [true, true, true]]",Keith
+491,8,234,2024-08-05,"[[true, true, true], [true, false, true], [true, true, true]]",Keith
 491,8,313,2024-08-05,"[[true, true, true], [true, false, true], [true, true, true]]",Rachel
 491,8,272,2024-08-05,"[[true, true, true], [true, false, true], [true, true, true]]",Sam
 490,7,218,2024-08-05,"[[false, true, true], [false, true, true], [true, true, true]]",Will
