@@ -93,14 +93,6 @@ class ImmaculateGridUtils:
     
         return results
 
-    @staticmethod
-    def extract_grid_number_from_text(text):
-        """
-        Function to extract grid number from the text of ImmaculateGridResult
-        """
-        match = re.search(r"Immaculate Grid (\d+)", text)
-        return int(match.group(1)) if match else None
-
 # --------------------------------------------------------------------------------------
 # Helper Functions
 def _convert_timestamp(ts):
@@ -117,6 +109,27 @@ def _convert_timestamp(ts):
     unix_timestamp_seconds = apple_timestamp_seconds + 978307200
     return pd.to_datetime(unix_timestamp_seconds, unit='s').date().strftime('%Y-%m-%d')
 
+def _matrix_from_text(text):
+    """
+    Extract matrix from the raw text of a message
+    """
+    matrix = []
+    for text_row in text.split("\n"):
+        current = []
+        for char in text_row:
+            if ord(char) == 11036:  # "⬜️":
+                current.append(False)
+            elif ord(char) == 129001:  # "🟩":
+                current.append(True)
+        if len(current) > 0:
+            if len(current) != 3:
+                print(row.text)
+                assert len(current) == 3
+            else:
+                matrix.append(current)
+    assert len(matrix) == 3
+    return matrix
+    
 def _row_to_name(row):
     """
     Map phone numbers to known names or the user's own name.
@@ -163,7 +176,7 @@ def _is_valid_message(name, text):
 
 # --------------------------------------------------------------------------------------
 # Core Functions
-def extract_messages(db_path):
+def extract_raw_messages(db_path):
     """
     Extract message contents from the Apple Messages database.
     
@@ -232,22 +245,30 @@ def test_messages(messages_df):
     # # Display the summary of the number of rows of data by cleaned date
     # print("Summary of message counts by cleaned date:")
     # print(full_summary)
-    
-    # Call out instances where there are zero or fewer than 5 messages on that date
-    print("\nDates with fewer than 5 messages (including zero):")
-    fewer_than_5 = full_summary[full_summary['message_count'] < 5]
-    if not fewer_than_5.empty:
-        print(fewer_than_5)
-    else:
-        print("No dates with fewer than 5 messages (including zero).")
 
-    # Call out instances where there are zero or fewer than 5 messages on that date
-    print("\nDates with more than 5 messages:")
-    more_than_5 = full_summary[full_summary['message_count'] > 5]
-    if not more_than_5.empty:
-        print(more_than_5)
+    # Call out instances where there are zero messages on that date
+    print("\nDates with fewer than 5 messages (including zero):")
+    zero = full_summary[full_summary['message_count'] == 0]
+    if not zero.empty:
+        print(zero)
     else:
-        print("No dates with more than 5 messages.")
+        print("No dates with 0 messages.")
+    
+    # # Call out instances where there are zero or fewer than 5 messages on that date
+    # print("\nDates with fewer than 5 messages (including zero):")
+    # fewer_than_5 = full_summary[full_summary['message_count'] < 5]
+    # if not fewer_than_5.empty:
+    #     print(fewer_than_5)
+    # else:
+    #     print("No dates with fewer than 5 messages (including zero).")
+
+    # # Call out instances where there are zero or fewer than 5 messages on that date
+    # print("\nDates with more than 5 messages:")
+    # more_than_5 = full_summary[full_summary['message_count'] > 5]
+    # if not more_than_5.empty:
+    #     print(more_than_5)
+    # else:
+    #     print("No dates with more than 5 messages.")
 
 
 def process_immaculate_grid_results(messages_df):
@@ -263,33 +284,33 @@ def process_immaculate_grid_results(messages_df):
     texts = {}
     current_grid_number = 0
     for idx, row in messages_df[["text", "date", "phone_number", "is_from_me"]].iterrows():
+
+        # Extract name using phone number and "is_from_me" parameters
         name = _row_to_name(row)
+
+        # Only process the message if it is valid
         if _is_valid_message(name, row.text):
             try:
                 parsed = re.search(r"Immaculate Grid (\d+) (\d)/\d", row.text).groups()
             except Exception as e:
                 continue
+
+            # Parse grid number
             grid_number = int(parsed[0])
+
+            # Parse number correct
             correct = int(parsed[1])
+
+            # Parse score
             score = int(re.search(r"Rarity: (\d{1,3})", row.text).groups()[0])
+
+            # Parse cleaned date
             date = _convert_timestamp(row.date)  # Date in YYYY-MM-DD format
 
             # Get specific correctness
-            matrix = []
-            for text_row in row.text.split("\n"):
-                current = []
-                for char in text_row:
-                    if ord(char) == 11036:  # "⬜️":
-                        current.append(False)
-                    elif ord(char) == 129001:  # "🟩":
-                        current.append(True)
-                if len(current) > 0:
-                    if len(current) != 3:
-                        print(row.text)
-                        assert len(current) == 3
-                    else:
-                        matrix.append(current)
-            assert len(matrix) == 3
+            matrix = _matrix_from_text(row.text)
+
+            # Compile ImmaculateGridResult object
             obj = ImmaculateGridResult(grid_number=grid_number, correct=correct, score=score, date=date, matrix=matrix, name=name)  # Include name here
             if name not in texts or grid_number not in texts[name] or (name in texts and grid_number in texts[name] and texts[name][grid_number].correct == correct):
                 texts.setdefault(name, {}).setdefault(grid_number, obj)
@@ -341,10 +362,11 @@ if __name__ == "__main__":
         data_previous = pd.DataFrame()  # Create an empty DataFrame if the file doesn't exist
 
     # Validate data from text messages
-    #test_messages(prep_valid_messages(extract_messages(APPLE_TEXTS_DB_PATH)))
+    #test_messages(prep_valid_messages(extract_raw_messages(APPLE_TEXTS_DB_PATH)))
 
     # Extract formatted data from text messages
-    data_latest = process_immaculate_grid_results(extract_messages(APPLE_TEXTS_DB_PATH))
+    raw_messages_from_icloud = extract_raw_messages(APPLE_TEXTS_DB_PATH)
+    data_latest = process_immaculate_grid_results(raw_messages_from_icloud)
   
     # Count the unique rows in old DataFrame before combining
     initial_unique_previous = data_previous.drop_duplicates().shape[0]
