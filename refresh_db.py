@@ -28,11 +28,11 @@ class ImmaculateGridResult(BaseModel):
     A class to represent the results of an Immaculate Grid game using the Pydantic BaseModel.
     """
 
+    grid_number: int
     correct: int
     score: int
     date: str
     matrix: list[list[bool]] = None
-    text: str
     name: str  # New field for player name (grid player; not MLB player)
     
     def to_dict(self):
@@ -42,11 +42,11 @@ class ImmaculateGridResult(BaseModel):
             dict: A dictionary containing the result fields for CSV storage.
         """
         return {
+            "grid_number": self.grid_number,
             "correct": self.correct,
             "score": self.score,
             "date": self.date,  # Date will now be in YYYY-MM-DD format
             "matrix": json.dumps(self.matrix),  # Convert matrix to JSON string for CSV
-            "text": self.text,
             "name": self.name,  # Include the name in the dictionary
         }
 
@@ -66,20 +66,20 @@ class ImmaculateGridUtils:
         for _, row in df.iterrows():
             try:
                 # Extract values from the row
+                grid_number = row['grid_number']
                 correct = row['correct']
                 score = row['score']
                 date = row['date']
                 matrix = json.loads(row['matrix']) if pd.notna(row['matrix']) else None
-                text = row['text']
                 name = row['name']
     
                 # Add the result to the list for the specific player name
                 result = ImmaculateGridResult(
+                    grid_number=grid_number,
                     correct=correct,
                     score=score,
                     date=date,
                     matrix=matrix,
-                    text=text,
                     name=name
                 )
     
@@ -193,13 +193,62 @@ def extract_messages(db_path):
     conn.close()
     return messages_df
 
-def test_messages_available(messages_df):
-    for idx, row in messages_df[["text", "date", "phone_number", "is_from_me"]].iterrows():
-        name = _row_to_name(row)
-        if _is_valid_message(name, row.text):
-            print("********************************************")
-            print("Message from {} on {}: ".format(name, _convert_timestamp(row.date)))
-            print(row.text)
+def prep_valid_messages(messages_df):
+    # Apply the _convert_timestamp function to clean the date field
+    messages_df['date'] = messages_df['date'].apply(_convert_timestamp)
+    
+    # Ensure that the cleaned_date column is of datetime type
+    messages_df['date'] = pd.to_datetime(messages_df['date'])
+    
+    # Filter the DataFrame to include only valid messages using the _is_valid_message function
+    messages_df = messages_df[messages_df.apply(lambda row: _is_valid_message(_row_to_name(row), row['text']), axis=1)]
+    
+    # Sort the DataFrame by the cleaned date in ascending order
+    messages_df = messages_df.sort_values(by="date", ascending=True)
+    
+    return messages_df
+
+def test_messages(messages_df):
+    # Extract the minimum and maximum dates from the cleaned dates
+    min_date = messages_df['date'].min()
+    max_date = messages_df['date'].max()
+    
+    print("Minimum date in dataset:", min_date)
+    print("Maximum date in dataset:", max_date)
+    
+    # Generate a complete date range from min_date to max_date
+    complete_date_range = pd.DataFrame(pd.date_range(start=min_date, end=max_date), columns=['date'])
+    
+    # Group messages by the cleaned date to count occurrences
+    message_summary = messages_df.groupby('date').size().reset_index(name='message_count')
+    
+    # Ensure the cleaned_date column in message_summary is also of datetime type
+    message_summary['date'] = pd.to_datetime(message_summary['date'])
+    
+    # Merge the complete date range with the message summary to ensure all dates are represented
+    full_summary = complete_date_range.merge(message_summary, on='date', how='left').fillna(0)
+    full_summary['message_count'] = full_summary['message_count'].astype(int)
+    
+    # # Display the summary of the number of rows of data by cleaned date
+    # print("Summary of message counts by cleaned date:")
+    # print(full_summary)
+    
+    # Call out instances where there are zero or fewer than 5 messages on that date
+    print("\nDates with fewer than 5 messages (including zero):")
+    fewer_than_5 = full_summary[full_summary['message_count'] < 5]
+    if not fewer_than_5.empty:
+        print(fewer_than_5)
+    else:
+        print("No dates with fewer than 5 messages (including zero).")
+
+    # Call out instances where there are zero or fewer than 5 messages on that date
+    print("\nDates with more than 5 messages:")
+    more_than_5 = full_summary[full_summary['message_count'] > 5]
+    if not more_than_5.empty:
+        print(more_than_5)
+    else:
+        print("No dates with more than 5 messages.")
+
 
 def process_immaculate_grid_results(messages_df):
     """
@@ -241,8 +290,7 @@ def process_immaculate_grid_results(messages_df):
                     else:
                         matrix.append(current)
             assert len(matrix) == 3
-
-            obj = ImmaculateGridResult(correct=correct, score=score, date=date, matrix=matrix, text=row.text, name=name)  # Include name here
+            obj = ImmaculateGridResult(grid_number=grid_number, correct=correct, score=score, date=date, matrix=matrix, name=name)  # Include name here
             if name not in texts or grid_number not in texts[name] or (name in texts and grid_number in texts[name] and texts[name][grid_number].correct == correct):
                 texts.setdefault(name, {}).setdefault(grid_number, obj)
             if grid_number >= current_grid_number:
@@ -293,11 +341,11 @@ if __name__ == "__main__":
         data_previous = pd.DataFrame()  # Create an empty DataFrame if the file doesn't exist
 
     # Validate data from text messages
-    #test_messages_available(extract_messages(APPLE_TEXTS_DB_PATH))
+    #test_messages(prep_valid_messages(extract_messages(APPLE_TEXTS_DB_PATH)))
 
     # Extract formatted data from text messages
     data_latest = process_immaculate_grid_results(extract_messages(APPLE_TEXTS_DB_PATH))
-    
+  
     # Count the unique rows in old DataFrame before combining
     initial_unique_previous = data_previous.drop_duplicates().shape[0]
     
@@ -309,6 +357,9 @@ if __name__ == "__main__":
 
     # Sort by 'date' first, then by 'name'
     data_sorted = data_combined_unique.sort_values(by=['date', 'name'])
+
+    # Run tests on full dataset
+    test_messages(data_sorted)
     
     # Count unique rows in the combined DataFrame
     final_unique_count = data_combined_unique.shape[0]
