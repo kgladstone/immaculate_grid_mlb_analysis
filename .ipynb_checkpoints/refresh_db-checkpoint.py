@@ -180,9 +180,14 @@ def _is_valid_message(name, text):
         "Emphasized", "Laughed at", "Loved", 
         "Questioned", "Liked", "Disliked", "🏀"
     ]
-    
+
+    # If the there is a name value and there is a text value
     if name and text and "Rarity:" in text:
+
+        # Is not a reaction message
         if not any(keyword in text for keyword in exclusion_keywords):
+
+            # Has the proper immaculate grid format
             if (re.search(r"Immaculate Grid (\d+) (\d)/\d", text)):
                 return True
     return False
@@ -251,14 +256,20 @@ def extract_valid_messages(db_path):
     return messages_df
 
 def test_messages(messages_df, header):
+    pd.set_option('display.max_rows', None)  # Show all rows
+
     print("\n*******\n{}...".format(header))
     
-    # Extract the minimum and maximum dates from the cleaned dates
+    # Extract the minimum and maximum dates
     min_date = messages_df['date'].min()
     max_date = messages_df['date'].max()
+
+    # Extract the minimum and maximum grid numbers
+    min_grid = messages_df[messages_df['date'] == min_date]['grid_number'].max()
+    max_grid = messages_df[messages_df['date'] == max_date]['grid_number'].max()
     
-    print("Minimum date in dataset:", min_date)
-    print("Maximum date in dataset:", max_date)
+    print("Minimum date in dataset: {} (Grid Number: {})".format(min_date, min_grid))
+    print("Maximum date in dataset: {} (Grid Number: {})".format(max_date, max_grid))
     
     # Generate a complete date range from min_date to max_date
     complete_date_range = pd.DataFrame(pd.date_range(start=min_date, end=max_date), columns=['date'])
@@ -278,28 +289,28 @@ def test_messages(messages_df, header):
     # print(full_summary)
 
     # Call out instances where there are zero messages on that date
-    print("\nDates with fewer than 5 messages (including zero):")
+    print("\nDates with zero messages:")
     zero = full_summary[full_summary['message_count'] == 0]
     if not zero.empty:
         print(zero)
     else:
-        print("No dates with 0 messages.")
+        print("No dates with zero messages.")
     
-    # # Call out instances where there are zero or fewer than 5 messages on that date
-    # print("\nDates with fewer than 5 messages (including zero):")
-    # fewer_than_5 = full_summary[full_summary['message_count'] < 5]
-    # if not fewer_than_5.empty:
-    #     print(fewer_than_5)
-    # else:
-    #     print("No dates with fewer than 5 messages (including zero).")
+    # Call out instances where there are zero or fewer than 5 messages on that date
+    print("\nDates with fewer than 5 messages (including zero):")
+    fewer_than_5 = full_summary[full_summary['message_count'] < 5]
+    if not fewer_than_5.empty:
+        print(fewer_than_5)
+    else:
+        print("No dates with fewer than 5 messages (including zero).")
 
-    # # Call out instances where there are more than 5 messages on that date
-    # print("\nDates with more than 5 messages:")
-    # more_than_5 = full_summary[full_summary['message_count'] > 5]
-    # if not more_than_5.empty:
-    #     print(more_than_5)
-    # else:
-    #     print("No dates with more than 5 messages.")
+    # Call out instances where there are more than 5 messages on that date
+    print("\nDates with more than 5 messages:")
+    more_than_5 = full_summary[full_summary['message_count'] > 5]
+    if not more_than_5.empty:
+        print(more_than_5)
+    else:
+        print("No dates with more than 5 messages.")
 
 def write_results_to_csv(file_path, df):
     """
