@@ -196,8 +196,9 @@ def _is_valid_message(name, text):
         "Questioned", "Liked", "Disliked", "🏀"
     ]
 
-    if name is not None:
-        if text is not None:
+    if text is not None:
+        print(text)
+        if name is not None:
             # Is not a reaction message
             if not any(keyword in text for keyword in exclusion_keywords):
                 # Has rarity
@@ -209,7 +210,7 @@ def _is_valid_message(name, text):
 
 # --------------------------------------------------------------------------------------
 # Core Functions
-def extract_valid_messages(db_path):
+def extract_messages(db_path):
     """
     Extract message contents from the Apple Messages database.
     
@@ -242,6 +243,9 @@ def extract_valid_messages(db_path):
     messages_df = pd.read_sql_query(query, conn)
     conn.close()
 
+    return messages_df
+
+def process_messages(messages_df):
     # Extract name using phone number and "is_from_me" parameters
     print("Extracting usernames...")
     messages_df['name'] = messages_df.apply(lambda row: _row_to_name(row['phone_number'], row['is_from_me']), axis=1)
@@ -380,7 +384,8 @@ if __name__ == "__main__":
         data_previous = pd.DataFrame()  # Create an empty DataFrame if the file doesn't exist
     
     # Extract formatted data from text messages
-    data_latest = extract_valid_messages(APPLE_TEXTS_DB_PATH)
+    data_latest_raw = extract_messages(APPLE_TEXTS_DB_PATH)
+    data_latest = process_messages(data_latest_raw)
 
     # Validate data from text messages
     test_messages(data_latest, "Testing on new dataset")
