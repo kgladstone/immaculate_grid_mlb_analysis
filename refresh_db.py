@@ -14,6 +14,7 @@ import sqlite3
 import re
 from pydantic import BaseModel
 import json
+from datetime import datetime, timedelta
 
 # --------------------------------------------------------------------------------------
 # Global Variables
@@ -110,8 +111,22 @@ def _convert_timestamp(ts):
     return pd.to_datetime(unix_timestamp_seconds, unit='s').date().strftime('%Y-%m-%d')
 
 def _grid_number_from_text(text):
-    parsed = re.search(r"Immaculate Grid (\d+) (\d)/\d", text).groups()
-    return int(parsed[0])
+    try:
+        match = re.search(r"Immaculate Grid (\d+) (\d)/\d", text)
+        if not match:
+            raise ValueError(f"No match found for text: '{text}'")
+        else:
+            parsed = match.groups()
+            return int(parsed[0])
+    except ValueError as e:
+        print(e)
+        print(text)
+        return None
+
+def _fixed_date_from_grid_number(n):
+    start_date = datetime(2023, 4, 2) # hardcoded start day of immaculate grid universe
+    result_date = start_date + timedelta(days=n)
+    return result_date.strftime('%Y-%m-%d')
 
 def _correct_from_text(text):
     parsed = re.search(r"Immaculate Grid (\d+) (\d)/\d", text).groups()
@@ -181,15 +196,15 @@ def _is_valid_message(name, text):
         "Questioned", "Liked", "Disliked", "🏀"
     ]
 
-    # If the there is a name value and there is a text value
-    if name and text and "Rarity:" in text:
-
-        # Is not a reaction message
-        if not any(keyword in text for keyword in exclusion_keywords):
-
-            # Has the proper immaculate grid format
-            if (re.search(r"Immaculate Grid (\d+) (\d)/\d", text)):
-                return True
+    if name is not None:
+        if text is not None:
+            # Is not a reaction message
+            if not any(keyword in text for keyword in exclusion_keywords):
+                # Has rarity
+                if "Rarity: " in text:                    
+                    # Has the proper immaculate grid format
+                    if "Immaculate Grid " in text:
+                        return True
     return False
 
 # --------------------------------------------------------------------------------------
@@ -222,19 +237,29 @@ def extract_valid_messages(db_path):
     ON 
         message.handle_id = handle.rowid
     '''
+
+    print("Querying message database...")
     messages_df = pd.read_sql_query(query, conn)
     conn.close()
 
-    # Apply the _convert_timestamp function to clean the date field
-    messages_df['date'] = messages_df['date'].apply(_convert_timestamp)
-
     # Extract name using phone number and "is_from_me" parameters
+    print("Extracting usernames...")
     messages_df['name'] = messages_df.apply(lambda row: _row_to_name(row['phone_number'], row['is_from_me']), axis=1)
 
     # Filter the DataFrame to include only valid messages using the _is_valid_message function
-    messages_df = messages_df[messages_df.apply(lambda row: _is_valid_message(row['name'], row['text']), axis=1)]
-
+    print("Filter on valid messages...")
+    messages_df['valid'] = messages_df.apply(lambda row: _is_valid_message(row['name'], row['text']), axis=1)
+    num_messages = len(messages_df)
+    messages_df = messages_df[messages_df['valid'] == True]
+    num_valid_messages = len(messages_df)
+    print("{} of {} messages were valid...".format(num_valid_messages, num_messages))
+    
+    # Apply the _convert_timestamp function to clean the date field
+    print("Formatting the date...")
+    messages_df['date'] = messages_df['date'].apply(_convert_timestamp)
+    
     # Sort the DataFrame by the cleaned date in ascending order
+    print("Further cleaning...")
     messages_df = messages_df.sort_values(by="date", ascending=True)
 
     # Extract grid number from text
@@ -250,15 +275,24 @@ def extract_valid_messages(db_path):
     messages_df['matrix'] = messages_df['text'].apply(_matrix_from_text)
 
     # Keep only relevant columns
+    print("Trimming columns...")
     columns_to_keep = ['grid_number', 'correct', 'score', 'date', 'matrix', 'name']
     messages_df = messages_df[columns_to_keep]
-    
+
+    print("Data extraction and transformation complete!")
     return messages_df
 
 def test_messages(messages_df, header):
     pd.set_option('display.max_rows', None)  # Show all rows
 
     print("\n*******\n{}...".format(header))
+
+    if len(messages_df) == 0:
+        print("No messages to test...")
+        return
+
+    # Extract the true date of the game, it may differ from date of message
+    #messages_df['date'] = messages_df['grid_number'].apply(_fixed_date_from_grid_number)
     
     # Extract the minimum and maximum dates
     min_date = messages_df['date'].min()
@@ -285,16 +319,16 @@ def test_messages(messages_df, header):
     full_summary['message_count'] = full_summary['message_count'].astype(int)
     
     # # Display the summary of the number of rows of data by cleaned date
-    # print("Summary of message counts by cleaned date:")
+    # print("Summary of message counts by date:")
     # print(full_summary)
 
     # Call out instances where there are zero messages on that date
-    print("\nDates with zero messages:")
-    zero = full_summary[full_summary['message_count'] == 0]
-    if not zero.empty:
-        print(zero)
-    else:
-        print("No dates with zero messages.")
+    # print("\nDates with zero messages:")
+    # zero = full_summary[full_summary['message_count'] == 0]
+    # if not zero.empty:
+    #     print(zero)
+    # else:
+    #     print("No dates with zero messages.")
     
     # Call out instances where there are zero or fewer than 5 messages on that date
     print("\nDates with fewer than 5 messages (including zero):")
@@ -304,13 +338,14 @@ def test_messages(messages_df, header):
     else:
         print("No dates with fewer than 5 messages (including zero).")
 
-    # Call out instances where there are more than 5 messages on that date
-    print("\nDates with more than 5 messages:")
-    more_than_5 = full_summary[full_summary['message_count'] > 5]
-    if not more_than_5.empty:
-        print(more_than_5)
-    else:
-        print("No dates with more than 5 messages.")
+    # # Call out instances where there are more than 5 messages on that date
+    # print("\nDates with more than 5 messages:")
+    # more_than_5 = full_summary[full_summary['message_count'] > 5]
+    # if not more_than_5.empty:
+    #     print(more_than_5)
+    # else:
+    #     print("No dates with more than 5 messages.")
+    return
 
 def write_results_to_csv(file_path, df):
     """
@@ -344,11 +379,11 @@ if __name__ == "__main__":
     else:
         data_previous = pd.DataFrame()  # Create an empty DataFrame if the file doesn't exist
     
-    # Validate data from text messages
-    test_messages(extract_valid_messages(APPLE_TEXTS_DB_PATH), "Testing on new dataset")
-
     # Extract formatted data from text messages
     data_latest = extract_valid_messages(APPLE_TEXTS_DB_PATH)
+
+    # Validate data from text messages
+    test_messages(data_latest, "Testing on new dataset")
   
     # Count the unique rows in old DataFrame before combining
     initial_unique_previous = data_previous.drop_duplicates().shape[0]
@@ -363,7 +398,7 @@ if __name__ == "__main__":
     data_sorted = data_combined_unique.sort_values(by=['date', 'name'])
 
     # Run tests on full dataset
-    test_messages(data_sorted, "Testing on combined dataset")
+    #test_messages(data_sorted, "Testing on combined dataset")
     
     # Count unique rows in the combined DataFrame
     final_unique_count = data_combined_unique.shape[0]
