@@ -23,22 +23,6 @@ def _parse_raw_prompts_to_tuple(raw):
     parts = raw.split(" + ", 1)
     return tuple(part.strip() for part in parts) if len(parts) > 1 else (parts[0].strip(), '')
 
-def _tokenize_tuples_list(tuples_list):
-    """
-    Flatten the list of tuples into a set of unique tokens
-    """
-    return set(token for tup in tuples_list for token in tup)
-
-def get_tokenized_df(df):
-    tokenized_df = pd.DataFrame(columns=['grid_id', 'token'])
-    for i, row in df.iterrows():
-        token_dict = dict()
-        token_dict['grid_id'] = i
-        token_dict['token'] = list(_tokenize_tuples_list(row[1:]))
-        tokenized_df_i = pd.DataFrame(token_dict)
-        tokenized_df = pd.concat([tokenized_df, tokenized_df_i], ignore_index=True, axis=0)
-    return tokenized_df
-
 def fetch_grid_online(grid_id):
     """
     Fetch the Immaculate Grid data from the web by grid ID.
