@@ -351,35 +351,13 @@ def test_messages(messages_df, header):
     #     print("No dates with more than 5 messages.")
     return
 
-def write_results_to_csv(file_path, df):
-    """
-    Write the processed results to a CSV file, sorted by date.
-    
-    Parameters:
-        file_path (str): The output path for the CSV file.
-        df (pd.DataFrame): The dataframe to be saved.
-    """
-    df.to_csv(file_path, index=False)
-
-def read_results_from_csv(file_path):
-    """
-    Read existing results from a CSV file.
-    
-    Parameters:
-        file_path (str): The path to the CSV file.
-    
-    Returns:
-        pd.DataFrame: A dataframe containing the data from the CSV file.
-    """
-    return pd.read_csv(file_path)
-
 # --------------------------------------------------------------------------------------
 # Main Execution
 if __name__ == "__main__":
     
     # Check if the CSV file exists
     if os.path.exists(CSV_PATH):
-        data_previous = read_results_from_csv(CSV_PATH)
+        data_previous = pd.read_csv(CSV_PATH)
     else:
         data_previous = pd.DataFrame()  # Create an empty DataFrame if the file doesn't exist
     
@@ -413,5 +391,6 @@ if __name__ == "__main__":
     
     # Print the result
     print(f"Number of new unique rows created: {new_unique_rows_count}")
-    
-    write_results_to_csv(CSV_PATH, data_sorted)  # Write to CSV
+
+    # Write result
+    data_sorted.to_csv(CSV_PATH, index=False)
