@@ -197,7 +197,6 @@ def _is_valid_message(name, text):
     ]
 
     if text is not None:
-        print(text)
         if name is not None:
             # Is not a reaction message
             if not any(keyword in text for keyword in exclusion_keywords):
@@ -237,12 +236,14 @@ def extract_messages(db_path):
         handle 
     ON 
         message.handle_id = handle.rowid
+    WHERE
+        message.text LIKE '%Immaculate%'
     '''
 
     print("Querying message database...")
     messages_df = pd.read_sql_query(query, conn)
     conn.close()
-
+    
     return messages_df
 
 def process_messages(messages_df):
@@ -363,6 +364,11 @@ if __name__ == "__main__":
     
     # Extract formatted data from text messages
     data_latest_raw = extract_messages(APPLE_TEXTS_DB_PATH)
+
+    if len(data_latest_raw) == 0:
+        print("No new messages with 'Immaculate' found")
+        quit()
+    
     data_latest = process_messages(data_latest_raw)
 
     # Validate data from text messages
