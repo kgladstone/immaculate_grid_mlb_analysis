@@ -214,7 +214,7 @@ def _is_valid_message(name, text):
     return False
 
 # --------------------------------------------------------------------------------------
-# Core Functions
+# Message handling functions
 def extract_messages(db_path):
     """
     Extract message contents from the Apple Messages database.
@@ -358,6 +358,51 @@ def test_messages(messages_df, header):
     #     print("No dates with more than 5 messages.")
     return
 
+def refresh_results(apple_texts_file_path, output_results_file_path):
+    # Check if the CSV file exists
+    if os.path.exists(output_results_file_path):
+        data_previous = pd.read_csv(output_results_file_path)
+    else:
+        data_previous = pd.DataFrame()  # Create an empty DataFrame if the file doesn't exist
+    
+    # Extract formatted data from text messages
+    data_latest_raw = extract_messages(apple_texts_file_path)
+
+    if len(data_latest_raw) == 0:
+        print("No new messages with 'Immaculate' found")
+        quit()
+    
+    data_latest = process_messages(data_latest_raw)
+
+    # Validate data from text messages
+    test_messages(data_latest, "Testing on new dataset")
+  
+    # Count the unique rows in old DataFrame before combining
+    initial_unique_previous = data_previous.drop_duplicates().shape[0]
+    
+    # Combine the data
+    data_combined = pd.concat([data_previous, data_latest], ignore_index=True)
+    
+    # Drop duplicates to keep only unique rows
+    data_combined_unique = data_combined.drop_duplicates()
+
+    # Sort by 'date' first, then by 'name'
+    data_sorted = data_combined_unique.sort_values(by=['date', 'name'])
+    
+    # Count unique rows in the combined DataFrame
+    final_unique_count = data_combined_unique.shape[0]
+    
+    # Calculate the number of new unique rows created
+    new_unique_rows_count = final_unique_count - initial_unique_previous
+    
+    # Print the result
+    print(f"Number of new unique rows created: {new_unique_rows_count}")
+
+    # Write result
+    data_sorted.to_csv(output_results_file_path, index=False)
+
+    return
+
 # --------------------------------------------------------------------------------------
 # Prompt gathering functions
 
@@ -428,51 +473,7 @@ def refresh_prompts(GRID_STORAGE_PATH):
 if __name__ == "__main__":
     
     print("\n**********\nRefreshing results data...")
-
-    # Check if the CSV file exists
-    if os.path.exists(MESSAGES_CSV_PATH):
-        data_previous = pd.read_csv(MESSAGES_CSV_PATH)
-    else:
-        data_previous = pd.DataFrame()  # Create an empty DataFrame if the file doesn't exist
-    
-    # Extract formatted data from text messages
-    data_latest_raw = extract_messages(APPLE_TEXTS_DB_PATH)
-
-    if len(data_latest_raw) == 0:
-        print("No new messages with 'Immaculate' found")
-        quit()
-    
-    data_latest = process_messages(data_latest_raw)
-
-    # Validate data from text messages
-    test_messages(data_latest, "Testing on new dataset")
-  
-    # Count the unique rows in old DataFrame before combining
-    initial_unique_previous = data_previous.drop_duplicates().shape[0]
-    
-    # Combine the data
-    data_combined = pd.concat([data_previous, data_latest], ignore_index=True)
-    
-    # Drop duplicates to keep only unique rows
-    data_combined_unique = data_combined.drop_duplicates()
-
-    # Sort by 'date' first, then by 'name'
-    data_sorted = data_combined_unique.sort_values(by=['date', 'name'])
-
-    # Run tests on full dataset
-    #test_messages(data_sorted, "Testing on combined dataset")
-    
-    # Count unique rows in the combined DataFrame
-    final_unique_count = data_combined_unique.shape[0]
-    
-    # Calculate the number of new unique rows created
-    new_unique_rows_count = final_unique_count - initial_unique_previous
-    
-    # Print the result
-    print(f"Number of new unique rows created: {new_unique_rows_count}")
-
-    # Write result
-    data_sorted.to_csv(MESSAGES_CSV_PATH, index=False)
+    refresh_results(APPLE_TEXTS_DB_PATH, MESSAGES_CSV_PATH)
 
     print("\n**********\nRefreshing prompt data...")
     refresh_prompts(PROMPTS_CSV_PATH)
