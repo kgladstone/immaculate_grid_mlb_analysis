@@ -324,8 +324,8 @@ def test_messages(messages_df, header):
     full_summary['message_count'] = full_summary['message_count'].astype(int)
     
     # # Display the summary of the number of rows of data by cleaned date
-    # print("Summary of message counts by date:")
-    # print(full_summary)
+    print("Summary of message counts by date:")
+    print(full_summary)
 
     # Call out instances where there are zero messages on that date
     # print("\nDates with zero messages:")
@@ -336,12 +336,12 @@ def test_messages(messages_df, header):
     #     print("No dates with zero messages.")
     
     # Call out instances where there are zero or fewer than 5 messages on that date
-    print("\nDates with fewer than 5 messages (including zero):")
-    fewer_than_5 = full_summary[full_summary['message_count'] < 5]
-    if not fewer_than_5.empty:
-        print(fewer_than_5)
-    else:
-        print("No dates with fewer than 5 messages (including zero).")
+    # print("\nDates with fewer than 5 messages (including zero):")
+    # fewer_than_5 = full_summary[full_summary['message_count'] < 5]
+    # if not fewer_than_5.empty:
+    #     print(fewer_than_5)
+    # else:
+    #     print("No dates with fewer than 5 messages (including zero).")
 
     # # Call out instances where there are more than 5 messages on that date
     # print("\nDates with more than 5 messages:")
