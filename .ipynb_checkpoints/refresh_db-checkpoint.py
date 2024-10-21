@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 # Global Variables
 MY_NAME = 'Keith'  # Change this variable based on the user running the script
 APPLE_TEXTS_DB_PATH = '~/Library/Messages/chat.db'  # Path to the Apple Messages database
-CSV_PATH = './results.csv'  # Path for the CSV output file
+CSV_PATH = './csv/results.csv'  # Path for the CSV output file
 
 # --------------------------------------------------------------------------------------
 # Data Models

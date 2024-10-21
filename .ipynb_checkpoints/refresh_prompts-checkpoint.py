@@ -6,7 +6,7 @@ from datetime import datetime
 import pandas as pd
 import ast
 
-GRID_STORAGE_PATH = './prompts.csv'
+GRID_STORAGE_PATH = './csv/prompts.csv'
 IMM_GRID_START_DATE = datetime(2023, 4, 2)
 
 def get_today_grid_id():

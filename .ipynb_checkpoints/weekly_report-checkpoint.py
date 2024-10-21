@@ -18,8 +18,8 @@ import math
 
 #--------------------------------------------------------------------------------------------------
 
-INPUT_GRID_RESULTS_FILE_PATH = './results.csv'
-INPUT_PROMPT_DATA_PATH = './prompts.csv'
+INPUT_GRID_RESULTS_FILE_PATH = './csv/results.csv'
+INPUT_PROMPT_DATA_PATH = './csv/prompts.csv'
 COLOR_MAP = {"Sam": "red", "Keith": "blue", "Will": "purple", "Rachel": "green", "Cliff": "orange"}
 PDF_FILENAME = "./immaculate_grid_report.pdf"
 TEAM_LIST = ["Cubs", "Cardinals", "Brewers", "Reds", "Pirates", "Nationals", "Mets", "Marlins", "Phillies", "Braves", "Dodgers", "Diamondbacks", "Rockies", "Giants", "Padres", "Royals", "White Sox", "Twins", "Guardians", "Tigers", "Red Sox", "Yankees", "Blue Jays", "Rays", "Orioles", "Angels", "Athletics", "Astros", "Mariners", "Rangers"]
