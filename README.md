@@ -25,3 +25,6 @@ To generate the complete analysis, follow these steps in order:
 - **Simulator:** An interactive game that lets users test their Immaculate Grid skills.
 
 This sequence ensures a smooth workflow, from data refresh to analysis and reporting. Make sure to run the scripts in the specified order for accurate results.
+
+## Troubleshooting
+We have found that sometimes Apple Messages do not store properly in the `chat.db` file. To troubleshoot, clear the file, disable syncing, and then let the background process on the Mac run until the file replenishes. Then try again. Be sure to make a backup copy of the file to avoid data loss.
