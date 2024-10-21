@@ -1,10 +1,27 @@
 # Immaculate Grid Analysis
-The overall goal of this repository is to automate analyses related to Immaculate Grid performance from a group of players who send their results via Apple Messages.
 
-## Analysis Scripts
-1. Database Refresher (`refresh_db.py`) --> process grid results that are sent over text and stored locally in a chat database
-2. `immaculate-grid-scraper.ipynb` --> Jupyter notebook to run on the parsed message data and generate graphs and insights
-3. Prompt Scraper (`immaculate_grid_prompt_scraper.py`) --> webscraper to compile dataset of all daily grid prompts
+This repository is designed to automate the analysis of Immaculate Grid performance from a group of players who submit their results via Apple Messages.
+
+## Getting Started
+To generate the complete analysis, follow these steps in order:
+
+### 1. Database Refresh
+- **Script:** `refresh_db.py`
+- **Purpose:** Processes the Immaculate Grid results that are sent through text messages, storing them locally in a chat database.
+
+### 2. Prompt Update
+- **Script:** `refresh_prompts.py`
+- **Purpose:** Compiles a dataset of all daily grid prompts by scraping and updating the existing prompt records.
+
+### 3. Generate Weekly Report
+- **Script:** `weekly_report.py`
+- **Purpose:** Analyzes the latest grid results and prompts, generating a detailed weekly report for performance insights.
+
+## Additional Analysis Tools
+- **Data Visualization:** `immaculate-grid-scraper.ipynb`  
+  Use this Jupyter notebook to analyze the parsed message data and generate graphs and insights.
 
 ## Skill Practice
-4. Simulator --> interactive game for users to test their skills
+- **Simulator:** An interactive game that lets users test their Immaculate Grid skills.
+
+This sequence ensures a smooth workflow, from data refresh to analysis and reporting. Make sure to run the scripts in the specified order for accurate results.
