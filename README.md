@@ -7,13 +7,9 @@ To generate the complete analysis, follow these steps in order:
 
 ### 1. Database Refresh
 - **Script:** `refresh_db.py`
-- **Purpose:** Processes the Immaculate Grid results that are sent through text messages, storing them locally in a chat database.
+- **Purpose:** Processes the Immaculate Grid results that are sent through text messages, storing them locally in a chat database. Compiles a dataset of all daily grid prompts by scraping and updating the existing prompt records.
 
-### 2. Prompt Update
-- **Script:** `refresh_prompts.py`
-- **Purpose:** Compiles a dataset of all daily grid prompts by scraping and updating the existing prompt records.
-
-### 3. Generate Weekly Report
+### 2. Generate Weekly Report
 - **Script:** `weekly_report.py`
 - **Purpose:** Analyzes the latest grid results and prompts, generating a detailed weekly report for performance insights.
 
