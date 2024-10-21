@@ -2294,3 +2294,8 @@ grid_number,correct,score,date,matrix,name
 566,9,29,2024-10-19,"[[true, true, true], [true, true, true], [true, true, true]]",Rachel
 566,7,218,2024-10-19,"[[true, true, true], [false, true, true], [false, true, true]]",Sam
 566,9,16,2024-10-19,"[[true, true, true], [true, true, true], [true, true, true]]",Will
+567,8,113,2024-10-20,"[[true, true, false], [true, true, true], [true, true, true]]",Cliff
+567,9,11,2024-10-20,"[[true, true, true], [true, true, true], [true, true, true]]",Keith
+567,7,264,2024-10-20,"[[true, true, false], [true, true, false], [true, true, true]]",Rachel
+567,8,141,2024-10-20,"[[false, true, true], [true, true, true], [true, true, true]]",Sam
+567,9,57,2024-10-20,"[[true, true, true], [true, true, true], [true, true, true]]",Will
