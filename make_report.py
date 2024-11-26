@@ -329,110 +329,206 @@ def make_fig_11(texts):
 
 #--------------------------------------------------------------------------------------------------
 
+# -------------------------------------------------------------------------------------------------
+# Prompt Data Processing Functions
+# -------------------------------------------------------------------------------------------------
+
 def read_prompt_data(filepath):
+    """
+    Reads the prompt data from a CSV file and processes it for further analysis.
+
+    Args:
+        filepath (str): Path to the input CSV file containing prompt data.
+
+    Returns:
+        pd.DataFrame: A cleaned DataFrame with the game ID and processed prompt values.
+    """
     with open(os.path.expanduser(filepath)) as f:
-        prompt_df = pd.read_csv(f, header=None)
+        prompt_df = pd.read_csv(f, header=None)  # Read raw CSV data
+    # Assign column names to the DataFrame
     prompt_df.columns = ["game_id", "00", "01", "02", "10", "11", "12", "20", "21", "22"]
-    prompt_df = prompt_df.iloc[1:]
-    
+    prompt_df = prompt_df.iloc[1:]  # Remove the header row
+
+    # Process each row to clean and reformat prompt values
     new_rows = []
-    for i, row in prompt_df.iterrows():
+    for _, row in prompt_df.iterrows():
         new_row = {}
         for col, val in row.items():
-            for char in ["(", "'", ")"]:
+            for char in ["(", "'", ")"]:  # Remove unwanted characters
                 val = val.replace(char, "")
-            new_row[col] = val.replace(", ", " + ")
+            new_row[col] = val.replace(", ", " + ")  # Replace separator for readability
         new_rows.append(new_row)
-             
+
+    # Create a new DataFrame with cleaned rows and convert 'game_id' to integer
     prompt_df = pd.DataFrame(new_rows)
     prompt_df['game_id'] = prompt_df['game_id'].astype(int)
 
     return prompt_df
 
+
 def category_is_team(category):
+    """
+    Determines if a given category is a team.
+
+    Args:
+        category (str): The category to check.
+
+    Returns:
+        bool: True if the category corresponds to a team, otherwise False.
+    """
     for team in TEAM_LIST:
         if team in category:
             return True
     return False
 
+
 def get_team_from_category(category):
+    """
+    Extracts the team name from a given category.
+
+    Args:
+        category (str): The category containing a team name.
+
+    Returns:
+        str: The extracted team name, or an empty string if no match is found.
+    """
     for team in TEAM_LIST:
         if team in category:
             return team
     return ""
 
+
 def get_categories_from_prompt(prompt):
+    """
+    Splits a prompt string into its two component categories.
+
+    Args:
+        prompt (str): The prompt string to split.
+
+    Returns:
+        tuple: A tuple containing the two categories (part_one, part_two).
+    """
     parts = prompt.split(" + ")
     return parts[0].strip(), parts[1].strip()
 
-# Build up category data structure
+
+# -------------------------------------------------------------------------------------------------
+# Category Data Structure Functions
+# -------------------------------------------------------------------------------------------------
+
 def build_category_structure(prompt_df):
+    """
+    Constructs a set of unique categories from the prompt data.
+
+    Args:
+        prompt_df (pd.DataFrame): DataFrame containing prompt data.
+
+    Returns:
+        set: A set of unique categories derived from the prompts.
+    """
     categories = set()
     for person, games in texts.items():
         for game in games:
             id = game.grid_number
             prompt_rows = prompt_df[prompt_df["game_id"] == id]
-            if len(prompt_rows) != 1:
+            if len(prompt_rows) != 1:  # Skip games with invalid or missing data
                 continue
-            prompts = prompt_rows.iloc[0][1:]
+            prompts = prompt_rows.iloc[0][1:]  # Exclude the 'game_id' column
             for prompt in prompts:
                 part_one, part_two = get_categories_from_prompt(prompt)
-                categories.add(part_one)
-                categories.add(part_two)
+                categories.update([part_one, part_two])  # Add both parts to the category set
     return categories
 
-# Initialize person<>category data structure
-# Dictionary where the key is the person name
-# The value is a list of sub-dictionaries
-# Each subdictionary's key is a category, and their value is a list of length=2
-# The first element in the list is the number instances of the person getting the value in the category correct
-# The second element in the list is the number of opportunities that the person had to answer for that category
+
 def build_person_category_structure(texts, prompt_df, categories):
-    person_to_category = {}
-    for person, _ in texts.items():
-        person_to_category[person] = {cat: [0, 0] for cat in categories}
-    
+    """
+    Builds a data structure mapping persons to category performance.
+
+    Args:
+        texts (dict): Dictionary of persons and their associated games.
+        prompt_df (pd.DataFrame): DataFrame containing prompt data.
+        categories (set): Set of unique categories.
+
+    Returns:
+        dict: A nested dictionary with performance metrics for each person and category.
+    """
+    # Initialize a structure where each person has a dictionary of categories with performance metrics
+    person_to_category = {person: {cat: [0, 0] for cat in categories} for person in texts}
+
     for person, games in texts.items():
         for game in games:
             id = game.grid_number
             prompt_rows = prompt_df[prompt_df["game_id"] == id]
             if len(prompt_rows) != 1:
                 continue
-            prompts = prompt_rows.iloc[0][1:]
-    
+            prompts = prompt_rows.iloc[0][1:]  # Exclude the 'game_id' column
+
+            # Update category performance based on the game's matrix
             matrix = game.matrix
             for i in range(3):
                 for j in range(3):
                     part_one, part_two = get_categories_from_prompt(prompts[f"{i}{j}"])
-                    if matrix[i][j]:
+                    if matrix[i][j]:  # Increment correct count if the matrix cell is correct
                         person_to_category[person][part_one][0] += 1
                         person_to_category[person][part_two][0] += 1
-                    person_to_category[person][part_one][1] += 1
+                    person_to_category[person][part_one][1] += 1  # Increment attempt count
                     person_to_category[person][part_two][1] += 1
     return person_to_category
 
 def get_category_clearing_threshold(categories, person_to_category, threshold=25):
-    categories_to_count = {}
-    for category in categories:
-        categories_to_count[category] = []
+    """
+    Identify categories that exceed a minimum threshold of attempts.
+
+    Args:
+        categories (set): Set of all unique categories.
+        person_to_category (dict): Dictionary mapping persons to their performance on categories.
+        threshold (int): Minimum average attempt count required for a category to clear the threshold.
+
+    Returns:
+        list: Categories that have an average attempt count above the threshold.
+    """
+    # Initialize a dictionary to count attempts for each category
+    categories_to_count = {category: [] for category in categories}
+    
+    # Populate the dictionary with total attempts per person for each category
     for _, value in person_to_category.items():
-        for category, (correct, total) in value.items():
+        for category, (_, total) in value.items():
             categories_to_count[category].append(total)
-    categories_clearing_threshold = [cat for cat in filter(lambda x: sum(categories_to_count[x]) / len(categories_to_count[x]) > threshold, categories_to_count)]
+    
+    # Filter categories based on whether their average attempts exceed the threshold
+    categories_clearing_threshold = [
+        cat for cat in categories_to_count 
+        if sum(categories_to_count[cat]) / len(categories_to_count[cat]) > threshold
+    ]
     return categories_clearing_threshold
 
+
 def get_person_to_type(texts, prompt_df, person_to_category):
+    """
+    Analyze a person's performance by type of category pair (Team-Team, Team-Stat, or Stat-Stat).
+
+    Args:
+        texts (dict): Dictionary mapping persons to their games.
+        prompt_df (pd.DataFrame): DataFrame containing prompt data.
+        person_to_category (dict): Performance metrics for each person and category.
+
+    Returns:
+        dict: Nested dictionary with counts for each type of category pair (correct and total).
+    """
+    # Define category pair types and initialize the structure for storing results
     types = ["Team-Team", "Team-Stat", "Stat-Stat"]
     person_to_type = {person: {t: [0, 0] for t in types} for person in person_to_category}
     
+    # Iterate through each person's games
     for person, games in texts.items():
         for game in games:
             id = game.grid_number
             prompt_rows = prompt_df[prompt_df["game_id"] == id]
-            if len(prompt_rows) != 1:
+            if len(prompt_rows) != 1:  # Skip invalid or missing prompts
                 continue
-            prompts = prompt_rows.iloc[0][1:]
-    
+            prompts = prompt_rows.iloc[0][1:]  # Exclude the 'game_id' column
+            
+            # Analyze the category pair for each cell in the game matrix
             matrix = game.matrix
             for i in range(3):
                 for j in range(3):
@@ -444,195 +540,275 @@ def get_person_to_type(texts, prompt_df, person_to_category):
                         tag = "Team-Stat"
                     else:
                         tag = "Stat-Stat"
-                    if matrix[i][j]:
+                    if matrix[i][j]:  # Increment correct count if cell is correct
                         person_to_type[person][tag][0] += 1
-                    person_to_type[person][tag][1] += 1
+                    person_to_type[person][tag][1] += 1  # Increment total count for attempts
     return person_to_type
 
+
 def person_to_type_to_string(person_to_type):
+    """
+    Convert the person-to-type performance dictionary into a formatted string.
+
+    Args:
+        person_to_type (dict): Performance data for each person and category type.
+
+    Returns:
+        str: Formatted string summarizing performance metrics.
+    """
     result = ""
+    # Iterate through each person and their performance data
     for person in person_to_type:
-        result += person + "\n"
-        for tag in person_to_type[person]:
-            acc = person_to_type[person][tag][0] / person_to_type[person][tag][1]
-            line = f"{tag}: {round(100 * acc)}% ({person_to_type[person][tag][1]})"
-            result += line + "\n"
+        result += f"{person}\n"
+        for tag, (correct, total) in person_to_type[person].items():
+            acc = correct / total  # Calculate accuracy as a percentage
+            line = f"{tag}: {round(100 * acc)}% ({total})"
+            result += f"{line}\n"
         result += "\n"
     return result
 
+
 def person_to_category_to_string(person_to_category, threshold=25):
+    """
+    Convert the person-to-category performance dictionary into a formatted string.
+
+    Args:
+        person_to_category (dict): Performance data for each person and category.
+        threshold (int): Minimum attempts required for a category to be included.
+
+    Returns:
+        str: Formatted string summarizing performance metrics for each person and category.
+    """
     result = ""
+    # Iterate through each person's performance data
     for person, value in person_to_category.items():
-        rankings = sorted([(cat, value[cat][0] / value[cat][1], value[cat][1]) for cat in value], key=lambda x: x[1], reverse=True)
-    
-        result += f"====={person}=====\n" 
+        # Sort categories by accuracy in descending order
+        rankings = sorted(
+            [(cat, correct / total, total) for cat, (correct, total) in value.items()],
+            key=lambda x: x[1],
+            reverse=True
+        )
+        result += f"====={person}=====\n"
         count = 1
-        for i, (category, accuracy, total) in enumerate(rankings):
+        # Include only categories that meet the attempt threshold
+        for category, accuracy, total in rankings:
             if total > threshold:
                 result += f"{count}. {category} ({round(accuracy, 2)}) ({total})\n"
                 count += 1
         result += "\n\n"
-
     return result
 
 def analyze_easiest_teams(categories, person_to_category):
+    """
+    Identify and rank the easiest teams based on average performance.
+
+    Args:
+        categories (set): Set of all unique categories.
+        person_to_category (dict): Performance data for each person and category.
+
+    Returns:
+        str: A formatted string listing the easiest teams in descending order of average performance.
+    """
     overall = []
     for category in categories:
         values = []
         counts = []
         for person in person_to_category:
+            # Calculate accuracy for each person in the category
             values.append(person_to_category[person][category][0] / person_to_category[person][category][1])
             counts.append(person_to_category[person][category][1])
         if category_is_team(category):
+            # Calculate average performance for the category
             overall.append((category, sum(values) / len(values)))
 
-    result = ""
-    result += "Consensus Easiest Teams\n"
+    # Sort teams by their average performance in descending order
+    result = "Consensus Easiest Teams\n"
     overall = sorted(overall, key=lambda x: x[1], reverse=True)
     for i, (category, avg) in enumerate(overall):
-        result += f"{(i + 1)}. {category} ({round(100 * avg)}%)\n"
-
+        result += f"{i + 1}. {category} ({round(100 * avg)}%)\n"
     return result
 
+
 def analyze_team_std_dev(categories, person_to_category):
+    """
+    Calculate standard deviation of team performance to identify variability.
+
+    Args:
+        categories (set): Set of all unique categories.
+        person_to_category (dict): Performance data for each person and category.
+
+    Returns:
+        str: A formatted string listing teams ranked by performance variability.
+    """
     overall = []
     for category in categories:
         values = []
-        counts = []
         for person in person_to_category:
+            # Calculate accuracy for each person in the category
             values.append(person_to_category[person][category][0] / person_to_category[person][category][1])
-            counts.append(person_to_category[person][category][1])
         if category_is_team(category):
+            # Calculate standard deviation of performance for the category
             overall.append((category, np.std(values)))
 
-    result = ""
-    result += "Biggest Team Standard Deviations\n"
+    # Sort teams by their standard deviation in descending order
+    result = "Biggest Team Standard Deviations\n"
     overall = sorted(overall, key=lambda x: x[1], reverse=True)
-    for i, (category, avg) in enumerate(overall):
-        result += f"{(i + 1)}. {category} ({round(100 * avg)}%)\n"
+    for i, (category, std_dev) in enumerate(overall):
+        result += f"{i + 1}. {category} ({round(100 * std_dev)}%)\n"
     return result
+
 
 def analyze_best_person_by_team(categories, person_to_category):
+    """
+    Identify the best-performing person for each team.
+
+    Args:
+        categories (set): Set of all unique categories.
+        person_to_category (dict): Performance data for each person and category.
+
+    Returns:
+        str: A formatted string listing the best person for each team.
+    """
     overall = []
     for category in filter(category_is_team, categories):
-    
         max_acc = 0
+        # Find maximum accuracy for the team
         for person in person_to_category:
             acc = person_to_category[person][category][0] / person_to_category[person][category][1]
             if acc > max_acc:
                 max_acc = acc
-    
-        max_people = []
-        for person in person_to_category:
-            acc = person_to_category[person][category][0] / person_to_category[person][category][1]
-            if abs(acc - max_acc) < 0.0001:
-                max_people.append(person)
         
+        # Identify all persons who achieved the maximum accuracy
+        max_people = [
+            person for person in person_to_category 
+            if abs(person_to_category[person][category][0] / person_to_category[person][category][1] - max_acc) < 0.0001
+        ]
         overall.append((category, ", ".join(max_people)))
 
-    result = ""
-    result += "Best Person for Each Team\n"
+    # Format the results
+    result = "Best Person for Each Team\n"
     for category, people in sorted(overall, key=lambda x: x[0]):
-        if len(category) > 15:
-            result += category + "        "
-        else:
-            result += category + "            "
-        result += people
-        result += "\n"
-
+        result += f"{category.ljust(15)} {people}\n"
     return result
 
+
 def analyze_worst_person_by_team(categories, person_to_category):
+    """
+    Identify the worst-performing person for each team.
+
+    Args:
+        categories (set): Set of all unique categories.
+        person_to_category (dict): Performance data for each person and category.
+
+    Returns:
+        str: A formatted string listing the worst person for each team.
+    """
     overall = []
     for category in filter(category_is_team, categories):
-    
         min_acc = 101
+        # Find minimum accuracy for the team
         for person in person_to_category:
             acc = person_to_category[person][category][0] / person_to_category[person][category][1]
             if acc < min_acc:
                 min_acc = acc
-    
-        min_people = []
-        for person in person_to_category:
-            acc = person_to_category[person][category][0] / person_to_category[person][category][1]
-            if abs(acc - min_acc) < 0.0001:
-                min_people.append(person)
         
+        # Identify all persons who achieved the minimum accuracy
+        min_people = [
+            person for person in person_to_category 
+            if abs(person_to_category[person][category][0] / person_to_category[person][category][1] - min_acc) < 0.0001
+        ]
         overall.append((category, ", ".join(min_people)))
-    
-    result = ""
-    result += "Worst Person for Each Team\n"
-    for category, people in sorted(overall, key=lambda x: x[0]):
-        if len(category) > 15:
-            result += category + "        "
-        else:
-            result += category + "            "
-        result += people
-        result += "\n"
 
+    # Format the results
+    result = "Worst Person for Each Team\n"
+    for category, people in sorted(overall, key=lambda x: x[0]):
+        result += f"{category.ljust(15)} {people}\n"
     return result    
 
+
 def analyze_best_person_by_category(categories, person_to_category, categories_clearing_threshold):
+    """
+    Identify the best-performing person for each non-team category.
+
+    Args:
+        categories (set): Set of all unique categories.
+        person_to_category (dict): Performance data for each person and category.
+        categories_clearing_threshold (list): List of categories meeting the threshold.
+
+    Returns:
+        str: A formatted string listing the best person for each category.
+    """
     overall = []
     for category in filter(lambda x: not category_is_team(x) and x in categories_clearing_threshold, categories):
-    
         max_acc = 0
+        # Find maximum accuracy for the category
         for person in person_to_category:
             acc = person_to_category[person][category][0] / person_to_category[person][category][1]
             if acc > max_acc:
                 max_acc = acc
-    
-        max_people = []
-        for person in person_to_category:
-            acc = person_to_category[person][category][0] / person_to_category[person][category][1]
-            if abs(acc - max_acc) < 0.0001:
-                max_people.append(person)
         
+        # Identify all persons who achieved the maximum accuracy
+        max_people = [
+            person for person in person_to_category 
+            if abs(person_to_category[person][category][0] / person_to_category[person][category][1] - max_acc) < 0.0001
+        ]
         overall.append((category, ", ".join(max_people)))
 
-    result = ""
-    result += "Best Person for Each Category\n"
+    # Format the results
+    result = "Best Person for Each Category\n"
     for category, people in sorted(overall, key=lambda x: x[0]):
-        if len(category) > 15:
-            result += category + "        "
-        else:
-            result += category + "            "
-        result += people
-        result += "\n"
-
-    return result    
+        result += f"{category.ljust(15)} {people}\n"
+    return result
 
 def analyze_worst_person_by_category(categories, person_to_category, categories_clearing_threshold):
+    """
+    Identify the worst-performing person for each non-team category.
+
+    Args:
+        categories (set): Set of all unique categories.
+        person_to_category (dict): Performance data for each person and category.
+        categories_clearing_threshold (list): List of categories meeting the threshold.
+
+    Returns:
+        str: A formatted string listing the worst person for each category.
+    """
     overall = []
     for category in filter(lambda x: not category_is_team(x) and x in categories_clearing_threshold, categories):
-    
         min_acc = 101
+        # Find minimum accuracy for the category
         for person in person_to_category:
             acc = person_to_category[person][category][0] / person_to_category[person][category][1]
             if acc < min_acc:
                 min_acc = acc
-    
-        min_people = []
-        for person in person_to_category:
-            acc = person_to_category[person][category][0] / person_to_category[person][category][1]
-            if abs(acc - min_acc) < 0.0001:
-                min_people.append(person)
-        
-        overall.append((category, ", ".join(min_people)))
-    
-    result = ""
-    result += "Worst Person for Each Category\n"
-    for category, people in sorted(overall, key=lambda x: x[0]):
-        if len(category) > 15:
-            result += category + "        "
-        else:
-            result += category + "            "
-        result += people
-        result += "\n"
 
-    return result   
+        # Identify all persons who achieved the minimum accuracy
+        min_people = [
+            person for person in person_to_category
+            if abs(person_to_category[person][category][0] / person_to_category[person][category][1] - min_acc) < 0.0001
+        ]
+        overall.append((category, ", ".join(min_people)))
+
+    # Format the results
+    result = "Worst Person for Each Category\n"
+    for category, people in sorted(overall, key=lambda x: x[0]):
+        result += f"{category.ljust(15)} {people}\n"
+    return result
+
 
 def analyze_person_prompt_performance(categories, person_to_category, categories_clearing_threshold, direction, category_type):
+    """
+    Generalized analysis function to evaluate the best or worst performance for teams or categories.
+
+    Args:
+        categories (set): Set of all unique categories.
+        person_to_category (dict): Performance data for each person and category.
+        categories_clearing_threshold (list): List of categories meeting the threshold.
+        direction (str): Whether to analyze "Best" or "Worst" performers.
+        category_type (str): Type of category to analyze ("Team" or "Category").
+
+    Returns:
+        str: A formatted string summarizing the analysis.
+    """
     if category_type == "Team" and direction == "Best":
         return analyze_best_person_by_team(categories, person_to_category)
     elif category_type == "Team" and direction == "Worst":
@@ -643,25 +819,34 @@ def analyze_person_prompt_performance(categories, person_to_category, categories
         return analyze_worst_person_by_category(categories, person_to_category, categories_clearing_threshold)
     return ""
 
+
 def analyze_hardest_teams(texts, prompt_df):
+    """
+    Identify the hardest team intersections for each person and overall consensus.
+
+    Args:
+        texts (dict): Dictionary mapping persons to their games.
+        prompt_df (pd.DataFrame): DataFrame containing prompt data.
+
+    Returns:
+        str: A formatted string summarizing the hardest team intersections.
+    """
     result = StringIO()
-    
-    hardest_teams = {}
-    
+    hardest_teams = {person: {team: [0, 0] for team in TEAM_LIST} for person in texts}
+
+    # Analyze each person's games for hardest team intersections
     for person, games in texts.items():
-        hardest_teams[person] = {team: [0, 0] for team in TEAM_LIST}
         for game in games:
             id = game.grid_number
             prompt_rows = prompt_df[prompt_df["game_id"] == id]
             if len(prompt_rows) != 1:
                 continue
             prompts = prompt_rows.iloc[0][1:]
-    
+
             matrix = game.matrix
             for i in range(3):
                 for j in range(3):
                     part_one, part_two = get_categories_from_prompt(prompts[f"{i}{j}"])
-                    tag = ""
                     if category_is_team(part_one) and category_is_team(part_two):
                         team_one = get_team_from_category(part_one)
                         team_two = get_team_from_category(part_two)
@@ -670,52 +855,57 @@ def analyze_hardest_teams(texts, prompt_df):
                             hardest_teams[person][team_two][0] += 1
                         hardest_teams[person][team_one][1] += 1
                         hardest_teams[person][team_two][1] += 1
-    
-    print("Hardest Team-Team Intersections for Each Person", "\n\n", file=result)
+
+    # Output results for each person
     for person in hardest_teams:
-        print(f"====={person}=====", file=result)
-        for i, (team, res) in enumerate(sorted(hardest_teams[person].items(), key = lambda x: x[1][0] / x[1][1], reverse=True)):
-            print(f"{i + 1}. {team} ({round(100 * res[0] / res[1])}%)", file=result)
-        print("\n\n\n", file=result)
-    
+        result.write(f"====={person}=====\n")
+        for i, (team, res) in enumerate(sorted(hardest_teams[person].items(), key=lambda x: x[1][0] / x[1][1], reverse=True)):
+            result.write(f"{i + 1}. {team} ({round(100 * res[0] / res[1])}%)\n")
+        result.write("\n\n")
+
+    # Calculate consensus difficulty for all teams
     consensus_intersection_difficulty = {}
     for team in TEAM_LIST:
-        right = 0
-        total = 0
-        for person in hardest_teams:
-            res = hardest_teams[person][team]
-            right += res[0]
-            total += res[1]
+        right = sum(hardest_teams[person][team][0] for person in hardest_teams)
+        total = sum(hardest_teams[person][team][1] for person in hardest_teams)
         consensus_intersection_difficulty[team] = right / total
-        
-    print("=====Consensus=====", file=result)
-    for i, (team, pct) in enumerate(sorted(consensus_intersection_difficulty.items(), key=lambda x: x[1], reverse=True)):
-        print(f"{i + 1}. {team} ({round(100 * pct)}%)", file=result)
 
-    # Get the full output as a string
+    result.write("=====Consensus=====\n")
+    for i, (team, pct) in enumerate(sorted(consensus_intersection_difficulty.items(), key=lambda x: x[1], reverse=True)):
+        result.write(f"{i + 1}. {team} ({round(100 * pct)}%)\n")
+
     result_string = result.getvalue()
-    result.close()  # Close the StringIO object
+    result.close()
     return result_string
 
-def analyze_hardest_team_stats(texts, prompt_df):
-    result = StringIO()
 
-    hardest_team_stats = {}
-    
+def analyze_hardest_team_stats(texts, prompt_df):
+    """
+    Identify the hardest team-to-stat intersections for each person and overall consensus.
+
+    Args:
+        texts (dict): Dictionary mapping persons to their games.
+        prompt_df (pd.DataFrame): DataFrame containing prompt data.
+
+    Returns:
+        str: A formatted string summarizing the hardest team-to-stat intersections.
+    """
+    result = StringIO()
+    hardest_team_stats = {person: {team: [0, 0] for team in TEAM_LIST} for person in texts}
+
+    # Analyze each person's games for hardest team-to-stat intersections
     for person, games in texts.items():
-        hardest_team_stats[person] = {team: [0, 0] for team in TEAM_LIST}
         for game in games:
             id = game.grid_number
             prompt_rows = prompt_df[prompt_df["game_id"] == id]
             if len(prompt_rows) != 1:
                 continue
             prompts = prompt_rows.iloc[0][1:]
-    
+
             matrix = game.matrix
             for i in range(3):
                 for j in range(3):
                     part_one, part_two = get_categories_from_prompt(prompts[f"{i}{j}"])
-                    tag = ""
                     if category_is_team(part_one) and not category_is_team(part_two):
                         team_one = get_team_from_category(part_one)
                         if matrix[i][j]:
@@ -726,59 +916,83 @@ def analyze_hardest_team_stats(texts, prompt_df):
                         if matrix[i][j]:
                             hardest_team_stats[person][team_two][0] += 1
                         hardest_team_stats[person][team_two][1] += 1
-    
-    print("Hardest Team-Stats Intersections for Each Person", "\n\n", file=result)
+
+    # Output results for each person
     for person in hardest_team_stats:
-        print(f"====={person}=====", file=result)
-        for i, (team, res) in enumerate(sorted(hardest_team_stats[person].items(), key = lambda x: x[1][0] / x[1][1], reverse=True)):
-            print(f"{i + 1}. {team} ({round(100 * res[0] / res[1])}%)", file=result)
-        print("\n\n\n", file=result)
-    
+        result.write(f"====={person}=====\n")
+        for i, (team, res) in enumerate(sorted(hardest_team_stats[person].items(), key=lambda x: x[1][0] / x[1][1], reverse=True)):
+            result.write(f"{i + 1}. {team} ({round(100 * res[0] / res[1])}%)\n")
+        result.write("\n\n")
+
+    # Calculate consensus difficulty for all teams
     consensus_intersection_difficulty = {}
     for team in TEAM_LIST:
-        right = 0
-        total = 0
-        for person in hardest_team_stats:
-            res = hardest_team_stats[person][team]
-            right += res[0]
-            total += res[1]
+        right = sum(hardest_team_stats[person][team][0] for person in hardest_team_stats)
+        total = sum(hardest_team_stats[person][team][1] for person in hardest_team_stats)
         consensus_intersection_difficulty[team] = right / total
-        
-    print("=====Consensus=====", file=result)
+
+    result.write("=====Consensus=====\n")
     for i, (team, pct) in enumerate(sorted(consensus_intersection_difficulty.items(), key=lambda x: x[1], reverse=True)):
-        print(f"{i + 1}. {team} ({round(100 * pct)}%)", file=result)
+        result.write(f"{i + 1}. {team} ({round(100 * pct)}%)\n")
 
-    # Get the full output as a string
     result_string = result.getvalue()
-    result.close()  # Close the StringIO object
+    result.close()
     return result_string
-
 def compute_most_common_exact_intersections(texts, prompt_df, name):
+    """
+    Compute the most common exact category intersections for a specific person.
+
+    Args:
+        texts (dict): Dictionary mapping persons to their games.
+        prompt_df (pd.DataFrame): DataFrame containing prompt data.
+        name (str): Name of the person whose intersections are being analyzed.
+
+    Returns:
+        dict: Dictionary where keys are category intersections, and values are their occurrence counts.
+    """
     most_common_exact_intersections = {}
-    
+
+    # Analyze each game played by the specified person
     for game in texts[name]:
         id = game.grid_number
         prompt_rows = prompt_df[prompt_df["game_id"] == id]
-        if len(prompt_rows) != 1:
+        if len(prompt_rows) != 1:  # Skip invalid or missing games
             continue
-        prompts = prompt_rows.iloc[0][1:]
+        prompts = prompt_rows.iloc[0][1:]  # Exclude the 'game_id' column
+
+        # Extract and count category intersections from the game's prompts
         for i in range(3):
             for j in range(3):
                 part_one, part_two = get_categories_from_prompt(prompts[f"{i}{j}"])
-                key = " + ".join(sorted([part_one, part_two]))
+                key = " + ".join(sorted([part_one, part_two]))  # Sort to standardize intersection format
                 if key not in most_common_exact_intersections:
                     most_common_exact_intersections[key] = 0
                 most_common_exact_intersections[key] += 1
+
     return most_common_exact_intersections
 
+
 def analyze_most_common_exact_intersections(texts, prompt_df, name):
+    """
+    Analyze and list the most common exact category intersections for a specific person.
+
+    Args:
+        texts (dict): Dictionary mapping persons to their games.
+        prompt_df (pd.DataFrame): DataFrame containing prompt data.
+        name (str): Name of the person whose intersections are being analyzed.
+
+    Returns:
+        str: A formatted string summarizing the most common exact intersections.
+    """
     result = StringIO()
-    
+
+    # Compute intersections for the given person
     most_common_exact_intersections = compute_most_common_exact_intersections(texts, prompt_df, name)
 
-    print("Most Common Exact Intersections for {}".format(name), file=result)
-    for i, (combo, count) in enumerate(sorted(most_common_exact_intersections.items(), key = lambda x: x[1], reverse=True)):
-        if count >= 5:
+    # Output intersections with occurrence counts
+    print(f"Most Common Exact Intersections for {name}", file=result)
+    for i, (combo, count) in enumerate(sorted(most_common_exact_intersections.items(), key=lambda x: x[1], reverse=True)):
+        if count >= 5:  # Only include intersections with at least 5 occurrences
             print(f"{i + 1}. {combo} ({count})", file=result)
 
     # Get the full output as a string
@@ -786,11 +1000,26 @@ def analyze_most_common_exact_intersections(texts, prompt_df, name):
     result.close()  # Close the StringIO object
     return result_string
 
+
 def analyze_empty_team_team_intersections(texts, prompt_df, name, categories):
+    """
+    Analyze and identify team-to-team intersections that are missing for a specific person.
+
+    Args:
+        texts (dict): Dictionary mapping persons to their games.
+        prompt_df (pd.DataFrame): DataFrame containing prompt data.
+        name (str): Name of the person whose intersections are being analyzed.
+        categories (set): Set of all unique categories.
+
+    Returns:
+        str: A formatted string summarizing the missing team-to-team intersections.
+    """
     result = StringIO()
 
+    # Compute existing intersections for the given person
     most_common_exact_intersections = compute_most_common_exact_intersections(texts, prompt_df, name)
-        
+
+    # Map team names to their full category names and vice versa
     team_to_full_names = {}
     full_names_to_team = {}
     for team in TEAM_LIST:
@@ -798,29 +1027,27 @@ def analyze_empty_team_team_intersections(texts, prompt_df, name, categories):
             if team in category:
                 team_to_full_names[team] = category
                 full_names_to_team[category] = team
-                
-    
+
     missing = 0
     present = 0
     missing_maps = {}
-    print("Empty Team-Team Intersections for {}".format(name), file=result)
+
+    # Identify missing team-to-team intersections
+    print(f"Empty Team-Team Intersections for {name}", file=result)
     for i, team in enumerate(sorted(TEAM_LIST)):
         for other in sorted(TEAM_LIST)[i + 1:]:
             key = " + ".join([team_to_full_names[team], team_to_full_names[other]])
-            other_key =  " + ".join([team_to_full_names[other], team_to_full_names[team]])
+            other_key = " + ".join([team_to_full_names[other], team_to_full_names[team]])
             if key not in most_common_exact_intersections and other_key not in most_common_exact_intersections:
                 print(key, file=result)
                 missing += 1
-                if team not in missing_maps:
-                    missing_maps[team] = 0
-                if other not in missing_maps:
-                    missing_maps[other] = 0
-                missing_maps[team] += 1
-                missing_maps[other] += 1
+                missing_maps[team] = missing_maps.get(team, 0) + 1
+                missing_maps[other] = missing_maps.get(other, 0) + 1
             else:
-                present += 1    
-    
-    print("\n\n\n\nTotal Missing for {}".format(name), file=result)
+                present += 1
+
+    # Output total missing intersections for the given person
+    print(f"\n\n\n\nTotal Missing for {name}", file=result)
     for i, (team, count) in enumerate(sorted(missing_maps.items(), key=lambda x: x[1], reverse=True)):
         if count > 0:
             print(f"{i + 1}. {team} ({count})", file=result)
@@ -829,6 +1056,7 @@ def analyze_empty_team_team_intersections(texts, prompt_df, name, categories):
     result_string = result.getvalue()
     result.close()  # Close the StringIO object
     return result_string
+
 
 #--------------------------------------------------------------------------------------------------
 
