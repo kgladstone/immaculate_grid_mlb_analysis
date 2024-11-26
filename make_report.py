@@ -853,8 +853,9 @@ def compute_most_common_exact_intersections(texts, prompt_df, name):
                 part_one, part_two = get_categories_from_prompt(prompts[f"{i}{j}"])
                 key = " + ".join(sorted([part_one, part_two]))  # Sort to standardize intersection format
                 if key not in most_common_exact_intersections:
-                    most_common_exact_intersections[key] = 0
-                most_common_exact_intersections[key] += 1
+                    most_common_exact_intersections[key] = {'count': 0, 'game_ids': []}
+                most_common_exact_intersections[key]['count'] += 1
+                most_common_exact_intersections[key]['game_ids'] += [id]
 
     return most_common_exact_intersections
 
@@ -878,9 +879,9 @@ def analyze_most_common_exact_intersections(texts, prompt_df, name):
 
     # Output intersections with occurrence counts
     print(f"Most Common Exact Intersections for {name}", file=result)
-    for i, (combo, count) in enumerate(sorted(most_common_exact_intersections.items(), key=lambda x: x[1], reverse=True)):
-        if count >= 5:  # Only include intersections with at least 5 occurrences
-            print(f"{i + 1}. {combo} ({count})", file=result)
+    for i, (combo, value) in enumerate(sorted(most_common_exact_intersections.items(), key=lambda x: x[1]['count'], reverse=True)):
+        if value['count'] >= 5:  # Only include intersections with at least 5 occurrences
+            print(f"{i + 1}. {combo} ({value['count']})", file=result)
 
     # Get the full output as a string
     result_string = result.getvalue()
@@ -987,11 +988,6 @@ def make_generic_text_page(func, args, page_title):
     plt.show()
 
 
-
-from matplotlib.backends.backend_pdf import PdfPages
-import matplotlib.pyplot as plt
-from datetime import datetime
-
 def create_pdf_with_graphs_cover_and_toc(texts, COLOR_MAP, analysis_df, smoothed_metrics_df, reversed_dict, pdf_filename):
     """
     Creates a PDF booklet with a cover page, table of contents, various graphs, 
@@ -1039,11 +1035,11 @@ def create_pdf_with_graphs_cover_and_toc(texts, COLOR_MAP, analysis_df, smoothed
         (make_generic_text_page, (analyze_most_common_exact_intersections, (texts, prompt_df, "Sam"), 'Common Intersections (Sam)'), 'Common Intersections (Sam)'),
         (make_generic_text_page, (analyze_most_common_exact_intersections, (texts, prompt_df, "Will"), 'Common Intersections (Will)'), 'Common Intersections (Will)'),
         (make_generic_text_page, (analyze_most_common_exact_intersections, (texts, prompt_df, "Cliff"), 'Common Intersections (Cliff)'), 'Common Intersections (Cliff)'),
-        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompt_df, "Keith", categories), 'Empty Intersections (Keith)'), 'Empty Intersections (Keith)'),
-        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompt_df, "Rachel", categories), 'Empty Intersections (Rachel)'), 'Empty Intersections (Rachel)'),
-        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompt_df, "Sam", categories), 'Empty Intersections (Sam)'), 'Empty Intersections (Sam)'),
-        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompt_df, "Will", categories), 'Empty Intersections (Will)'), 'Empty Intersections (Will)'),
-        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompt_df, "Cliff", categories), 'Empty Intersections (Cliff)'), 'Empty Intersections (Cliff)'),
+        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompt_df, "Keith", categories), 'Never Shown Intersections (Keith)'), 'Never Shown Intersections (Keith)'),
+        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompt_df, "Rachel", categories), 'Never Shown Intersections (Rachel)'), 'Never Shown Intersections (Rachel)'),
+        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompt_df, "Sam", categories), 'Never Shown Intersections (Sam)'), 'Never Shown Intersections (Sam)'),
+        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompt_df, "Will", categories), 'Never Shown Intersections (Will)'), 'Never Shown Intersections (Will)'),
+        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompt_df, "Cliff", categories), 'Never Shown Intersections (Cliff)'), 'Never Shown Intersections (Cliff)'),
     ]
     
     def add_cover_page(pdf, today_date):
