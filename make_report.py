@@ -921,17 +921,33 @@ def analyze_empty_team_team_intersections(texts, prompt_df, name, categories):
 
     # Identify missing team-to-team intersections
     print(f"Empty Team-Team Intersections for {name}", file=result)
+    
+    # To track intersections that never showed up in any game
+    all_possible_intersections = set()
+
     for i, team in enumerate(sorted(TEAM_LIST)):
         for other in sorted(TEAM_LIST)[i + 1:]:
             key = " + ".join([team_to_full_names[team], team_to_full_names[other]])
             other_key = " + ".join([team_to_full_names[other], team_to_full_names[team]])
+
+            # Add this intersection to the full set of possible intersections
+            all_possible_intersections.add(key)
+            all_possible_intersections.add(other_key)
+
             if key not in most_common_exact_intersections and other_key not in most_common_exact_intersections:
-                print(key, file=result)
+                # This intersection is missing from the person's game
+                print(f"Missing: {key}", file=result)
                 missing += 1
                 missing_maps[team] = missing_maps.get(team, 0) + 1
                 missing_maps[other] = missing_maps.get(other, 0) + 1
             else:
                 present += 1
+
+    # # Now identify intersections that never showed up in any games
+    # never_showed_up = all_possible_intersections - set(most_common_exact_intersections.keys())
+    # print(f"\n\n\n\nNever Showed Up Intersections for {name}", file=result)
+    # for intersection in sorted(never_showed_up):
+    #     print(f"Never Showed Up: {intersection}", file=result)
 
     # Output total missing intersections for the given person
     print(f"\n\n\n\nTotal Missing for {name}", file=result)
@@ -943,6 +959,7 @@ def analyze_empty_team_team_intersections(texts, prompt_df, name, categories):
     result_string = result.getvalue()
     result.close()  # Close the StringIO object
     return result_string
+
 
 
 #--------------------------------------------------------------------------------------------------
@@ -968,7 +985,13 @@ def make_generic_text_page(func, args, page_title):
     
     # Display the plot
     plt.show()
-    
+
+
+
+from matplotlib.backends.backend_pdf import PdfPages
+import matplotlib.pyplot as plt
+from datetime import datetime
+
 def create_pdf_with_graphs_cover_and_toc(texts, COLOR_MAP, analysis_df, smoothed_metrics_df, reversed_dict, pdf_filename):
     """
     Creates a PDF booklet with a cover page, table of contents, various graphs, 
@@ -1020,45 +1043,56 @@ def create_pdf_with_graphs_cover_and_toc(texts, COLOR_MAP, analysis_df, smoothed
         (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompt_df, "Rachel", categories), 'Empty Intersections (Rachel)'), 'Empty Intersections (Rachel)'),
         (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompt_df, "Sam", categories), 'Empty Intersections (Sam)'), 'Empty Intersections (Sam)'),
         (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompt_df, "Will", categories), 'Empty Intersections (Will)'), 'Empty Intersections (Will)'),
-        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompt_df, "Cliff", categories), 'Empty Intersections (Cliff)'), 'Empty Intersections (Cliff)'),    
+        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompt_df, "Cliff", categories), 'Empty Intersections (Cliff)'), 'Empty Intersections (Cliff)'),
     ]
+    
+    def add_cover_page(pdf, today_date):
+        """Helper function to create the cover page."""
+        plt.figure(figsize=(8.5, 11))
+        plt.text(0.5, 0.7, 'Immaculate Grid Analysis Results', fontsize=24, ha='center', va='center', fontweight='bold')
+        plt.text(0.5, 0.6, f'Date of Analysis: {today_date}', fontsize=16, ha='center', va='center')
+        plt.axis('off')
+        pdf.savefig()
+        plt.close()
+
+    def add_toc_page(pdf, graph_functions):
+        """Helper function to create the table of contents page."""
+        plt.figure(figsize=(8.5, 11))
+        plt.text(0.5, 0.9, 'Table of Contents', fontsize=20, ha='center', va='top', fontweight='bold')
+
+        toc_item_y_position = 0.85
+        for i, (_, _, title) in enumerate(graph_functions, start=1):
+            plt.text(0.1, toc_item_y_position, f'{i}. {title}', fontsize=10, ha='left', va='top')
+            toc_item_y_position -= 0.02
+
+        plt.axis('off')
+        pdf.savefig()
+        plt.close()
+
+    def add_graphs_to_pdf(pdf, graph_functions):
+        """Helper function to generate graphs and add them to the PDF."""
+        for func, args, _ in graph_functions:
+            plt.figure()
+            func(*args)
+            pdf.savefig()
+            plt.close()
 
     try:
-        # Create a PDF file with multiple pages
         with PdfPages(pdf_filename) as pdf:
-            # Create the cover page
-            plt.figure(figsize=(8.5, 11))  # Set the page size to standard A4 or letter
-            plt.text(0.5, 0.7, 'Immaculate Grid Analysis Results', fontsize=24, ha='center', va='center', fontweight='bold')
-            plt.text(0.5, 0.6, f'Date of Analysis: {today_date}', fontsize=16, ha='center', va='center')
-            plt.axis('off')  # Hide axes for the cover page
-            pdf.savefig()  # Save the cover page to the PDF
-            plt.close()  # Close the figure for the cover page
+            # Add cover page
+            add_cover_page(pdf, today_date)
 
-            # Create the Table of Contents page
-            plt.figure(figsize=(8.5, 11))
-            plt.text(0.5, 0.9, 'Table of Contents', fontsize=20, ha='center', va='top', fontweight='bold')
+            # Add Table of Contents page
+            add_toc_page(pdf, graph_functions)
 
-            # Add the list of graphs to the Table of Contents
-            toc_item_y_position = 0.85
-            for i, (_, _, title) in enumerate(graph_functions, start=1):
-                plt.text(0.1, toc_item_y_position, f'{i}. {title}', fontsize=10, ha='left', va='top')
-                toc_item_y_position -= 0.02  # Adjust the position for the next line
-         
-            plt.axis('off')  # Hide axes for the Table of Contents page
-            pdf.savefig()  # Save the Table of Contents page to the PDF
-            plt.close()  # Close the figure for the Table of Contents page
-
-            # Add each graph to a new page in the PDF
-            for func, args, _ in graph_functions:
-                plt.figure()
-                func(*args)  # Call the graph-making function with its arguments
-                pdf.savefig()  # Save the current figure to the PDF
-                plt.close()  # Close the figure to free up memory
+            # Add graphs
+            add_graphs_to_pdf(pdf, graph_functions)
 
     except Exception as e:
         print(f"An error occurred: {e}")
 
     print(f"PDF file '{pdf_filename}' has been created with a cover page, table of contents, and all graphs.")
+
 
 #--------------------------------------------------------------------------------------------------
 
