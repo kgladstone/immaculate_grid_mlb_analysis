@@ -303,6 +303,9 @@ def process_messages(messages_df):
     columns_to_keep = ['grid_number', 'correct', 'score', 'date', 'matrix', 'name']
     messages_df = messages_df[columns_to_keep]
 
+    # Drop duplicates
+    messages_df = messages_df.drop_duplicates()
+    
     print("Data extraction and transformation complete!")
     return messages_df
 
@@ -317,8 +320,20 @@ def test_messages(messages_df):
 
     ####################### Examine instances where grid number and date do not match ########################
 
+    print("*" * 80)
     print("Printing instances of messages where date of message does not match date of grid result")
     print(messages_df[messages_df['date'] != messages_df['grid_number'].apply(ImmaculateGridUtils._fixed_date_from_grid_number)])
+    print("Count of these instances: {}".format(
+        len(messages_df[messages_df['date'] != messages_df['grid_number'].apply(ImmaculateGridUtils._fixed_date_from_grid_number)])
+    ))
+
+
+    ####################### Multiple texts from the same person for the same grid ########################
+    print("*" * 80)
+    print("Printing instances of multiple messages from same person for same grid")
+    messages_by_person_by_grid = messages_df.groupby(['name','grid_number']).size().reset_index(name='message_count')
+    print(messages_by_person_by_grid[messages_by_person_by_grid['message_count'] > 1])
+    print("Count of these instances: {}".format(len(messages_by_person_by_grid[messages_by_person_by_grid['message_count'] > 1])))
 
     ################################# Examine range of dates in the messages #################################
     # Extract the minimum and maximum dates
@@ -386,6 +401,7 @@ def refresh_results(apple_texts_file_path, output_results_file_path):
         data_previous = pd.DataFrame()  # Create an empty DataFrame if the file doesn't exist
 
     # Run tests on previous messages
+    print("*" * 80)
     print("Running tests on cached messages...")
     test_messages(data_previous)
     
@@ -396,6 +412,7 @@ def refresh_results(apple_texts_file_path, output_results_file_path):
         data_latest = process_messages(data_latest_raw)
         
         # Validate data from text messages
+        print("*" * 80)
         print("Running tests on new messages...")
         test_messages(data_latest)
 
@@ -503,12 +520,23 @@ def refresh_prompts(grid_storage_path):
 # --------------------------------------------------------------------------------------
 # Main Execution
 if __name__ == "__main__":
-    print("\n********************\nRunning Immaculate Grid refresh process...\n********************\n")
-    
-    print("\n**********\nRefreshing results data...")
+    print("*" * 80)
+    print("*" * 80)
+    print("*" * 80)
+    print("Running Immaculate Grid refresh process...")
+    print("*" * 80)
+    print("*" * 80)
+
+
+    print("*" * 80)
+    print("Handling results data...")
     refresh_results(APPLE_TEXTS_DB_PATH, MESSAGES_CSV_PATH)
 
-    print("\n**********\nRefreshing prompt data...")
+    print("*" * 80)
+    print("Handling prompts data...")
     refresh_prompts(PROMPTS_CSV_PATH)
 
-    print("\n********************\nComplete!\n********************\n")
+    print("*" * 80)
+    print("Complete!")
+    print("*" * 80)
+

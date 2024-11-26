@@ -962,6 +962,11 @@ if __name__ == "__main__":
     num_rows_post = len(data)
     
     print("Data was trimmed to {} from original size of {}, handling instances of multiple entries per person per grid".format(num_rows_post, num_rows))
+
+    # Fixing date
+    print("Fixing dates by using the grid number")
+    data['date'] = data['grid_number'].apply(ImmaculateGridUtils._fixed_date_from_grid_number)
+    data = data.drop_duplicates()
     
     #--------------------------------------------------------------------------------------------------
     # (1) Transform into base model format
