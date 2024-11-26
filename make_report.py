@@ -658,166 +658,52 @@ def analyze_team_std_dev(categories, person_to_category):
     return result
 
 
-def analyze_best_person_by_team(categories, person_to_category):
+def analyze_person_prompt_performance(
+    categories, person_to_category, categories_clearing_threshold=None, direction="Best", category_type="Team"
+):
     """
-    Identify the best-performing person for each team.
+    Analyze the best or worst performing person for teams or non-team categories.
 
     Args:
         categories (set): Set of all unique categories.
         person_to_category (dict): Performance data for each person and category.
-
-    Returns:
-        str: A formatted string listing the best person for each team.
-    """
-    overall = []
-    for category in filter(category_is_team, categories):
-        max_acc = 0
-        # Find maximum accuracy for the team
-        for person in person_to_category:
-            acc = person_to_category[person][category][0] / person_to_category[person][category][1]
-            if acc > max_acc:
-                max_acc = acc
-        
-        # Identify all persons who achieved the maximum accuracy
-        max_people = [
-            person for person in person_to_category 
-            if abs(person_to_category[person][category][0] / person_to_category[person][category][1] - max_acc) < 0.0001
-        ]
-        overall.append((category, ", ".join(max_people)))
-
-    # Format the results
-    result = "Best Person for Each Team\n"
-    for category, people in sorted(overall, key=lambda x: x[0]):
-        result += f"{category.ljust(15)} {people}\n"
-    return result
-
-
-def analyze_worst_person_by_team(categories, person_to_category):
-    """
-    Identify the worst-performing person for each team.
-
-    Args:
-        categories (set): Set of all unique categories.
-        person_to_category (dict): Performance data for each person and category.
-
-    Returns:
-        str: A formatted string listing the worst person for each team.
-    """
-    overall = []
-    for category in filter(category_is_team, categories):
-        min_acc = 101
-        # Find minimum accuracy for the team
-        for person in person_to_category:
-            acc = person_to_category[person][category][0] / person_to_category[person][category][1]
-            if acc < min_acc:
-                min_acc = acc
-        
-        # Identify all persons who achieved the minimum accuracy
-        min_people = [
-            person for person in person_to_category 
-            if abs(person_to_category[person][category][0] / person_to_category[person][category][1] - min_acc) < 0.0001
-        ]
-        overall.append((category, ", ".join(min_people)))
-
-    # Format the results
-    result = "Worst Person for Each Team\n"
-    for category, people in sorted(overall, key=lambda x: x[0]):
-        result += f"{category.ljust(15)} {people}\n"
-    return result    
-
-
-def analyze_best_person_by_category(categories, person_to_category, categories_clearing_threshold):
-    """
-    Identify the best-performing person for each non-team category.
-
-    Args:
-        categories (set): Set of all unique categories.
-        person_to_category (dict): Performance data for each person and category.
-        categories_clearing_threshold (list): List of categories meeting the threshold.
-
-    Returns:
-        str: A formatted string listing the best person for each category.
-    """
-    overall = []
-    for category in filter(lambda x: not category_is_team(x) and x in categories_clearing_threshold, categories):
-        max_acc = 0
-        # Find maximum accuracy for the category
-        for person in person_to_category:
-            acc = person_to_category[person][category][0] / person_to_category[person][category][1]
-            if acc > max_acc:
-                max_acc = acc
-        
-        # Identify all persons who achieved the maximum accuracy
-        max_people = [
-            person for person in person_to_category 
-            if abs(person_to_category[person][category][0] / person_to_category[person][category][1] - max_acc) < 0.0001
-        ]
-        overall.append((category, ", ".join(max_people)))
-
-    # Format the results
-    result = "Best Person for Each Category\n"
-    for category, people in sorted(overall, key=lambda x: x[0]):
-        result += f"{category.ljust(15)} {people}\n"
-    return result
-
-def analyze_worst_person_by_category(categories, person_to_category, categories_clearing_threshold):
-    """
-    Identify the worst-performing person for each non-team category.
-
-    Args:
-        categories (set): Set of all unique categories.
-        person_to_category (dict): Performance data for each person and category.
-        categories_clearing_threshold (list): List of categories meeting the threshold.
-
-    Returns:
-        str: A formatted string listing the worst person for each category.
-    """
-    overall = []
-    for category in filter(lambda x: not category_is_team(x) and x in categories_clearing_threshold, categories):
-        min_acc = 101
-        # Find minimum accuracy for the category
-        for person in person_to_category:
-            acc = person_to_category[person][category][0] / person_to_category[person][category][1]
-            if acc < min_acc:
-                min_acc = acc
-
-        # Identify all persons who achieved the minimum accuracy
-        min_people = [
-            person for person in person_to_category
-            if abs(person_to_category[person][category][0] / person_to_category[person][category][1] - min_acc) < 0.0001
-        ]
-        overall.append((category, ", ".join(min_people)))
-
-    # Format the results
-    result = "Worst Person for Each Category\n"
-    for category, people in sorted(overall, key=lambda x: x[0]):
-        result += f"{category.ljust(15)} {people}\n"
-    return result
-
-
-def analyze_person_prompt_performance(categories, person_to_category, categories_clearing_threshold, direction, category_type):
-    """
-    Generalized analysis function to evaluate the best or worst performance for teams or categories.
-
-    Args:
-        categories (set): Set of all unique categories.
-        person_to_category (dict): Performance data for each person and category.
-        categories_clearing_threshold (list): List of categories meeting the threshold.
-        direction (str): Whether to analyze "Best" or "Worst" performers.
-        category_type (str): Type of category to analyze ("Team" or "Category").
+        categories_clearing_threshold (list, optional): List of categories meeting the threshold. Required for non-team categories.
+        direction (str): Whether to analyze "Best" or "Worst" performers. Default is "Best".
+        category_type (str): Type of category to analyze ("Team" or "Category"). Default is "Team".
 
     Returns:
         str: A formatted string summarizing the analysis.
     """
-    if category_type == "Team" and direction == "Best":
-        return analyze_best_person_by_team(categories, person_to_category)
-    elif category_type == "Team" and direction == "Worst":
-        return analyze_worst_person_by_team(categories, person_to_category)
-    elif category_type == "Category" and direction == "Best":
-        return analyze_best_person_by_category(categories, person_to_category, categories_clearing_threshold)
-    elif category_type == "Category" and direction == "Worst":
-        return analyze_worst_person_by_category(categories, person_to_category, categories_clearing_threshold)
-    return ""
+    overall = []
+    is_team = category_type == "Team"
+    threshold_filter = (
+        category_is_team if is_team 
+        else lambda x: x in (categories_clearing_threshold or []) and not category_is_team(x)
+    )
+    comparator = max if direction == "Best" else min
+    default_value = 0 if direction == "Best" else 101
+
+    # Filter categories and find the best or worst performer for each
+    for category in filter(threshold_filter, categories):
+        extreme_acc = default_value
+        for person in person_to_category:
+            acc = person_to_category[person][category][0] / person_to_category[person][category][1]
+            extreme_acc = comparator(extreme_acc, acc)
+
+        # Identify all persons who achieved the extreme accuracy
+        extreme_people = [
+            person for person in person_to_category
+            if abs(person_to_category[person][category][0] / person_to_category[person][category][1] - extreme_acc) < 0.0001
+        ]
+        overall.append((category, ", ".join(extreme_people)))
+
+    # Format the results
+    result_type = f"{direction} Person for Each {'Team' if is_team else 'Non-Team Category'}"
+    result = f"{result_type}\n"
+    spacing = 35  # Define a standard number of spaces for alignment
+    for category, people in sorted(overall, key=lambda x: x[0]):
+        result += f"{category.ljust(spacing)}{people}\n"
+    return result
 
 
 def analyze_hardest_teams(texts, prompt_df):
@@ -938,6 +824,7 @@ def analyze_hardest_team_stats(texts, prompt_df):
     result_string = result.getvalue()
     result.close()
     return result_string
+    
 def compute_most_common_exact_intersections(texts, prompt_df, name):
     """
     Compute the most common exact category intersections for a specific person.
