@@ -1,0 +1,13 @@
+# Ignore Jupyter Notebooks and IPYNB files
+*.ipynb
+*.ipynb_checkpoints
+*__pycache__
+
+# Ignore csv files
+*.csv
+
+# Ignore Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Ignore DS Store
+*.DS_Store
