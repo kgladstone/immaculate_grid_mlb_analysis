@@ -227,7 +227,6 @@ def extract_messages(db_path):
     """  
 
     # Extract data from SQL database
-    conn = sqlite3.connect(os.path.expanduser(db_path))
     query = '''
     SELECT
         message.rowid, 
@@ -246,9 +245,14 @@ def extract_messages(db_path):
         message.text LIKE '%Immaculate%'
     '''
 
-    print("Querying message database...")
-    messages_df = pd.read_sql_query(query, conn)
-    conn.close()
+    try:      
+        print("Querying message database...")
+        conn = sqlite3.connect(os.path.expanduser(db_path))
+        messages_df = pd.read_sql_query(query, conn)
+        conn.close()
+    except pd.errors.DatabaseError as e:
+        print ("Warning: Messages query failed!")
+        messages_df = pd.DataFrame()
     
     return messages_df
 
@@ -368,40 +372,41 @@ def refresh_results(apple_texts_file_path, output_results_file_path):
     # Extract formatted data from text messages
     data_latest_raw = extract_messages(apple_texts_file_path)
 
-    if len(data_latest_raw) == 0:
-        print("No new messages with 'Immaculate' found")
-        quit()
-    
-    data_latest = process_messages(data_latest_raw)
+    if len(data_latest_raw) > 0:
+        data_latest = process_messages(data_latest_raw)
+        # Validate data from text messages
+        test_messages(data_latest, "Testing on new dataset")
 
-    # Validate data from text messages
-    test_messages(data_latest, "Testing on new dataset")
-  
-    # Count the unique rows in old DataFrame before combining
-    initial_unique_previous = data_previous.drop_duplicates().shape[0]
+        # Count the unique rows in old DataFrame before combining
+        initial_unique_previous = data_previous.drop_duplicates().shape[0]
+        
+        # Combine the data
+        data_combined = pd.concat([data_previous, data_latest], ignore_index=True)
+        
+        # Drop duplicates to keep only unique rows
+        data_combined_unique = data_combined.drop_duplicates()
     
-    # Combine the data
-    data_combined = pd.concat([data_previous, data_latest], ignore_index=True)
+        # Sort by 'date' first, then by 'name'
+        data_sorted = data_combined_unique.sort_values(by=['date', 'name'])
+        
+        # Count unique rows in the combined DataFrame
+        final_unique_count = data_combined_unique.shape[0]
+        
+        # Calculate the number of new unique rows created
+        new_unique_rows_count = final_unique_count - initial_unique_previous
+        
+        # Print the result
+        print(f"Number of new unique rows created: {new_unique_rows_count}")
     
-    # Drop duplicates to keep only unique rows
-    data_combined_unique = data_combined.drop_duplicates()
+        # Write result
+        data_sorted.to_csv(output_results_file_path, index=False)
 
-    # Sort by 'date' first, then by 'name'
-    data_sorted = data_combined_unique.sort_values(by=['date', 'name'])
-    
-    # Count unique rows in the combined DataFrame
-    final_unique_count = data_combined_unique.shape[0]
-    
-    # Calculate the number of new unique rows created
-    new_unique_rows_count = final_unique_count - initial_unique_previous
-    
-    # Print the result
-    print(f"Number of new unique rows created: {new_unique_rows_count}")
-
-    # Write result
-    data_sorted.to_csv(output_results_file_path, index=False)
-
-    return
+        return
+        
+    else:
+        data_latest = pd.DataFrame()
+        print("Warning: No new messages with 'Immaculate' found. Not changing the results file in {}".format(output_results_file_path))
+        return
 
 # --------------------------------------------------------------------------------------
 # Prompt gathering functions
@@ -442,10 +447,10 @@ def fetch_grids_online(index_list):
     grids_data = [fetch_grid_online(i) for i in index_list]
     return pd.DataFrame(grids_data, columns=header)
 
-def refresh_prompts(GRID_STORAGE_PATH):
+def refresh_prompts(grid_storage_path):
     # 1 - Read cached file and determine set of ids
     print("Reading cached prompts file...")
-    data_previous = pd.read_csv(GRID_STORAGE_PATH)
+    data_previous = pd.read_csv(grid_storage_path)
     indices_previous = set(data_previous['grid_id'])
 
     # 2 - Determine set of ids between universe start and today
@@ -456,24 +461,32 @@ def refresh_prompts(GRID_STORAGE_PATH):
     indices_remaining = list(indices_universe - indices_previous)
 
     if len(indices_remaining) == 0:
-        print("No new data to pull!")
-    
-    # 4 - Execute the fetch of those ids
-    data_incremental = fetch_grids_online(indices_remaining)
-    
-    # 5 - Merge into resultant dataframe
-    data_combined = pd.concat([data_previous, data_incremental], ignore_index=True)
+        print("Warning: No new data to pull! Not changing the prompts file in {}".format(grid_storage_path))
+        return
 
-    # 6 - Save resultant dataframe into original location   
-    print("Saving prompts file...")
-    data_combined.to_csv(GRID_STORAGE_PATH, index=False)
+    else:
+        print("Pulling new grids from online...")
+        # 4 - Execute the fetch of those ids
+        data_incremental = fetch_grids_online(indices_remaining)
+        
+        # 5 - Merge into resultant dataframe
+        data_combined = pd.concat([data_previous, data_incremental], ignore_index=True)
+    
+        # 6 - Save resultant dataframe into original location   
+        print("Saving prompts file...")
+        data_combined.to_csv(grid_storage_path, index=False)
+
+        return
 
 # --------------------------------------------------------------------------------------
 # Main Execution
 if __name__ == "__main__":
+    print("\n********************\nRunning Immaculate Grid refresh process...\n********************\n")
     
     print("\n**********\nRefreshing results data...")
     refresh_results(APPLE_TEXTS_DB_PATH, MESSAGES_CSV_PATH)
 
     print("\n**********\nRefreshing prompt data...")
     refresh_prompts(PROMPTS_CSV_PATH)
+
+    print("\n********************\nComplete!\n********************\n")
