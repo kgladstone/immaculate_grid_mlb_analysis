@@ -503,7 +503,8 @@ def get_categories_from_prompt(prompt):
         tuple: A tuple containing the two categories (part_one, part_two).
     """
     parts = prompt.split(" + ")
-    return parts[0].strip(), parts[1].strip()
+    first, second = sorted(part.strip() for part in parts)
+    return first, second
 
 
 # -------------------------------------------------------------------------------------------------
@@ -612,8 +613,51 @@ def build_game_prompt_response_structure(texts, prompts):
 
     return result
 
+def build_intersection_structure(texts, prompts):
+    """
+    Build out a mapping of intersection to person-specific results
+    """
+    
+    intersections = dict()
+    game_prompt_response = build_game_prompt_response_structure(texts, prompts)
 
-def build_intersection_structure(texts, prompts, name):
+    for game_id, game_data in game_prompt_response.items():
+        prompt = game_data['prompt']
+        response = game_data['response']
+        for i, prompt_i in enumerate(prompt):
+            category_pair = get_categories_from_prompt(prompt_i)
+            
+            # Get everyone's performance
+            for person in response:
+                result = response[person]['matrix'][i]
+
+                # If category pair not in 'intersections' yet, then initialize it
+                if category_pair not in intersections:
+                    # Add the category pair to our structure
+                    intersections[category_pair] = dict()
+                    
+                # If person is not in the category pair yet, then initialize it
+                if person not in intersections[category_pair]:
+                    intersections[category_pair][person] = {
+                        'attempts' : 0,
+                        'successes' : 0,
+                        'detail' : []
+                    }
+
+                # Collect total attempts per person
+                intersections[category_pair][person]['attempts'] += 1
+
+                # Collect total successes per person
+                if result is True:
+                    intersections[category_pair][person]['successes'] += 1
+
+                # Compile list of raw detail per person
+                intersections[category_pair][person]['detail'] += [{'game_id' : game_id, 'result' : result}]
+
+    return intersections
+
+
+def build_intersection_structure_for_person(texts, prompts, name):
     """
     Build the most common exact category intersections for a specific person.
 
@@ -625,28 +669,19 @@ def build_intersection_structure(texts, prompts, name):
     Returns:
         dict: Dictionary where keys are category intersections, and values are their occurrence counts.
     """
-    most_common_exact_intersections = {}
+    
+    intersections = build_intersection_structure(texts, prompts)
 
-    # Analyze each game played by the specified person
-    for game in texts[name]:
-        id = game.grid_number
-        prompt_rows = prompts[prompts["game_id"] == id]
-        if len(prompt_rows) != 1:  # Skip invalid or missing games
-            continue
-        prompt_row = prompt_rows.iloc[0][1:]  # Exclude the 'game_id' column
+    result = {}
+    
+    for key in intersections:
+        if name in intersections[key]:
+            result[key] = intersections[key][name]
+            
+    return result
 
-        # Extract and count category intersections from the game's prompts
-        for i in range(3):
-            for j in range(3):
-                part_one, part_two = get_categories_from_prompt(prompt_row[f"{i}{j}"])
-                key = " + ".join(sorted([part_one, part_two]))  # Sort to standardize intersection format
-                if key not in most_common_exact_intersections:
-                    most_common_exact_intersections[key] = {'count': 0, 'game_ids': []}
-                most_common_exact_intersections[key]['count'] += 1
-                most_common_exact_intersections[key]['game_ids'] += [id]
-
-    return most_common_exact_intersections
-
+# -------------------------------------------------------------------------------------------------
+# Category Analysis Functions
 
 def get_category_clearing_threshold(categories, person_to_category, threshold=25):
     """
@@ -999,7 +1034,7 @@ def analyze_hardest_team_stats(texts, prompts):
     return result_string
 
 
-def analyze_most_common_exact_intersections(texts, prompts, name):
+def analyze_most_successful_exact_intersections(texts, prompts, name):
     """
     Analyze and list the most common exact category intersections for a specific person.
 
@@ -1014,13 +1049,22 @@ def analyze_most_common_exact_intersections(texts, prompts, name):
     result = StringIO()
 
     # Compute intersections for the given person
-    most_common_exact_intersections = build_intersection_structure(texts, prompts, name)
+    intersections = build_intersection_structure_for_person(texts, prompts, name)
+
+    # Determine the maximum length of "{x} & {y}:" for alignment
+    max_length = max(len(f"{x} & {y}:") for (x, y) in intersections.keys())
 
     # Output intersections with occurrence counts
-    print(f"Most Common Exact Intersections for {name}", file=result)
-    for i, (combo, value) in enumerate(sorted(most_common_exact_intersections.items(), key=lambda x: x[1]['count'], reverse=True)):
-        if value['count'] >= 5:  # Only include intersections with at least 5 occurrences
-            print(f"{i + 1}. {combo} ({value['count']})", file=result)
+    print(f"Most Successful Exact Intersections for {name}", file=result)
+    for i, ((x, y), value) in enumerate(sorted(intersections.items(), key=lambda x: x[1]['successes'], reverse=True)):
+        if value['successes'] >= 5:  # Only include intersections with at least 5 occurrences
+            pct = 1.0 * value['successes'] / value['attempts']
+            pair_text = f"{x} & {y}:"
+            # Dynamically align the pair_text with the colon included
+            print(
+                f"{i + 1}. {pair_text:<{max_length}} {value['successes']} of {value['attempts']} ({_to_percent(pct, 2)})",
+                file=result
+            )
 
     # Get the full output as a string
     result_string = result.getvalue()
@@ -1044,7 +1088,7 @@ def analyze_empty_team_team_intersections(texts, prompts, name, categories):
     result = StringIO()
 
     # Compute existing intersections for the given person
-    most_common_exact_intersections = build_intersection_structure(texts, prompts, name)
+    intersections_for_person = build_intersection_structure_for_person(texts, prompts, name)
 
     # Map team names to their full category names and vice versa
     team_to_full_names = {}
@@ -1062,32 +1106,18 @@ def analyze_empty_team_team_intersections(texts, prompts, name, categories):
     # Identify missing team-to-team intersections
     print(f"Empty Team-Team Intersections for {name}", file=result)
     
-    # To track intersections that never showed up in any game
-    all_possible_intersections = set()
-
     for i, team in enumerate(sorted(TEAM_LIST)):
         for other in sorted(TEAM_LIST)[i + 1:]:
-            key = " + ".join([team_to_full_names[team], team_to_full_names[other]])
-            other_key = " + ".join([team_to_full_names[other], team_to_full_names[team]])
-
-            # Add this intersection to the full set of possible intersections
-            all_possible_intersections.add(key)
-            all_possible_intersections.add(other_key)
-
-            if key not in most_common_exact_intersections and other_key not in most_common_exact_intersections:
+            team_1, team_2 = sorted((team_to_full_names[team], team_to_full_names[other]))
+            key = (team_1, team_2)
+            if key not in intersections_for_person:
                 # This intersection is missing from the person's game
-                print(f"Missing: {key}", file=result)
+                print(f"Missing: {team_1} & {team_2}", file=result)
                 missing += 1
-                missing_maps[team] = missing_maps.get(team, 0) + 1
-                missing_maps[other] = missing_maps.get(other, 0) + 1
+                missing_maps[team_1] = missing_maps.get(team_1, 0) + 1
+                missing_maps[team_2] = missing_maps.get(team_2, 0) + 1
             else:
                 present += 1
-
-    # # Now identify intersections that never showed up in any games
-    # never_showed_up = all_possible_intersections - set(most_common_exact_intersections.keys())
-    # print(f"\n\n\n\nNever Showed Up Intersections for {name}", file=result)
-    # for intersection in sorted(never_showed_up):
-    #     print(f"Never Showed Up: {intersection}", file=result)
 
     # Output total missing intersections for the given person
     print(f"\n\n\n\nTotal Missing for {name}", file=result)
@@ -1099,8 +1129,7 @@ def analyze_empty_team_team_intersections(texts, prompts, name, categories):
     result_string = result.getvalue()
     result.close()  # Close the StringIO object
     return result_string
-
-
+    
 
 #--------------------------------------------------------------------------------------------------
 # Report production functions
@@ -1122,16 +1151,20 @@ def make_generic_text_page(func, args, page_title):
     plt.text(0.5, 1.1, page_title, fontsize=24, ha='center', va='top', fontweight='bold')
 
     # Add text to the plot
-    plt.text(0.0, 1, output, fontsize=10, ha='left', va='top')
+    plt.text(0.0, 1, output, fontsize=8, ha='left', va='top')
     
     # Display the plot
     plt.show()
 
 def prepare_graph_functions(texts, prompts, COLOR_MAP):
+    """
+    This function prepares a list of graph_functions that will be executed later in PDF generation
+    """
     # Prepare various structures using "texts" and "prompts"
     categories = build_category_structure(prompts)
     person_to_category = build_person_category_structure(texts, prompts, categories)
     game_prompt_response = build_game_prompt_response_structure(texts, prompts)
+    intersections = build_intersection_structure(texts, prompts)
     categories_clearing_threshold = get_category_clearing_threshold(categories, person_to_category)
     person_to_type = get_person_to_type(texts, prompts, person_to_category)
 
@@ -1184,11 +1217,11 @@ def prepare_graph_functions(texts, prompts, COLOR_MAP):
         (make_generic_text_page, (analyze_person_prompt_performance, (categories, person_to_category, categories_clearing_threshold, "Worst", "Category", ), 'Worst Category Overview'), 'Worst Category Overview'),
         (make_generic_text_page, (analyze_hardest_teams, (texts, prompts, ), 'Hardest Teams Overview'), 'Hardest Teams Overview'),
         (make_generic_text_page, (analyze_hardest_team_stats, (texts, prompts, ), 'Hardest Teams Stats Overview'), 'Hardest Teams Stats Overview'),
-        (make_generic_text_page, (analyze_most_common_exact_intersections, (texts, prompts, "Keith"), 'Common Intersections (Keith)'), 'Common Intersections (Keith)'),
-        (make_generic_text_page, (analyze_most_common_exact_intersections, (texts, prompts, "Rachel"), 'Common Intersections (Rachel)'), 'Common Intersections (Rachel)'),
-        (make_generic_text_page, (analyze_most_common_exact_intersections, (texts, prompts, "Sam"), 'Common Intersections (Sam)'), 'Common Intersections (Sam)'),
-        (make_generic_text_page, (analyze_most_common_exact_intersections, (texts, prompts, "Will"), 'Common Intersections (Will)'), 'Common Intersections (Will)'),
-        (make_generic_text_page, (analyze_most_common_exact_intersections, (texts, prompts, "Cliff"), 'Common Intersections (Cliff)'), 'Common Intersections (Cliff)'),
+        (make_generic_text_page, (analyze_most_successful_exact_intersections, (texts, prompts, "Keith"), 'Most Successful Intersections (Keith)'), 'Most Successful Intersections (Keith)'),
+        (make_generic_text_page, (analyze_most_successful_exact_intersections, (texts, prompts, "Rachel"), 'Most Successful Intersections (Rachel)'), 'Most Successful Intersections (Rachel)'),
+        (make_generic_text_page, (analyze_most_successful_exact_intersections, (texts, prompts, "Sam"), 'Most Successful Intersections (Sam)'), 'Most Successful Intersections (Sam)'),
+        (make_generic_text_page, (analyze_most_successful_exact_intersections, (texts, prompts, "Will"), 'Most Successful Intersections (Will)'), 'Most Successful Intersections (Will)'),
+        (make_generic_text_page, (analyze_most_successful_exact_intersections, (texts, prompts, "Cliff"), 'Most Successful Intersections (Cliff)'), 'Most Successful Intersections (Cliff)'),
         (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompts, "Keith", categories), 'Never Shown Intersections (Keith)'), 'Never Shown Intersections (Keith)'),
         (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompts, "Rachel", categories), 'Never Shown Intersections (Rachel)'), 'Never Shown Intersections (Rachel)'),
         (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompts, "Sam", categories), 'Never Shown Intersections (Sam)'), 'Never Shown Intersections (Sam)'),
@@ -1246,21 +1279,20 @@ def generate_report(graph_functions, pdf_filename):
     # Get today's date in a readable format
     today_date = datetime.now().strftime('%B %d, %Y')
 
-    try:
-        with PdfPages(pdf_filename) as pdf:
-            # Add cover page
-            add_cover_page(pdf, today_date)
+    with PdfPages(pdf_filename) as pdf:
+        # Add cover page
+        add_cover_page(pdf, today_date)
 
-            # Add Table of Contents page
-            add_toc_page(pdf, graph_functions)
+        # Add Table of Contents page
+        add_toc_page(pdf, graph_functions)
 
-            # Add graphs
-            add_graphs_to_pdf(pdf, graph_functions)
+        # Add graphs
+        add_graphs_to_pdf(pdf, graph_functions)
 
-    except Exception as e:
-        print(f"An error occurred: {e}")
 
     print(f"PDF file '{pdf_filename}' has been created with a cover page, table of contents, and all graphs.")
+
+    return
 
 
 #--------------------------------------------------------------------------------------------------
