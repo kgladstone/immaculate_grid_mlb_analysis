@@ -1,3 +1,4 @@
+# Imports
 import os
 import pickle
 import pandas as pd
@@ -17,6 +18,7 @@ from io import StringIO
 import math
 
 #--------------------------------------------------------------------------------------------------
+# Global Variables
 
 INPUT_GRID_RESULTS_FILE_PATH = './csv/results.csv'
 INPUT_PROMPT_DATA_PATH = './csv/prompts.csv'
@@ -25,10 +27,7 @@ PDF_FILENAME = "./immaculate_grid_report.pdf"
 TEAM_LIST = ["Cubs", "Cardinals", "Brewers", "Reds", "Pirates", "Nationals", "Mets", "Marlins", "Phillies", "Braves", "Dodgers", "Diamondbacks", "Rockies", "Giants", "Padres", "Royals", "White Sox", "Twins", "Guardians", "Tigers", "Red Sox", "Yankees", "Blue Jays", "Rays", "Orioles", "Angels", "Athletics", "Astros", "Mariners", "Rangers"]
 
 #--------------------------------------------------------------------------------------------------
-
-def _to_percent(y, position):
-    """Convert a decimal to a percentage string."""
-    return f"{100 * y:.0f}%"
+# Data Prep functions
 
 def preprocess_data_into_texts_structure(data):
     """Build up the "texts" nested structure"""
@@ -47,6 +46,7 @@ def preprocess_data_into_texts_structure(data):
     
     return ImmaculateGridUtils.df_to_immaculate_grid_objs(data)
 
+
 def make_reversed_dict(texts): 
     """Reverse the texts data structure so that grid number points to player and their result"""
     # Initialize the reversed dictionary
@@ -62,6 +62,7 @@ def make_reversed_dict(texts):
                 # Set up the reversed dictionary so that the grid number points to the player and their result
                 reversed_dict.setdefault(grid_number, {})[name] = grid_obj
     return reversed_dict
+
 
 def make_analysis_df(texts):
     """Convert texts into a pandas DataFrame"""
@@ -105,11 +106,12 @@ def make_analysis_df(texts):
 
 
 # Function to calculate smoothed metrics (score, correct, average_score_of_correct) from analysis_df
-def calculate_smoothed_metrics(analysis_df: pd.DataFrame, smoothness=28):
+def calculate_smoothed_metrics(texts, smoothness=28):
     """Generate a DataFrame of smoothed scores, correct values, and average scores over time."""
     metric_table = []
 
     # Group the data by 'name' to process each person individually
+    analysis_df = make_analysis_df(texts)
     grouped = analysis_df.groupby('name')
 
     # Loop through each person
@@ -151,45 +153,21 @@ def calculate_smoothed_metrics(analysis_df: pd.DataFrame, smoothness=28):
     # Create a DataFrame from the smoothed data
     return pd.DataFrame(metric_table, columns=["name", "grid_number", "smoothed_score", "smoothed_correct", "smoothed_avg_score", "date"]).dropna()
 
-# Function to plot smoothed metrics using the smoothed DataFrame
-def plot_smoothed_metrics(smoothed_df: pd.DataFrame, metric: str, title: str, ylabel: str) -> None:
-    """Plot the smoothed metrics (score, correct, or average score) over time."""
-    plt.figure(figsize=(12, 6))
 
-    # Plot smoothed metrics for each person
-    for name in smoothed_df['name'].unique():
-        person_data = smoothed_df[smoothed_df['name'] == name]
-        
-        # Plot line with proper date formatting for the selected metric
-        plt.plot(person_data['date'], person_data[metric], label=name, color=COLOR_MAP.get(name, 'blue'))
-
-    # Formatting the plot
-    plt.legend()
-    plt.title(title)
-    plt.xlabel("Date")
-    plt.ylabel(ylabel)
-    plt.xticks(rotation=45)
-
-    # Adjust x-axis date formatting and tick placement
-    plt.gca().xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter('%b %Y'))  # Format to month and year
-    plt.gca().xaxis.set_major_locator(plt.MaxNLocator(nbins=10))  # Limit number of x-ticks to avoid clutter
-
-    plt.tight_layout()  # Adjust layout for better display
-    plt.show()
-
-
-# ---------
-def calculate_win_rates(reversed_dict, criterion):
+def calculate_win_rates(texts, criterion):
     """
     Calculate win rates based on a given criterion.
 
     Args:
-        reversed_dict (dict): The games data.
+        texts (dict): The games data.
         criterion (str): The criterion to calculate win rates ("overall", "correctness", "scores", "last_rate").
 
     Returns:
         dict: A dictionary of win rates for each person.
     """
+
+    reversed_dict = make_reversed_dict(texts)
+    
     wins = {person: 0 for person in texts}
     for game in reversed_dict.values():
         if criterion == "overall":
@@ -220,7 +198,27 @@ def calculate_win_rates(reversed_dict, criterion):
 
     return wins
 
+
+#--------------------------------------------------------------------------------------------------
+# Formatting functions
+
+def _to_percent(y, position):
+    """Convert a decimal to a percentage string."""
+    return f"{100 * y:.0f}%"
+
+# Function to format each record with proper alignment
+def format_record(rank, name, score, date, game_id, name_width=7, score_width=2, date_width=10, game_id_width=4):
+    formatted_rank = f'{rank:<2}'
+    formatted_name = f'{name:<{name_width}}'
+    formatted_score = f'{str(score):<{score_width}}'
+    formatted_date = f'{str(date):<{date_width}}'
+    formatted_game_id = f'{str(game_id):<{game_id_width}}'
     
+    return f'{formatted_rank} | {formatted_name} | {formatted_score} | {formatted_date} | {formatted_game_id}'
+
+#--------------------------------------------------------------------------------------------------
+# Plotting functions
+
 # Graph number of immaculates
 def make_fig_1(texts, COLOR_MAP):
     counts = []
@@ -230,6 +228,7 @@ def make_fig_1(texts, COLOR_MAP):
     plt.bar([person for person in texts], counts, color=[COLOR_MAP[person] for person in texts])
     plt.title("Number of Immaculates")
     plt.show()
+
     
 # Graph distributions
 def make_fig_2(texts, COLOR_MAP):
@@ -258,6 +257,7 @@ def make_fig_2(texts, COLOR_MAP):
     plt.subplots_adjust(hspace=0.5)
     plt.show()
 
+
 # Graph average correct
 def make_fig_3(texts, COLOR_MAP):
 
@@ -272,7 +272,8 @@ def make_fig_3(texts, COLOR_MAP):
         color=[COLOR_MAP[person] for person in analysis_summary.name])
     plt.title(title)
     plt.show()
-    
+
+
 # Graph average score
 def make_fig_4(texts, COLOR_MAP):
 
@@ -287,7 +288,8 @@ def make_fig_4(texts, COLOR_MAP):
         color=[COLOR_MAP[person] for person in analysis_summary.name])
     plt.title(title)
     plt.show()
-    
+
+
 # Graph average rarity of correct square
 def make_fig_5(texts, COLOR_MAP):
 
@@ -303,29 +305,38 @@ def make_fig_5(texts, COLOR_MAP):
     plt.title(title)
     plt.show()
 
-# Plot each metric separately
-def make_fig_6(texts):
-    analysis_df = make_analysis_df(texts)
-    smoothed_metrics_df = calculate_smoothed_metrics(analysis_df, smoothness=28)
 
-    plot_smoothed_metrics(smoothed_metrics_df, 'smoothed_score', "Smoothed Scores Over Time", "Smoothed Score")
+# Function to plot smoothed metrics using the smoothed DataFrame
+def plot_smoothed_metrics(texts, metric, title, ylabel, COLOR_MAP):
+    """Plot the smoothed metrics (score, correct, or average score) over time."""
+    smoothed_df = calculate_smoothed_metrics(texts, smoothness=28)
+    
+    plt.figure(figsize=(12, 6))
 
-def make_fig_7(texts):
-    analysis_df = make_analysis_df(texts)
-    smoothed_metrics_df = calculate_smoothed_metrics(analysis_df, smoothness=28)
+    # Plot smoothed metrics for each person
+    for name in smoothed_df['name'].unique():
+        person_data = smoothed_df[smoothed_df['name'] == name]
+        
+        # Plot line with proper date formatting for the selected metric
+        plt.plot(person_data['date'], person_data[metric], label=name, color=COLOR_MAP.get(name, 'blue'))
 
-    plot_smoothed_metrics(smoothed_metrics_df, 'smoothed_correct', "Smoothed Correct Over Time", "Smoothed Correct")
+    # Formatting the plot
+    plt.legend()
+    plt.title(title)
+    plt.xlabel("Date")
+    plt.ylabel(ylabel)
+    plt.xticks(rotation=45)
 
-def make_fig_8(texts):
-    analysis_df = make_analysis_df(texts)
-    smoothed_metrics_df = calculate_smoothed_metrics(analysis_df, smoothness=28)
+    # Adjust x-axis date formatting and tick placement
+    plt.gca().xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter('%b %Y'))  # Format to month and year
+    plt.gca().xaxis.set_major_locator(plt.MaxNLocator(nbins=10))  # Limit number of x-ticks to avoid clutter
 
-    plot_smoothed_metrics(smoothed_metrics_df, 'smoothed_avg_score', "Smoothed Avg Score of Correct Over Time", "Smoothed Avg Score of Correct")
+    plt.tight_layout()  # Adjust layout for better display
+    plt.show()
 
-def make_fig_9(texts):
+
+def plot_win_rates(texts):
     """Plot win rates based on various criteria."""
-
-    reversed_dict = make_reversed_dict(texts)
     
     # Set a larger figure size to widen the graphs
     fig, axs = plt.subplots(2, 2, figsize=(12, 8))
@@ -334,7 +345,7 @@ def make_fig_9(texts):
     titles = ["Win Rates (Overall)", "Win Rates (Correctness Only)", "Win Rates (Scores Only)", "Last Rate (Overall)"]
 
     for ax, criterion, title in zip(axs.flat, criteria, titles):
-        wins = calculate_win_rates(reversed_dict, criterion)
+        wins = calculate_win_rates(texts, criterion)
         ax.bar([person for person in wins], wins.values(), color=[COLOR_MAP[person] for person in wins])
         ax.set_title(title)
         ax.set_yticks([i / 5 for i in range(6)])
@@ -345,19 +356,8 @@ def make_fig_9(texts):
     plt.subplots_adjust(hspace=0.5, wspace=0.5)
     plt.show()
 
-    
-# Function to format each record with proper alignment
-def format_record(rank, name, score, date, game_id, name_width=7, score_width=2, date_width=10, game_id_width=4):
-    formatted_rank = f'{rank:<2}'
-    formatted_name = f'{name:<{name_width}}'
-    formatted_score = f'{str(score):<{score_width}}'
-    formatted_date = f'{str(date):<{date_width}}'
-    formatted_game_id = f'{str(game_id):<{game_id_width}}'
-    
-    return f'{formatted_rank} | {formatted_name} | {formatted_score} | {formatted_date} | {formatted_game_id}'
 
-
-def make_fig_10(texts, fig_title='Best and Worst Scores (All Time)'):
+def plot_best_worst_scores(texts, fig_title='Best and Worst Scores (All Time)'):
     """
     Creates a summary page in the PDF with the best and worst scores.
 
@@ -403,8 +403,9 @@ def make_fig_10(texts, fig_title='Best and Worst Scores (All Time)'):
     
     plt.axis('off')  # Hide axes for the results page
     plt.show()  # Close the figure
+    
 
-def make_fig_11(texts):
+def plot_best_worst_scores_30(texts):
 
     # Get the current date
     current_date = datetime.now()
@@ -419,11 +420,10 @@ def make_fig_11(texts):
     }
 
     fig_title = 'Best and Worst Scores (Last 30 Days)'
-    make_fig_10(filtered_texts, fig_title)
+    plot_best_worst_scores(filtered_texts, fig_title)
 
+    
 #--------------------------------------------------------------------------------------------------
-
-# -------------------------------------------------------------------------------------------------
 # Prompt Data Processing Functions
 # -------------------------------------------------------------------------------------------------
 
@@ -508,7 +508,6 @@ def get_categories_from_prompt(prompt):
 
 # -------------------------------------------------------------------------------------------------
 # Category Data Structure Functions
-# -------------------------------------------------------------------------------------------------
 
 def build_category_structure(prompts):
     """
@@ -1104,6 +1103,7 @@ def analyze_empty_team_team_intersections(texts, prompts, name, categories):
 
 
 #--------------------------------------------------------------------------------------------------
+# Report production functions
 
 def make_generic_text_page(func, args, page_title):
 
@@ -1142,12 +1142,38 @@ def prepare_graph_functions(texts, prompts, COLOR_MAP):
         (make_fig_3, (texts, COLOR_MAP), "Average Correct"),
         (make_fig_4, (texts, COLOR_MAP), "Average Score"),
         (make_fig_5, (texts, COLOR_MAP), "Average Rarity of Correct Square"),
-        (make_fig_6, (texts,), "Smoothed Scores Over Time"),
-        (make_fig_7, (texts,), "Smoothed Correct Over Time"),
-        (make_fig_8, (texts,), "Smoothed Avg Score of Correct Over Time"),
-        (make_fig_9, (texts,), "Win Rates"),
-        (make_fig_10, (texts, ), 'Best and Worst Scores (All Time)'),
-        (make_fig_11, (texts, ), 'Best and Worst Scores (Last 30 Days)'),
+        (
+            plot_smoothed_metrics, (
+                texts, 
+                'smoothed_score', 
+                "Smoothed Scores Over Time", 
+                "Smoothed Score", 
+                COLOR_MAP
+            ), "Smoothed Scores Over Time"
+        ),
+        (
+            plot_smoothed_metrics, (
+                texts, 
+                'smoothed_correct', 
+                "Smoothed Correct Over Time", 
+                "Smoothed Correct", 
+                COLOR_MAP
+            ), 
+            "Smoothed Correct Over Time"
+        ),
+        (
+            plot_smoothed_metrics, (
+                texts, 
+                'smoothed_avg_score', 
+                "Smoothed Avg Score of Correct Over Time", 
+                "Smoothed Avg Score of Correct", 
+                COLOR_MAP
+            ), 
+            "Smoothed Avg Score of Correct Over Time"
+        ),
+        (plot_win_rates, (texts, ), "Win Rates"),
+        (plot_best_worst_scores, (texts, ), 'Best and Worst Scores (All Time)'),
+        (plot_best_worst_scores_30, (texts, ), 'Best and Worst Scores (Last 30 Days)'),
         (make_generic_text_page, (person_to_type_to_string, (person_to_type, ), 'Type Performance Overview'), 'Type Performance Overview'),
         (make_generic_text_page, (person_to_category_to_string, (person_to_category, ), 'Category Performance Overview'), 'Category Performance Overview'),
         (make_generic_text_page, (analyze_easiest_teams, (categories, person_to_category, ), 'Easiest Teams Overview'), 'Easiest Teams Overview'),
@@ -1179,22 +1205,10 @@ def generate_report(graph_functions, pdf_filename):
     and a summary table of best and worst scores based on the provided data.
 
     Parameters:
-    - texts: Data used for creating graphs.
-    - COLOR_MAP: Color mapping for the graphs.
-    - reversed_dict: Dictionary for win rates.
+    - graph_functions: Data used for creating graphs.
     - pdf_filename: Name of the output PDF file.
     """
 
-
-
-    # Use a non-interactive backend to prevent plots from rendering to the screen
-    plt.switch_backend('Agg')
-
-    # Get today's date in a readable format
-    today_date = datetime.now().strftime('%B %d, %Y')
-
-  
-    
     def add_cover_page(pdf, today_date):
         """Helper function to create the cover page."""
         plt.figure(figsize=(8.5, 11))
@@ -1226,6 +1240,12 @@ def generate_report(graph_functions, pdf_filename):
             pdf.savefig()
             plt.close()
 
+    # Use a non-interactive backend to prevent plots from rendering to the screen
+    plt.switch_backend('Agg')
+
+    # Get today's date in a readable format
+    today_date = datetime.now().strftime('%B %d, %Y')
+
     try:
         with PdfPages(pdf_filename) as pdf:
             # Add cover page
@@ -1244,11 +1264,6 @@ def generate_report(graph_functions, pdf_filename):
 
 
 #--------------------------------------------------------------------------------------------------
-
-# --------------------------------------------------------------------------------------
-
-
-
 # Main Execution
 if __name__ == "__main__":
 
