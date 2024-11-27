@@ -47,10 +47,10 @@ def preprocess_data_into_texts_structure(data):
     return ImmaculateGridUtils.df_to_immaculate_grid_objs(data)
 
 
-def make_reversed_dict(texts): 
+def pivot_texts_by_grid_id(texts): 
     """Reverse the texts data structure so that grid number points to player and their result"""
     # Initialize the reversed dictionary
-    reversed_dict = {}
+    texts_by_grid_id = {}
     
     # Iterate over each name and the list of grid objects
     for name, grid_objects in texts.items():
@@ -60,11 +60,11 @@ def make_reversed_dict(texts):
     
             if grid_number is not None:
                 # Set up the reversed dictionary so that the grid number points to the player and their result
-                reversed_dict.setdefault(grid_number, {})[name] = grid_obj
-    return reversed_dict
+                texts_by_grid_id.setdefault(grid_number, {})[name] = grid_obj
+    return texts_by_grid_id
 
 
-def make_analysis_df(texts):
+def make_texts_melted(texts):
     """Convert texts into a pandas DataFrame"""
     
     # Initialize an empty list to store rows
@@ -97,22 +97,22 @@ def make_analysis_df(texts):
                 rows.append(row)  # Append the row to the list
     
     # Create the DataFrame from the list of rows
-    analysis_df = pd.DataFrame(rows)
+    texts_melted = pd.DataFrame(rows)
     
     # Ensure the 'date' column is in datetime format
-    analysis_df['date'] = pd.to_datetime(analysis_df['date'])
+    texts_melted['date'] = pd.to_datetime(texts_melted['date'])
 
-    return analysis_df
+    return texts_melted
 
 
-# Function to calculate smoothed metrics (score, correct, average_score_of_correct) from analysis_df
+# Function to calculate smoothed metrics (score, correct, average_score_of_correct) from texts_melted
 def calculate_smoothed_metrics(texts, smoothness=28):
     """Generate a DataFrame of smoothed scores, correct values, and average scores over time."""
     metric_table = []
 
     # Group the data by 'name' to process each person individually
-    analysis_df = make_analysis_df(texts)
-    grouped = analysis_df.groupby('name')
+    texts_melted = make_texts_melted(texts)
+    grouped = texts_melted.groupby('name')
 
     # Loop through each person
     for name, group in grouped:
@@ -166,10 +166,10 @@ def calculate_win_rates(texts, criterion):
         dict: A dictionary of win rates for each person.
     """
 
-    reversed_dict = make_reversed_dict(texts)
+    texts_by_grid_id = pivot_texts_by_grid_id(texts)
     
     wins = {person: 0 for person in texts}
-    for game in reversed_dict.values():
+    for game in texts_by_grid_id.values():
         if criterion == "overall":
             best = max((game[person].correct * 1000) + (1000 - game[person].score) for person in game)
             for person in game:
@@ -194,7 +194,7 @@ def calculate_win_rates(texts, criterion):
                     wins[person] += 1
 
     for person in wins:
-        wins[person] /= len(reversed_dict.values())
+        wins[person] /= len(texts_by_grid_id.values())
 
     return wins
 
@@ -220,7 +220,7 @@ def format_record(rank, name, score, date, game_id, name_width=7, score_width=2,
 # Plotting functions
 
 # Graph number of immaculates
-def make_fig_1(texts, COLOR_MAP):
+def plot_immaculates(texts, COLOR_MAP):
     counts = []
     for person in texts:
         data = [(1 if obj.correct == 9 else 0) for obj in texts[person]]
@@ -231,7 +231,7 @@ def make_fig_1(texts, COLOR_MAP):
 
     
 # Graph distributions
-def make_fig_2(texts, COLOR_MAP):
+def plot_correctness(texts, COLOR_MAP):
     fig, axs = plt.subplots(3, 2, figsize=(10, 10))  # Create a 3x2 grid for 5 plots
     top_bar = 130
     
@@ -257,50 +257,24 @@ def make_fig_2(texts, COLOR_MAP):
     plt.subplots_adjust(hspace=0.5)
     plt.show()
 
-
-# Graph average correct
-def make_fig_3(texts, COLOR_MAP):
-
-    analysis_df = make_analysis_df(texts)
+def plot_avg(texts, COLOR_MAP, title):
+    texts_melted = make_texts_melted(texts)
     
-    title = "Average Correct"
-    analysis_summary = analysis_df.groupby('name')['correct'].mean().reset_index()
-    
-    plt.bar(
-        analysis_summary.name, 
-        analysis_summary.correct, 
-        color=[COLOR_MAP[person] for person in analysis_summary.name])
-    plt.title(title)
-    plt.show()
+    if title == "Average Correct":
+        analysis_summary = texts_melted.groupby('name')['correct'].mean().reset_index().rename(columns={"correct": "value"})
 
+    elif title == "Average Score":
+        analysis_summary = texts_melted.groupby('name')['score'].mean().reset_index().rename(columns={"score": "value"})
 
-# Graph average score
-def make_fig_4(texts, COLOR_MAP):
+    elif title == "Average Rarity of Correct Square":
+        analysis_summary = texts_melted.groupby('name')['average_score_of_correct'].mean().reset_index().rename(columns={"average_score_of_correct" : "value"})
 
-    analysis_df = make_analysis_df(texts)
-    
-    title = "Average Score"
-    analysis_summary = analysis_df.groupby('name')['score'].mean().reset_index()
+    else:
+        return None
     
     plt.bar(
         analysis_summary.name, 
-        analysis_summary.score, 
-        color=[COLOR_MAP[person] for person in analysis_summary.name])
-    plt.title(title)
-    plt.show()
-
-
-# Graph average rarity of correct square
-def make_fig_5(texts, COLOR_MAP):
-
-    analysis_df = make_analysis_df(texts)
-    
-    title = "Average Rarity of Correct Square"
-    analysis_summary = analysis_df.groupby('name')['average_score_of_correct'].mean().reset_index()
-    
-    plt.bar(
-        analysis_summary.name, 
-        analysis_summary.average_score_of_correct, 
+        analysis_summary.value, 
         color=[COLOR_MAP[person] for person in analysis_summary.name])
     plt.title(title)
     plt.show()
@@ -1135,26 +1109,18 @@ def analyze_empty_team_team_intersections(texts, prompts, name, categories):
 # Report production functions
 
 def make_generic_text_page(func, args, page_title):
-
+    """
+    This function prepares a generic page that includes the output from the function being executed
+    """
     output = func(*args)
-
     MAX_LINES_PER_NORMAL_PAGE = 45
-
     page_len_scalar = max([int(math.floor(output.count('\n') / MAX_LINES_PER_NORMAL_PAGE)),1])
-    
-    # Create a new figure and axes
     fig, ax = plt.subplots(figsize=(8, 11*page_len_scalar))
-    
-    # Hide the axes for a clean canvas
     ax.axis('off')
-
     plt.text(0.5, 1.1, page_title, fontsize=24, ha='center', va='top', fontweight='bold')
-
-    # Add text to the plot
     plt.text(0.0, 1, output, fontsize=8, ha='left', va='top')
-    
-    # Display the plot
     plt.show()
+    return
 
 def prepare_graph_functions(texts, prompts, COLOR_MAP):
     """
@@ -1170,11 +1136,31 @@ def prepare_graph_functions(texts, prompts, COLOR_MAP):
 
   # List of graph-making functions with their respective arguments and titles
     graph_functions = [
-        (make_fig_1, (texts, COLOR_MAP), "Number of Immaculates"),
-        (make_fig_2, (texts, COLOR_MAP), "Correctness Distribution"),
-        (make_fig_3, (texts, COLOR_MAP), "Average Correct"),
-        (make_fig_4, (texts, COLOR_MAP), "Average Score"),
-        (make_fig_5, (texts, COLOR_MAP), "Average Rarity of Correct Square"),
+        (
+            plot_immaculates, 
+            (texts, COLOR_MAP), 
+            "Number of Immaculates"
+        ),
+        (
+            plot_correctness, 
+            (texts, COLOR_MAP), 
+            "Correctness Distribution"
+        ),
+        (
+            plot_avg, 
+            (texts, COLOR_MAP, 'Average Correct'), 
+            "Average Correct"
+        ),
+        (
+            plot_avg, 
+            (texts, COLOR_MAP, 'Average Score'), 
+            "Average Score"
+        ),
+        (
+            plot_avg, 
+            (texts, COLOR_MAP, 'Average Rarity of Correct Square'), 
+            "Average Rarity of Correct Square"
+        ),
         (
             plot_smoothed_metrics, (
                 texts, 
