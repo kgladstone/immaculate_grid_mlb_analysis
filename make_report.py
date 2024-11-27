@@ -220,25 +220,6 @@ def calculate_win_rates(reversed_dict, criterion):
 
     return wins
 
-def plot_win_rates(reversed_dict):
-    """Plot win rates based on various criteria."""
-    # Set a larger figure size to widen the graphs
-    fig, axs = plt.subplots(2, 2, figsize=(12, 8))
-
-    criteria = ["overall", "correctness", "scores", "last_rate"]
-    titles = ["Win Rates (Overall)", "Win Rates (Correctness Only)", "Win Rates (Scores Only)", "Last Rate (Overall)"]
-
-    for ax, criterion, title in zip(axs.flat, criteria, titles):
-        wins = calculate_win_rates(reversed_dict, criterion)
-        ax.bar([person for person in wins], wins.values(), color=[COLOR_MAP[person] for person in wins])
-        ax.set_title(title)
-        ax.set_yticks([i / 5 for i in range(6)])
-        ax.set_ylim(0, 1)
-        ax.yaxis.set_major_formatter(FuncFormatter(_to_percent))
-
-    # Adjust the layout of the subplots
-    plt.subplots_adjust(hspace=0.5, wspace=0.5)
-    plt.show()
     
 # Graph number of immaculates
 def make_fig_1(texts, COLOR_MAP):
@@ -278,7 +259,10 @@ def make_fig_2(texts, COLOR_MAP):
     plt.show()
 
 # Graph average correct
-def make_fig_3(analysis_df, COLOR_MAP):
+def make_fig_3(texts, COLOR_MAP):
+
+    analysis_df = make_analysis_df(texts)
+    
     title = "Average Correct"
     analysis_summary = analysis_df.groupby('name')['correct'].mean().reset_index()
     
@@ -290,7 +274,10 @@ def make_fig_3(analysis_df, COLOR_MAP):
     plt.show()
     
 # Graph average score
-def make_fig_4(analysis_df, COLOR_MAP):
+def make_fig_4(texts, COLOR_MAP):
+
+    analysis_df = make_analysis_df(texts)
+    
     title = "Average Score"
     analysis_summary = analysis_df.groupby('name')['score'].mean().reset_index()
     
@@ -302,7 +289,10 @@ def make_fig_4(analysis_df, COLOR_MAP):
     plt.show()
     
 # Graph average rarity of correct square
-def make_fig_5(analysis_df, COLOR_MAP):
+def make_fig_5(texts, COLOR_MAP):
+
+    analysis_df = make_analysis_df(texts)
+    
     title = "Average Rarity of Correct Square"
     analysis_summary = analysis_df.groupby('name')['average_score_of_correct'].mean().reset_index()
     
@@ -314,18 +304,48 @@ def make_fig_5(analysis_df, COLOR_MAP):
     plt.show()
 
 # Plot each metric separately
-def make_fig_6(smoothed_metrics_df):
+def make_fig_6(texts):
+    analysis_df = make_analysis_df(texts)
+    smoothed_metrics_df = calculate_smoothed_metrics(analysis_df, smoothness=28)
+
     plot_smoothed_metrics(smoothed_metrics_df, 'smoothed_score', "Smoothed Scores Over Time", "Smoothed Score")
 
-def make_fig_7(smoothed_metrics_df):
+def make_fig_7(texts):
+    analysis_df = make_analysis_df(texts)
+    smoothed_metrics_df = calculate_smoothed_metrics(analysis_df, smoothness=28)
+
     plot_smoothed_metrics(smoothed_metrics_df, 'smoothed_correct', "Smoothed Correct Over Time", "Smoothed Correct")
 
-def make_fig_8(smoothed_metrics_df):
+def make_fig_8(texts):
+    analysis_df = make_analysis_df(texts)
+    smoothed_metrics_df = calculate_smoothed_metrics(analysis_df, smoothness=28)
+
     plot_smoothed_metrics(smoothed_metrics_df, 'smoothed_avg_score', "Smoothed Avg Score of Correct Over Time", "Smoothed Avg Score of Correct")
 
-def make_fig_9(reversed_dict):
-    plot_win_rates(reversed_dict)
+def make_fig_9(texts):
+    """Plot win rates based on various criteria."""
 
+    reversed_dict = make_reversed_dict(texts)
+    
+    # Set a larger figure size to widen the graphs
+    fig, axs = plt.subplots(2, 2, figsize=(12, 8))
+
+    criteria = ["overall", "correctness", "scores", "last_rate"]
+    titles = ["Win Rates (Overall)", "Win Rates (Correctness Only)", "Win Rates (Scores Only)", "Last Rate (Overall)"]
+
+    for ax, criterion, title in zip(axs.flat, criteria, titles):
+        wins = calculate_win_rates(reversed_dict, criterion)
+        ax.bar([person for person in wins], wins.values(), color=[COLOR_MAP[person] for person in wins])
+        ax.set_title(title)
+        ax.set_yticks([i / 5 for i in range(6)])
+        ax.set_ylim(0, 1)
+        ax.yaxis.set_major_formatter(FuncFormatter(_to_percent))
+
+    # Adjust the layout of the subplots
+    plt.subplots_adjust(hspace=0.5, wspace=0.5)
+    plt.show()
+
+    
 # Function to format each record with proper alignment
 def format_record(rank, name, score, date, game_id, name_width=7, score_width=2, date_width=10, game_id_width=4):
     formatted_rank = f'{rank:<2}'
@@ -1107,26 +1127,7 @@ def make_generic_text_page(func, args, page_title):
     # Display the plot
     plt.show()
 
-
-def generate_report(texts, prompts, COLOR_MAP, pdf_filename):
-    """
-    Creates a PDF booklet with a cover page, table of contents, various graphs, 
-    and a summary table of best and worst scores based on the provided data.
-
-    Parameters:
-    - texts: Data used for creating graphs.
-    - COLOR_MAP: Color mapping for the graphs.
-    - analysis_df: DataFrame containing analysis metrics.
-    - smoothed_metrics_df: DataFrame for smoothed metrics over time.
-    - reversed_dict: Dictionary for win rates.
-    - pdf_filename: Name of the output PDF file.
-    """
-
-    # Prepare various "texts" structures
-    reversed_dict = make_reversed_dict(texts)
-    analysis_df = make_analysis_df(texts)
-    smoothed_metrics_df = calculate_smoothed_metrics(analysis_df, smoothness=28)
-
+def prepare_graph_functions(texts, prompts, COLOR_MAP):
     # Prepare various structures using "texts" and "prompts"
     categories = build_category_structure(prompts)
     person_to_category = build_person_category_structure(texts, prompts, categories)
@@ -1134,23 +1135,17 @@ def generate_report(texts, prompts, COLOR_MAP, pdf_filename):
     categories_clearing_threshold = get_category_clearing_threshold(categories, person_to_category)
     person_to_type = get_person_to_type(texts, prompts, person_to_category)
 
-    # Use a non-interactive backend to prevent plots from rendering to the screen
-    plt.switch_backend('Agg')
-
-    # Get today's date in a readable format
-    today_date = datetime.now().strftime('%B %d, %Y')
-
-    # List of graph-making functions with their respective arguments and titles
+  # List of graph-making functions with their respective arguments and titles
     graph_functions = [
         (make_fig_1, (texts, COLOR_MAP), "Number of Immaculates"),
         (make_fig_2, (texts, COLOR_MAP), "Correctness Distribution"),
-        (make_fig_3, (analysis_df, COLOR_MAP), "Average Correct"),
-        (make_fig_4, (analysis_df, COLOR_MAP), "Average Score"),
-        (make_fig_5, (analysis_df, COLOR_MAP), "Average Rarity of Correct Square"),
-        (make_fig_6, (smoothed_metrics_df,), "Smoothed Scores Over Time"),
-        (make_fig_7, (smoothed_metrics_df,), "Smoothed Correct Over Time"),
-        (make_fig_8, (smoothed_metrics_df,), "Smoothed Avg Score of Correct Over Time"),
-        (make_fig_9, (reversed_dict,), "Win Rates"),
+        (make_fig_3, (texts, COLOR_MAP), "Average Correct"),
+        (make_fig_4, (texts, COLOR_MAP), "Average Score"),
+        (make_fig_5, (texts, COLOR_MAP), "Average Rarity of Correct Square"),
+        (make_fig_6, (texts,), "Smoothed Scores Over Time"),
+        (make_fig_7, (texts,), "Smoothed Correct Over Time"),
+        (make_fig_8, (texts,), "Smoothed Avg Score of Correct Over Time"),
+        (make_fig_9, (texts,), "Win Rates"),
         (make_fig_10, (texts, ), 'Best and Worst Scores (All Time)'),
         (make_fig_11, (texts, ), 'Best and Worst Scores (Last 30 Days)'),
         (make_generic_text_page, (person_to_type_to_string, (person_to_type, ), 'Type Performance Overview'), 'Type Performance Overview'),
@@ -1174,6 +1169,31 @@ def generate_report(texts, prompts, COLOR_MAP, pdf_filename):
         (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompts, "Will", categories), 'Never Shown Intersections (Will)'), 'Never Shown Intersections (Will)'),
         (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompts, "Cliff", categories), 'Never Shown Intersections (Cliff)'), 'Never Shown Intersections (Cliff)'),
     ]
+
+    return graph_functions
+    
+
+def generate_report(graph_functions, pdf_filename):
+    """
+    Creates a PDF booklet with a cover page, table of contents, various graphs, 
+    and a summary table of best and worst scores based on the provided data.
+
+    Parameters:
+    - texts: Data used for creating graphs.
+    - COLOR_MAP: Color mapping for the graphs.
+    - reversed_dict: Dictionary for win rates.
+    - pdf_filename: Name of the output PDF file.
+    """
+
+
+
+    # Use a non-interactive backend to prevent plots from rendering to the screen
+    plt.switch_backend('Agg')
+
+    # Get today's date in a readable format
+    today_date = datetime.now().strftime('%B %d, %Y')
+
+  
     
     def add_cover_page(pdf, today_date):
         """Helper function to create the cover page."""
@@ -1237,5 +1257,8 @@ if __name__ == "__main__":
     texts = preprocess_data_into_texts_structure(raw_results)
     prompts = read_prompt_data(INPUT_PROMPT_DATA_PATH)
 
+    # Prepare analysis
+    graph_functions = prepare_graph_functions(texts, prompts, COLOR_MAP)
+
     # Generate report
-    generate_report(texts, prompts, COLOR_MAP, pdf_filename=PDF_FILENAME)
+    generate_report(graph_functions, PDF_FILENAME)
