@@ -1190,17 +1190,114 @@ def prepare_graph_functions(texts, prompts, COLOR_MAP):
             ), 
             "Smoothed Avg Score of Correct Over Time"
         ),
-        (plot_win_rates, (texts, ), "Win Rates"),
-        (plot_best_worst_scores, (texts, ), 'Best and Worst Scores (All Time)'),
-        (plot_best_worst_scores_30, (texts, ), 'Best and Worst Scores (Last 30 Days)'),
-        (make_generic_text_page, (person_to_type_to_string, (person_to_type, ), 'Type Performance Overview'), 'Type Performance Overview'),
-        (make_generic_text_page, (person_to_category_to_string, (person_to_category, ), 'Category Performance Overview'), 'Category Performance Overview'),
-        (make_generic_text_page, (analyze_easiest_teams, (categories, person_to_category, ), 'Easiest Teams Overview'), 'Easiest Teams Overview'),
-        (make_generic_text_page, (analyze_team_std_dev, (categories, person_to_category, ), 'Easiest Teams Standard Deviation'), 'Easiest Teams Standard Deviation'),
-        (make_generic_text_page, (analyze_person_prompt_performance, (categories, person_to_category, categories_clearing_threshold, "Best", "Team", ), 'Best Team Overview'), 'Best Team Overview'),
-        (make_generic_text_page, (analyze_person_prompt_performance, (categories, person_to_category, categories_clearing_threshold, "Worst", "Team", ), 'Worst Team Overview'), 'Worst Team Overview'),
-        (make_generic_text_page, (analyze_person_prompt_performance, (categories, person_to_category, categories_clearing_threshold, "Best", "Category", ), 'Best Category Overview'), 'Best Category Overview'),
-        (make_generic_text_page, (analyze_person_prompt_performance, (categories, person_to_category, categories_clearing_threshold, "Worst", "Category", ), 'Worst Category Overview'), 'Worst Category Overview'),
+        (
+            plot_win_rates, (
+                texts, 
+            ), 
+            "Win Rates"
+        ),
+        (
+            plot_best_worst_scores, (
+                texts, 
+            ), 
+            'Best and Worst Scores (All Time)'
+        ),
+        (
+            plot_best_worst_scores_30, (
+                texts, 
+            ), 
+            'Best and Worst Scores (Last 30 Days)'
+        ),
+        (
+            make_generic_text_page, (
+                person_to_type_to_string, (
+                    person_to_type, 
+                ), 
+                'Type Performance Overview'
+            ), 
+            'Type Performance Overview'
+        ),
+        (
+            make_generic_text_page, (
+                person_to_category_to_string, (
+                    person_to_category, 
+                ), 
+                'Category Performance Overview'
+            ), 
+            'Category Performance Overview'
+        ),
+        (
+            make_generic_text_page, (
+                analyze_easiest_teams, (
+                    categories, 
+                    person_to_category, 
+                ), 
+                'Easiest Teams Overview'
+            ), 
+            'Easiest Teams Overview')
+        ,
+        (
+            make_generic_text_page, (
+                analyze_team_std_dev, (
+                    categories, 
+                    person_to_category, 
+                ), 
+                'Easiest Teams Standard Deviation'
+            ), 
+            'Easiest Teams Standard Deviation'
+        ),
+        (
+            make_generic_text_page, (
+                analyze_person_prompt_performance, (
+                    categories, 
+                    person_to_category, 
+                    categories_clearing_threshold, 
+                    "Best", 
+                    "Team", 
+                ), 
+                'Best Team Overview'
+            ), 
+            'Best Team Overview'
+        ),
+        (
+            make_generic_text_page, 
+            (
+                analyze_person_prompt_performance, (
+                    categories, person_to_category, 
+                    categories_clearing_threshold, 
+                    "Worst", 
+                    "Team", 
+                ), 
+                'Worst Team Overview'
+            ), 
+            'Worst Team Overview'
+        ),
+        (
+            make_generic_text_page, (
+                analyze_person_prompt_performance, (
+                    categories, 
+                    person_to_category, 
+                    categories_clearing_threshold, 
+                    "Best", 
+                    "Category", 
+                ), 
+                'Best Category Overview'
+            ), 
+            'Best Category Overview'
+        ),
+        (
+            make_generic_text_page, (
+                analyze_person_prompt_performance, (
+                    categories, 
+                    person_to_category, 
+                    categories_clearing_threshold, 
+                    "Worst", 
+                    "Category", 
+                ), 
+                'Worst Category Overview'
+            ), 
+            'Worst Category Overview'
+        ),
         (make_generic_text_page, (analyze_hardest_teams, (texts, prompts, ), 'Hardest Teams Overview'), 'Hardest Teams Overview'),
         (make_generic_text_page, (analyze_hardest_team_stats, (texts, prompts, ), 'Hardest Teams Stats Overview'), 'Hardest Teams Stats Overview'),
         (make_generic_text_page, (analyze_most_successful_exact_intersections, (texts, prompts, "Keith"), 'Most Successful Intersections (Keith)'), 'Most Successful Intersections (Keith)'),
