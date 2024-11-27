@@ -30,8 +30,82 @@ def _to_percent(y, position):
     """Convert a decimal to a percentage string."""
     return f"{100 * y:.0f}%"
 
+def preprocess_data_into_texts_structure(data):
+    """Build up the "texts" nested structure"""
+    num_rows = len(data)
+    
+    # Keeping only the highest score for each grid_number and name combination
+    data = data.loc[data.groupby(['grid_number', 'name'])['score'].idxmax()]
+    num_rows_post = len(data)
+    
+    print("Data was trimmed to {} from original size of {}, handling instances of multiple entries per person per grid".format(num_rows_post, num_rows))
+
+    # Fixing date
+    print("Fixing dates by using the grid number")
+    data['date'] = data['grid_number'].apply(ImmaculateGridUtils._fixed_date_from_grid_number)
+    data = data.drop_duplicates()
+    
+    return ImmaculateGridUtils.df_to_immaculate_grid_objs(data)
+
+def make_reversed_dict(texts): 
+    """Reverse the texts data structure so that grid number points to player and their result"""
+    # Initialize the reversed dictionary
+    reversed_dict = {}
+    
+    # Iterate over each name and the list of grid objects
+    for name, grid_objects in texts.items():
+        for grid_obj in grid_objects:
+            # Extract the grid number from the text field of the object
+            grid_number = grid_obj.grid_number
+    
+            if grid_number is not None:
+                # Set up the reversed dictionary so that the grid number points to the player and their result
+                reversed_dict.setdefault(grid_number, {})[name] = grid_obj
+    return reversed_dict
+
+def make_analysis_df(texts):
+    """Convert texts into a pandas DataFrame"""
+    
+    # Initialize an empty list to store rows
+    rows = []
+    
+    # Loop through the texts to gather data
+    for person, grid_objects in texts.items():
+        for grid_obj in grid_objects:
+            # Extract the grid number from the text field of the object
+            grid_number = grid_obj.grid_number
+            
+            if grid_number is not None:
+                # Calculate average rarity
+                total_score_of_correct_squares = grid_obj.score - (100 * (9 - grid_obj.correct))
+                if grid_obj.correct == 0:
+                    average_score_of_correct_squares = 100
+                else:
+                    average_score_of_correct_squares = total_score_of_correct_squares / grid_obj.correct
+                
+                # Produce dataset
+                row = {
+                    "grid_number": grid_number,  # Use a colon here
+                    "name": grid_obj.name,
+                    "correct": grid_obj.correct,
+                    "score": grid_obj.score,
+                    "average_score_of_correct": average_score_of_correct_squares,
+                    "date": grid_obj.date,
+                    "matrix": grid_obj.matrix
+                }
+                rows.append(row)  # Append the row to the list
+    
+    # Create the DataFrame from the list of rows
+    analysis_df = pd.DataFrame(rows)
+    
+    # Ensure the 'date' column is in datetime format
+    analysis_df['date'] = pd.to_datetime(analysis_df['date'])
+
+    return analysis_df
+
+
 # Function to calculate smoothed metrics (score, correct, average_score_of_correct) from analysis_df
-def calculate_smoothed_metrics(analysis_df: pd.DataFrame, smoothness: int) -> pd.DataFrame:
+def calculate_smoothed_metrics(analysis_df: pd.DataFrame, smoothness=28):
     """Generate a DataFrame of smoothed scores, correct values, and average scores over time."""
     metric_table = []
 
@@ -344,14 +418,14 @@ def read_prompt_data(filepath):
         pd.DataFrame: A cleaned DataFrame with the game ID and processed prompt values.
     """
     with open(os.path.expanduser(filepath)) as f:
-        prompt_df = pd.read_csv(f, header=None)  # Read raw CSV data
+        prompts = pd.read_csv(f, header=None)  # Read raw CSV data
     # Assign column names to the DataFrame
-    prompt_df.columns = ["game_id", "00", "01", "02", "10", "11", "12", "20", "21", "22"]
-    prompt_df = prompt_df.iloc[1:]  # Remove the header row
+    prompts.columns = ["game_id", "00", "01", "02", "10", "11", "12", "20", "21", "22"]
+    prompts = prompts.iloc[1:]  # Remove the header row
 
     # Process each row to clean and reformat prompt values
     new_rows = []
-    for _, row in prompt_df.iterrows():
+    for _, row in prompts.iterrows():
         new_row = {}
         for col, val in row.items():
             for char in ["(", "'", ")"]:  # Remove unwanted characters
@@ -360,10 +434,10 @@ def read_prompt_data(filepath):
         new_rows.append(new_row)
 
     # Create a new DataFrame with cleaned rows and convert 'game_id' to integer
-    prompt_df = pd.DataFrame(new_rows)
-    prompt_df['game_id'] = prompt_df['game_id'].astype(int)
+    prompts = pd.DataFrame(new_rows)
+    prompts['game_id'] = prompts['game_id'].astype(int)
 
-    return prompt_df
+    return prompts
 
 
 def category_is_team(category):
@@ -416,37 +490,37 @@ def get_categories_from_prompt(prompt):
 # Category Data Structure Functions
 # -------------------------------------------------------------------------------------------------
 
-def build_category_structure(prompt_df):
+def build_category_structure(prompts):
     """
     Constructs a set of unique categories from the prompt data.
 
     Args:
-        prompt_df (pd.DataFrame): DataFrame containing prompt data.
+        prompts (pd.DataFrame): DataFrame containing prompt data.
 
     Returns:
         set: A set of unique categories derived from the prompts.
     """
+
     categories = set()
     for person, games in texts.items():
         for game in games:
-            id = game.grid_number
-            prompt_rows = prompt_df[prompt_df["game_id"] == id]
+            prompt_rows = prompts[prompts['game_id'] == game.grid_number]
             if len(prompt_rows) != 1:  # Skip games with invalid or missing data
                 continue
-            prompts = prompt_rows.iloc[0][1:]  # Exclude the 'game_id' column
-            for prompt in prompts:
+            prompt_row = prompt_rows.iloc[0][1:]  # Exclude the 'game_id' column
+            for prompt in prompt_row:
                 part_one, part_two = get_categories_from_prompt(prompt)
                 categories.update([part_one, part_two])  # Add both parts to the category set
     return categories
 
 
-def build_person_category_structure(texts, prompt_df, categories):
+def build_person_category_structure(texts, prompts, categories):
     """
     Builds a data structure mapping persons to category performance.
 
     Args:
         texts (dict): Dictionary of persons and their associated games.
-        prompt_df (pd.DataFrame): DataFrame containing prompt data.
+        prompts (pd.DataFrame): DataFrame containing prompt data.
         categories (set): Set of unique categories.
 
     Returns:
@@ -458,22 +532,102 @@ def build_person_category_structure(texts, prompt_df, categories):
     for person, games in texts.items():
         for game in games:
             id = game.grid_number
-            prompt_rows = prompt_df[prompt_df["game_id"] == id]
+            prompt_rows = prompts[prompts["game_id"] == id]
             if len(prompt_rows) != 1:
                 continue
-            prompts = prompt_rows.iloc[0][1:]  # Exclude the 'game_id' column
+            prompt_row = prompt_rows.iloc[0][1:]  # Exclude the 'game_id' column
 
             # Update category performance based on the game's matrix
             matrix = game.matrix
             for i in range(3):
                 for j in range(3):
-                    part_one, part_two = get_categories_from_prompt(prompts[f"{i}{j}"])
+                    part_one, part_two = get_categories_from_prompt(prompt_row[f"{i}{j}"])
                     if matrix[i][j]:  # Increment correct count if the matrix cell is correct
                         person_to_category[person][part_one][0] += 1
                         person_to_category[person][part_two][0] += 1
                     person_to_category[person][part_one][1] += 1  # Increment attempt count
                     person_to_category[person][part_two][1] += 1
     return person_to_category
+
+
+def get_all_responses_from_game_id(texts, game_id):
+    """
+    Retrieves responses from all players for a given game_id
+
+    Args:
+        texts (dict): Dictionary of persons and their associated games.
+
+    Returns:
+        dict: A nested dictionary with prompts and responses for each game.
+    """
+    result = dict()
+    for person, games in texts.items():
+        for game in games:        
+            if game.grid_number == game_id:
+                result[person] = dict()
+                result[person]['matrix'] = [item for sublist in game.matrix for item in sublist]
+                result[person]['score'] = game.score
+    return result
+    
+
+def build_game_prompt_response_structure(texts, prompts):
+    """
+    Builds a data structure mapping games to prompts and responses.
+
+    Args:
+        texts (dict): Dictionary of persons and their associated games.
+        prompts (pd.DataFrame): DataFrame containing prompt data.
+
+    Returns:
+        dict: A nested dictionary with prompts and responses for each game.
+    """
+
+    result = dict()
+    
+    for game_id in range(min(prompts['game_id']), max(prompts['game_id'])):
+        prompt = [item for item in prompts[prompts['game_id'] == game_id].iloc[0][1:]]
+        response = get_all_responses_from_game_id(texts, game_id)
+        result[game_id] = dict()
+        result[game_id]['prompt'] = prompt
+        result[game_id]['response'] = response
+
+    return result
+
+
+def build_intersection_structure(texts, prompts, name):
+    """
+    Build the most common exact category intersections for a specific person.
+
+    Args:
+        texts (dict): Dictionary mapping persons to their games.
+        prompts (pd.DataFrame): DataFrame containing prompt data.
+        name (str): Name of the person whose intersections are being analyzed.
+
+    Returns:
+        dict: Dictionary where keys are category intersections, and values are their occurrence counts.
+    """
+    most_common_exact_intersections = {}
+
+    # Analyze each game played by the specified person
+    for game in texts[name]:
+        id = game.grid_number
+        prompt_rows = prompts[prompts["game_id"] == id]
+        if len(prompt_rows) != 1:  # Skip invalid or missing games
+            continue
+        prompt_row = prompt_rows.iloc[0][1:]  # Exclude the 'game_id' column
+
+        # Extract and count category intersections from the game's prompts
+        for i in range(3):
+            for j in range(3):
+                part_one, part_two = get_categories_from_prompt(prompt_row[f"{i}{j}"])
+                key = " + ".join(sorted([part_one, part_two]))  # Sort to standardize intersection format
+                if key not in most_common_exact_intersections:
+                    most_common_exact_intersections[key] = {'count': 0, 'game_ids': []}
+                most_common_exact_intersections[key]['count'] += 1
+                most_common_exact_intersections[key]['game_ids'] += [id]
+
+    return most_common_exact_intersections
+
 
 def get_category_clearing_threshold(categories, person_to_category, threshold=25):
     """
@@ -503,13 +657,13 @@ def get_category_clearing_threshold(categories, person_to_category, threshold=25
     return categories_clearing_threshold
 
 
-def get_person_to_type(texts, prompt_df, person_to_category):
+def get_person_to_type(texts, prompts, person_to_category):
     """
     Analyze a person's performance by type of category pair (Team-Team, Team-Stat, or Stat-Stat).
 
     Args:
         texts (dict): Dictionary mapping persons to their games.
-        prompt_df (pd.DataFrame): DataFrame containing prompt data.
+        prompts (pd.DataFrame): DataFrame containing prompt data.
         person_to_category (dict): Performance metrics for each person and category.
 
     Returns:
@@ -523,16 +677,16 @@ def get_person_to_type(texts, prompt_df, person_to_category):
     for person, games in texts.items():
         for game in games:
             id = game.grid_number
-            prompt_rows = prompt_df[prompt_df["game_id"] == id]
+            prompt_rows = prompts[prompts["game_id"] == id]
             if len(prompt_rows) != 1:  # Skip invalid or missing prompts
                 continue
-            prompts = prompt_rows.iloc[0][1:]  # Exclude the 'game_id' column
+            prompt_row = prompt_rows.iloc[0][1:]  # Exclude the 'game_id' column
             
             # Analyze the category pair for each cell in the game matrix
             matrix = game.matrix
             for i in range(3):
                 for j in range(3):
-                    part_one, part_two = get_categories_from_prompt(prompts[f"{i}{j}"])
+                    part_one, part_two = get_categories_from_prompt(prompt_row[f"{i}{j}"])
                     tag = ""
                     if category_is_team(part_one) and category_is_team(part_two):
                         tag = "Team-Team"
@@ -706,13 +860,13 @@ def analyze_person_prompt_performance(
     return result
 
 
-def analyze_hardest_teams(texts, prompt_df):
+def analyze_hardest_teams(texts, prompts):
     """
     Identify the hardest team intersections for each person and overall consensus.
 
     Args:
         texts (dict): Dictionary mapping persons to their games.
-        prompt_df (pd.DataFrame): DataFrame containing prompt data.
+        prompts (pd.DataFrame): DataFrame containing prompt data.
 
     Returns:
         str: A formatted string summarizing the hardest team intersections.
@@ -724,15 +878,15 @@ def analyze_hardest_teams(texts, prompt_df):
     for person, games in texts.items():
         for game in games:
             id = game.grid_number
-            prompt_rows = prompt_df[prompt_df["game_id"] == id]
+            prompt_rows = prompts[prompts["game_id"] == id]
             if len(prompt_rows) != 1:
                 continue
-            prompts = prompt_rows.iloc[0][1:]
+            prompt_row = prompt_rows.iloc[0][1:]
 
             matrix = game.matrix
             for i in range(3):
                 for j in range(3):
-                    part_one, part_two = get_categories_from_prompt(prompts[f"{i}{j}"])
+                    part_one, part_two = get_categories_from_prompt(prompt_row[f"{i}{j}"])
                     if category_is_team(part_one) and category_is_team(part_two):
                         team_one = get_team_from_category(part_one)
                         team_two = get_team_from_category(part_two)
@@ -765,13 +919,13 @@ def analyze_hardest_teams(texts, prompt_df):
     return result_string
 
 
-def analyze_hardest_team_stats(texts, prompt_df):
+def analyze_hardest_team_stats(texts, prompts):
     """
     Identify the hardest team-to-stat intersections for each person and overall consensus.
 
     Args:
         texts (dict): Dictionary mapping persons to their games.
-        prompt_df (pd.DataFrame): DataFrame containing prompt data.
+        prompts (pd.DataFrame): DataFrame containing prompt data.
 
     Returns:
         str: A formatted string summarizing the hardest team-to-stat intersections.
@@ -783,15 +937,15 @@ def analyze_hardest_team_stats(texts, prompt_df):
     for person, games in texts.items():
         for game in games:
             id = game.grid_number
-            prompt_rows = prompt_df[prompt_df["game_id"] == id]
+            prompt_rows = prompts[prompts["game_id"] == id]
             if len(prompt_rows) != 1:
                 continue
-            prompts = prompt_rows.iloc[0][1:]
+            prompt_row = prompt_rows.iloc[0][1:]
 
             matrix = game.matrix
             for i in range(3):
                 for j in range(3):
-                    part_one, part_two = get_categories_from_prompt(prompts[f"{i}{j}"])
+                    part_one, part_two = get_categories_from_prompt(prompt_row[f"{i}{j}"])
                     if category_is_team(part_one) and not category_is_team(part_two):
                         team_one = get_team_from_category(part_one)
                         if matrix[i][j]:
@@ -824,49 +978,15 @@ def analyze_hardest_team_stats(texts, prompt_df):
     result_string = result.getvalue()
     result.close()
     return result_string
-    
-def compute_most_common_exact_intersections(texts, prompt_df, name):
-    """
-    Compute the most common exact category intersections for a specific person.
-
-    Args:
-        texts (dict): Dictionary mapping persons to their games.
-        prompt_df (pd.DataFrame): DataFrame containing prompt data.
-        name (str): Name of the person whose intersections are being analyzed.
-
-    Returns:
-        dict: Dictionary where keys are category intersections, and values are their occurrence counts.
-    """
-    most_common_exact_intersections = {}
-
-    # Analyze each game played by the specified person
-    for game in texts[name]:
-        id = game.grid_number
-        prompt_rows = prompt_df[prompt_df["game_id"] == id]
-        if len(prompt_rows) != 1:  # Skip invalid or missing games
-            continue
-        prompts = prompt_rows.iloc[0][1:]  # Exclude the 'game_id' column
-
-        # Extract and count category intersections from the game's prompts
-        for i in range(3):
-            for j in range(3):
-                part_one, part_two = get_categories_from_prompt(prompts[f"{i}{j}"])
-                key = " + ".join(sorted([part_one, part_two]))  # Sort to standardize intersection format
-                if key not in most_common_exact_intersections:
-                    most_common_exact_intersections[key] = {'count': 0, 'game_ids': []}
-                most_common_exact_intersections[key]['count'] += 1
-                most_common_exact_intersections[key]['game_ids'] += [id]
-
-    return most_common_exact_intersections
 
 
-def analyze_most_common_exact_intersections(texts, prompt_df, name):
+def analyze_most_common_exact_intersections(texts, prompts, name):
     """
     Analyze and list the most common exact category intersections for a specific person.
 
     Args:
         texts (dict): Dictionary mapping persons to their games.
-        prompt_df (pd.DataFrame): DataFrame containing prompt data.
+        prompts (pd.DataFrame): DataFrame containing prompt data.
         name (str): Name of the person whose intersections are being analyzed.
 
     Returns:
@@ -875,7 +995,7 @@ def analyze_most_common_exact_intersections(texts, prompt_df, name):
     result = StringIO()
 
     # Compute intersections for the given person
-    most_common_exact_intersections = compute_most_common_exact_intersections(texts, prompt_df, name)
+    most_common_exact_intersections = build_intersection_structure(texts, prompts, name)
 
     # Output intersections with occurrence counts
     print(f"Most Common Exact Intersections for {name}", file=result)
@@ -889,13 +1009,13 @@ def analyze_most_common_exact_intersections(texts, prompt_df, name):
     return result_string
 
 
-def analyze_empty_team_team_intersections(texts, prompt_df, name, categories):
+def analyze_empty_team_team_intersections(texts, prompts, name, categories):
     """
     Analyze and identify team-to-team intersections that are missing for a specific person.
 
     Args:
         texts (dict): Dictionary mapping persons to their games.
-        prompt_df (pd.DataFrame): DataFrame containing prompt data.
+        prompts (pd.DataFrame): DataFrame containing prompt data.
         name (str): Name of the person whose intersections are being analyzed.
         categories (set): Set of all unique categories.
 
@@ -905,7 +1025,7 @@ def analyze_empty_team_team_intersections(texts, prompt_df, name, categories):
     result = StringIO()
 
     # Compute existing intersections for the given person
-    most_common_exact_intersections = compute_most_common_exact_intersections(texts, prompt_df, name)
+    most_common_exact_intersections = build_intersection_structure(texts, prompts, name)
 
     # Map team names to their full category names and vice versa
     team_to_full_names = {}
@@ -988,7 +1108,7 @@ def make_generic_text_page(func, args, page_title):
     plt.show()
 
 
-def create_pdf_with_graphs_cover_and_toc(texts, COLOR_MAP, analysis_df, smoothed_metrics_df, reversed_dict, pdf_filename):
+def generate_report(texts, prompts, COLOR_MAP, pdf_filename):
     """
     Creates a PDF booklet with a cover page, table of contents, various graphs, 
     and a summary table of best and worst scores based on the provided data.
@@ -1001,6 +1121,19 @@ def create_pdf_with_graphs_cover_and_toc(texts, COLOR_MAP, analysis_df, smoothed
     - reversed_dict: Dictionary for win rates.
     - pdf_filename: Name of the output PDF file.
     """
+
+    # Prepare various "texts" structures
+    reversed_dict = make_reversed_dict(texts)
+    analysis_df = make_analysis_df(texts)
+    smoothed_metrics_df = calculate_smoothed_metrics(analysis_df, smoothness=28)
+
+    # Prepare various structures using "texts" and "prompts"
+    categories = build_category_structure(prompts)
+    person_to_category = build_person_category_structure(texts, prompts, categories)
+    game_prompt_response = build_game_prompt_response_structure(texts, prompts)
+    categories_clearing_threshold = get_category_clearing_threshold(categories, person_to_category)
+    person_to_type = get_person_to_type(texts, prompts, person_to_category)
+
     # Use a non-interactive backend to prevent plots from rendering to the screen
     plt.switch_backend('Agg')
 
@@ -1028,18 +1161,18 @@ def create_pdf_with_graphs_cover_and_toc(texts, COLOR_MAP, analysis_df, smoothed
         (make_generic_text_page, (analyze_person_prompt_performance, (categories, person_to_category, categories_clearing_threshold, "Worst", "Team", ), 'Worst Team Overview'), 'Worst Team Overview'),
         (make_generic_text_page, (analyze_person_prompt_performance, (categories, person_to_category, categories_clearing_threshold, "Best", "Category", ), 'Best Category Overview'), 'Best Category Overview'),
         (make_generic_text_page, (analyze_person_prompt_performance, (categories, person_to_category, categories_clearing_threshold, "Worst", "Category", ), 'Worst Category Overview'), 'Worst Category Overview'),
-        (make_generic_text_page, (analyze_hardest_teams, (texts, prompt_df, ), 'Hardest Teams Overview'), 'Hardest Teams Overview'),
-        (make_generic_text_page, (analyze_hardest_team_stats, (texts, prompt_df, ), 'Hardest Teams Stats Overview'), 'Hardest Teams Stats Overview'),
-        (make_generic_text_page, (analyze_most_common_exact_intersections, (texts, prompt_df, "Keith"), 'Common Intersections (Keith)'), 'Common Intersections (Keith)'),
-        (make_generic_text_page, (analyze_most_common_exact_intersections, (texts, prompt_df, "Rachel"), 'Common Intersections (Rachel)'), 'Common Intersections (Rachel)'),
-        (make_generic_text_page, (analyze_most_common_exact_intersections, (texts, prompt_df, "Sam"), 'Common Intersections (Sam)'), 'Common Intersections (Sam)'),
-        (make_generic_text_page, (analyze_most_common_exact_intersections, (texts, prompt_df, "Will"), 'Common Intersections (Will)'), 'Common Intersections (Will)'),
-        (make_generic_text_page, (analyze_most_common_exact_intersections, (texts, prompt_df, "Cliff"), 'Common Intersections (Cliff)'), 'Common Intersections (Cliff)'),
-        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompt_df, "Keith", categories), 'Never Shown Intersections (Keith)'), 'Never Shown Intersections (Keith)'),
-        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompt_df, "Rachel", categories), 'Never Shown Intersections (Rachel)'), 'Never Shown Intersections (Rachel)'),
-        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompt_df, "Sam", categories), 'Never Shown Intersections (Sam)'), 'Never Shown Intersections (Sam)'),
-        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompt_df, "Will", categories), 'Never Shown Intersections (Will)'), 'Never Shown Intersections (Will)'),
-        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompt_df, "Cliff", categories), 'Never Shown Intersections (Cliff)'), 'Never Shown Intersections (Cliff)'),
+        (make_generic_text_page, (analyze_hardest_teams, (texts, prompts, ), 'Hardest Teams Overview'), 'Hardest Teams Overview'),
+        (make_generic_text_page, (analyze_hardest_team_stats, (texts, prompts, ), 'Hardest Teams Stats Overview'), 'Hardest Teams Stats Overview'),
+        (make_generic_text_page, (analyze_most_common_exact_intersections, (texts, prompts, "Keith"), 'Common Intersections (Keith)'), 'Common Intersections (Keith)'),
+        (make_generic_text_page, (analyze_most_common_exact_intersections, (texts, prompts, "Rachel"), 'Common Intersections (Rachel)'), 'Common Intersections (Rachel)'),
+        (make_generic_text_page, (analyze_most_common_exact_intersections, (texts, prompts, "Sam"), 'Common Intersections (Sam)'), 'Common Intersections (Sam)'),
+        (make_generic_text_page, (analyze_most_common_exact_intersections, (texts, prompts, "Will"), 'Common Intersections (Will)'), 'Common Intersections (Will)'),
+        (make_generic_text_page, (analyze_most_common_exact_intersections, (texts, prompts, "Cliff"), 'Common Intersections (Cliff)'), 'Common Intersections (Cliff)'),
+        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompts, "Keith", categories), 'Never Shown Intersections (Keith)'), 'Never Shown Intersections (Keith)'),
+        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompts, "Rachel", categories), 'Never Shown Intersections (Rachel)'), 'Never Shown Intersections (Rachel)'),
+        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompts, "Sam", categories), 'Never Shown Intersections (Sam)'), 'Never Shown Intersections (Sam)'),
+        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompts, "Will", categories), 'Never Shown Intersections (Will)'), 'Never Shown Intersections (Will)'),
+        (make_generic_text_page, (analyze_empty_team_team_intersections, (texts, prompts, "Cliff", categories), 'Never Shown Intersections (Cliff)'), 'Never Shown Intersections (Cliff)'),
     ]
     
     def add_cover_page(pdf, today_date):
@@ -1093,96 +1226,16 @@ def create_pdf_with_graphs_cover_and_toc(texts, COLOR_MAP, analysis_df, smoothed
 #--------------------------------------------------------------------------------------------------
 
 # --------------------------------------------------------------------------------------
+
+
+
 # Main Execution
 if __name__ == "__main__":
 
-    # (0) Read data
-    
-    # Expand user directory and open the csv file
-    data = pd.read_csv(INPUT_GRID_RESULTS_FILE_PATH, index_col=False)
-    num_rows = len(data)
-    
-    # Keeping only the highest score for each grid_number and name combination
-    data = data.loc[data.groupby(['grid_number', 'name'])['score'].idxmax()]
-    num_rows_post = len(data)
-    
-    print("Data was trimmed to {} from original size of {}, handling instances of multiple entries per person per grid".format(num_rows_post, num_rows))
+    # Read inputs
+    raw_results = pd.read_csv(INPUT_GRID_RESULTS_FILE_PATH, index_col=False)
+    texts = preprocess_data_into_texts_structure(raw_results)
+    prompts = read_prompt_data(INPUT_PROMPT_DATA_PATH)
 
-    # Fixing date
-    print("Fixing dates by using the grid number")
-    data['date'] = data['grid_number'].apply(ImmaculateGridUtils._fixed_date_from_grid_number)
-    data = data.drop_duplicates()
-    
-    #--------------------------------------------------------------------------------------------------
-    # (1) Transform into base model format
-    texts = ImmaculateGridUtils.df_to_immaculate_grid_objs(data)
-    
-    #--------------------------------------------------------------------------------------------------
-    # (2) Make a dictionary called "reversed_dict" that is the reverse of texts
-    
-    # Initialize the reversed dictionary
-    reversed_dict = {}
-    
-    # Iterate over each name and the list of grid objects
-    for name, grid_objects in texts.items():
-        for grid_obj in grid_objects:
-            # Extract the grid number from the text field of the object
-            grid_number = grid_obj.grid_number
-    
-            if grid_number is not None:
-                # Set up the reversed dictionary so that the grid number points to the player and their result
-                reversed_dict.setdefault(grid_number, {})[name] = grid_obj
-    
-    ### --- Make a dataframe for score, correctness, and average_score_of_correct
-    
-    #--------------------------------------------------------------------------------------------------
-    # (3) Store in a Pandas dataframe
-    
-    # Initialize an empty list to store rows
-    rows = []
-    
-    # Loop through the texts to gather data
-    for person, grid_objects in texts.items():
-        for grid_obj in grid_objects:
-            # Extract the grid number from the text field of the object
-            grid_number = grid_obj.grid_number
-            
-            if grid_number is not None:
-                # Calculate average rarity
-                total_score_of_correct_squares = grid_obj.score - (100 * (9 - grid_obj.correct))
-                if grid_obj.correct == 0:
-                    average_score_of_correct_squares = 100
-                else:
-                    average_score_of_correct_squares = total_score_of_correct_squares / grid_obj.correct
-                
-                # Produce dataset
-                row = {
-                    "grid_number": grid_number,  # Use a colon here
-                    "name": grid_obj.name,
-                    "correct": grid_obj.correct,
-                    "score": grid_obj.score,
-                    "average_score_of_correct": average_score_of_correct_squares,
-                    "date": grid_obj.date,
-                    "matrix": grid_obj.matrix
-                }
-                rows.append(row)  # Append the row to the list
-    
-    # Create the DataFrame from the list of rows
-    analysis_df = pd.DataFrame(rows)
-    
-    # Ensure the 'date' column is in datetime format
-    analysis_df['date'] = pd.to_datetime(analysis_df['date'])
-    
-    # # Calculate the smoothed metrics from the DataFrame
-    smoothness = 28
-    smoothed_metrics_df = calculate_smoothed_metrics(analysis_df, smoothness)
-    
-    # Execute
-    prompt_df = read_prompt_data(INPUT_PROMPT_DATA_PATH)
-    categories = build_category_structure(prompt_df)
-    person_to_category = build_person_category_structure(texts, prompt_df, categories)
-    categories_clearing_threshold = get_category_clearing_threshold(categories, person_to_category)
-    person_to_type = get_person_to_type(texts, prompt_df, person_to_category)
-    
-    
-    create_pdf_with_graphs_cover_and_toc(texts, COLOR_MAP, analysis_df, smoothed_metrics_df, reversed_dict, pdf_filename=PDF_FILENAME)
+    # Generate report
+    generate_report(texts, prompts, COLOR_MAP, pdf_filename=PDF_FILENAME)
