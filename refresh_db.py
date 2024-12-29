@@ -49,6 +49,7 @@ class ImmaculateGridResult(BaseModel):
             "name": self.name,  # Include the name in the dictionary
         }
 
+# --------------------------------------------------------------------------------------
 class ImmaculateGridUtils:
     @staticmethod
     def df_to_immaculate_grid_objs(df):
@@ -197,7 +198,7 @@ class ImmaculateGridUtils:
         ]
     
         if text is not None:
-            if name is not None:
+            if name is not None and name != "Unknown":
                 # Is not a reaction message
                 if not any(keyword in text for keyword in exclusion_keywords):
                     # Has rarity
@@ -206,9 +207,6 @@ class ImmaculateGridUtils:
                         if "Immaculate Grid " in text:
                             return True
         return False
-
-# --------------------------------------------------------------------------------------
-
 
 # --------------------------------------------------------------------------------------
 # Message handling functions

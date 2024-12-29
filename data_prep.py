@@ -1,5 +1,5 @@
 from constants import TEAM_LIST
-from utils import ImmaculateGridUtils
+from refresh_db import ImmaculateGridUtils
 import pandas as pd
 import os
 

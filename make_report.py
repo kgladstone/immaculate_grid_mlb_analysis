@@ -154,6 +154,11 @@ if __name__ == "__main__":
     prompts = read_prompt_data(PROMPTS_CSV_PATH)
     color_map = make_color_map(GRID_PLAYERS)
 
+    for person, items in texts.items():
+        for text in items:
+            if text.name == 'Unknown':
+                print(text)
+
     # Prepare analysis
     graph_functions = prepare_graph_functions(texts, prompts, color_map)
 
