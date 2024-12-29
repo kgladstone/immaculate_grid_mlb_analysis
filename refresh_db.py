@@ -17,16 +17,8 @@ import json
 from datetime import datetime, timedelta
 import requests
 from bs4 import BeautifulSoup
-import csv
-import ast
 
-# --------------------------------------------------------------------------------------
-# Global Variables
-MY_NAME = 'Keith'  # Change this variable based on the user running the script
-APPLE_TEXTS_DB_PATH = '~/Library/Messages/chat.db'  # Path to the Apple Messages database
-MESSAGES_CSV_PATH = './csv/results.csv'  # Path for the CSV output file
-PROMPTS_CSV_PATH = './csv/prompts.csv' # Path for the CSV prompts file
-IMM_GRID_START_DATE = datetime(2023, 4, 2)
+from constants import MY_NAME, APPLE_TEXTS_DB_PATH, MESSAGES_CSV_PATH, PROMPTS_CSV_PATH, IMM_GRID_START_DATE, GRID_PLAYERS
 
 # --------------------------------------------------------------------------------------
 # Data Models
@@ -173,23 +165,19 @@ class ImmaculateGridUtils:
         Map phone numbers to known names or the user's own name.
         
         Parameters:
-            row (pd.Series): A row from the messages dataframe containing phone number information.
+            phone_number (str): The phone number from the messages dataframe.
+            is_from_me (bool): Flag indicating if the message is from the user.
         
         Returns:
             str: The name of the sender or recipient.
         """
+        
         if is_from_me:
             return MY_NAME
-        elif phone_number == "+17736776982":
-            return "Sam"
-        elif phone_number == "+17736776717":
-            return "Will"
-        elif phone_number == "+17734281342":
-            return "Rachel"
-        elif phone_number == "+19087311244":
-            return "Keith"
-        elif phone_number == "+17329910081":
-            return "Cliff"
+        for name, details in GRID_PLAYERS.items():
+            if details["phone_number"] == phone_number:
+                return name
+        return "Unknown"
 
     @staticmethod
     def _is_valid_message(name, text):
@@ -455,7 +443,8 @@ def get_today_grid_id():
     Calculate the Immaculate Grid ID for today.
     """
     today = datetime.now()
-    return (today - IMM_GRID_START_DATE).days
+    start_date = datetime.strptime(IMM_GRID_START_DATE, '%Y-%m-%d')
+    return (today - start_date).days
 
 def _parse_raw_prompts_to_tuple(raw):
     """

@@ -5,9 +5,13 @@
 
 # Ignore csv files
 *.csv
+csv/*
 
 # Ignore Jupyter checkpoints
 .ipynb_checkpoints/
 
 # Ignore DS Store
 *.DS_Store
+
+# Ignore sensitive JSON files
+*.json
