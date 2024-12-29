@@ -6,6 +6,7 @@
 # Ignore csv files
 *.csv
 csv/*
+backups/*
 
 # Ignore Jupyter checkpoints
 .ipynb_checkpoints/
