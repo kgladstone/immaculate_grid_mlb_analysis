@@ -26,3 +26,6 @@ This sequence ensures a smooth workflow, from data refresh to analysis and repor
 ## Troubleshooting
 We have found that sometimes Apple Messages do not store properly in the `chat.db` file. To troubleshoot, clear the file, disable syncing, and then let the background process on the Mac run until the file replenishes. Then try again. Be sure to make a backup copy of the file to avoid data loss.
 
+## Collaborators
+- [Keith Gladstone](https://github.com/kgladstone)
+- [Samuel Arnesen](https://github.com/samuelarnesen)
