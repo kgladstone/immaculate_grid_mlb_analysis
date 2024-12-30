@@ -1,4 +1,6 @@
 import json
+from pathlib import Path
+
 
 """
 This module contains global constants and configuration settings for the immaculate grid MLB analysis.
@@ -34,23 +36,27 @@ Example config.json:
 """
 
 # --------------------------------------------------------------------------------------------------
+# File Paths
+
+current_file = Path(__file__).resolve()  # Get the absolute path of the current script
+root_dir = current_file.parent.parent  # Move up to the root directory
+csv_dir = root_dir / "csv/"  # Target the 'csv' folder in the root directory
+
+CONFIG_PATH = root_dir / 'config.json'  # Path to the configuration file
+APPLE_TEXTS_DB_PATH = '~/Library/Messages/chat.db'  # Path to the Apple Messages database
+MESSAGES_CSV_PATH = csv_dir / "results.csv"
+PROMPTS_CSV_PATH = csv_dir / "prompts.csv"
+PDF_FILENAME = "../immaculate_grid_report.pdf"  # Path for the PDF output file
+
+# --------------------------------------------------------------------------------------------------
 # Global Variables
 
 # Load configuration from a separate JSON file
-with open('config.json', 'r') as config_file:
+with open(CONFIG_PATH, 'r') as config_file:
     config = json.load(config_file)
 
 MY_NAME = config['MY_NAME']
 GRID_PLAYERS = config['GRID_PLAYERS']
-
-# --------------------------------------------------------------------------------------------------
-# File Paths
-
-APPLE_TEXTS_DB_PATH = '~/Library/Messages/chat.db'  # Path to the Apple Messages database
-CSV_DIR = './csv/'  # Directory for CSV files
-MESSAGES_CSV_PATH = './csv/results.csv'  # Path for the CSV output file
-PROMPTS_CSV_PATH = './csv/prompts.csv'  # Path for the CSV prompts file
-PDF_FILENAME = "./immaculate_grid_report.pdf"  # Path for the PDF output file
 
 # --------------------------------------------------------------------------------------------------
 # Immutables

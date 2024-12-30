@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 import requests
 from bs4 import BeautifulSoup
 
-from constants import MY_NAME, APPLE_TEXTS_DB_PATH, MESSAGES_CSV_PATH, PROMPTS_CSV_PATH, CSV_DIR, IMM_GRID_START_DATE, GRID_PLAYERS
+from constants import MY_NAME, APPLE_TEXTS_DB_PATH, MESSAGES_CSV_PATH, PROMPTS_CSV_PATH, IMM_GRID_START_DATE, GRID_PLAYERS, csv_dir
 
 # --------------------------------------------------------------------------------------
 # Data Models
@@ -515,8 +515,8 @@ if __name__ == "__main__":
     print("*" * 80)
 
     # Make directory at CSV_DIR
-    if not os.path.exists(CSV_DIR):
-        os.makedirs(CSV_DIR)
+    if not os.path.exists(csv_dir):
+        os.makedirs(csv_dir)
 
     print("*" * 80)
     print("Handling results data...")
