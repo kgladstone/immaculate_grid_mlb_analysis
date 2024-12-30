@@ -21,8 +21,20 @@ def plot_immaculates(texts, color_map):
     
 # Graph distributions
 def plot_correctness(texts, color_map):
+
+    # Calculate the maximum value across all distributions
+    max_height = 0
+    for person in texts:
+        distribution = [0 for _ in range(10)]
+        for row in texts[person]:
+            distribution[row.correct] += 1
+        max_height = max(max_height, max(distribution))  # Update global max height
+
+    HEIGHT = int(max_height * 1.2)  # Dynamically set height with some padding
+
+    print("Max height:", HEIGHT)
+
     fig, axs = plt.subplots(3, 2, figsize=(10, 10))  # Create a 3x2 grid for 5 plots
-    top_bar = 130
     
     # Flatten the axes array for easier indexing
     axs = axs.flatten()
@@ -36,7 +48,10 @@ def plot_correctness(texts, color_map):
         axs[i].bar(range(0, 10), distribution, color=color_map[person])
         axs[i].set_xticks(range(0, 10))
         axs[i].set_title(person)
-        axs[i].set_ylim(0, 1.2*top_bar)
+        axs[i].set_ylim(0, HEIGHT)
+
+        print(f"{person} subplot ylim: {axs[i].get_ylim()}")
+
     
     # Hide the last subplot if it is not used
     if len(texts) < 6:

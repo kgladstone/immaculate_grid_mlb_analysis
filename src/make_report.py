@@ -46,10 +46,10 @@ def prepare_graph_functions(texts, prompts, color_map):
     # List of graph-making functions with their respective arguments and titles
     graph_functions = [
         (plot_immaculates, (texts, color_map), "Number of Immaculates"),
-        (plot_correctness, (texts, color_map), "Correctness Distribution"),
         (plot_avg, (texts, color_map, 'Average Correct'), "Average Correct"),
         (plot_avg, (texts, color_map, 'Average Score'), "Average Score"),
         (plot_avg, (texts, color_map, 'Average Rarity of Correct Square'), "Average Rarity of Correct Square"),
+        (plot_correctness, (texts, color_map), "Correctness Distribution"),
         (plot_smoothed_metrics, (texts, 'smoothed_score', "Smoothed Scores Over Time", "Smoothed Score", color_map), "Smoothed Scores Over Time"),
         (plot_smoothed_metrics, (texts, 'smoothed_correct', "Smoothed Correct Over Time", "Smoothed Correct", color_map), "Smoothed Correct Over Time"),
         (plot_smoothed_metrics, (texts, 'smoothed_avg_score', "Smoothed Avg Score of Correct Over Time", "Smoothed Avg Score of Correct", color_map), "Smoothed Avg Score of Correct Over Time"),
