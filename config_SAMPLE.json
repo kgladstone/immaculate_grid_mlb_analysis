@@ -1,0 +1,13 @@
+{
+    "MY_NAME": "JohnDoe",
+    "GRID_PLAYERS": {
+        "JohnDoe": {
+            "phone_number": "+1234567890",
+            "color": "green"
+        },
+        "JaneDoe": {
+            "phone_number": "+0987654321",
+            "color": "red"
+        },
+    }
+}

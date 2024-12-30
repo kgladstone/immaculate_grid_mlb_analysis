@@ -15,7 +15,7 @@ backups/
 *.DS_Store
 
 # Ignore sensitive JSON files
-*.json
+config.json
 
 # Ignore pdf files
 *.pdf
