@@ -11,202 +11,12 @@ Description: This script extracts text message data from the Apple Messages data
 import os
 import pandas as pd
 import sqlite3
-import re
-from pydantic import BaseModel
-import json
-from datetime import datetime, timedelta
+from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
+from utils import ImmaculateGridUtils
 
-from constants import MY_NAME, APPLE_TEXTS_DB_PATH, MESSAGES_CSV_PATH, PROMPTS_CSV_PATH, IMM_GRID_START_DATE, GRID_PLAYERS, csv_dir
-
-# --------------------------------------------------------------------------------------
-# Data Models
-class ImmaculateGridResult(BaseModel):
-    """
-    A class to represent the results of an Immaculate Grid game using the Pydantic BaseModel.
-    """
-
-    grid_number: int
-    correct: int
-    score: int
-    date: str
-    matrix: list[list[bool]] = None
-    name: str  # New field for player name (grid player; not MLB player)
-    
-    def to_dict(self):
-        """
-        Convert the ImmaculateGridResult instance to a dictionary format for easy CSV export.
-        Returns:
-            dict: A dictionary containing the result fields for CSV storage.
-        """
-        return {
-            "grid_number": self.grid_number,
-            "correct": self.correct,
-            "score": self.score,
-            "date": self.date,  # Date will now be in YYYY-MM-DD format
-            "matrix": json.dumps(self.matrix),  # Convert matrix to JSON string for CSV
-            "name": self.name,  # Include the name in the dictionary
-        }
-
-# --------------------------------------------------------------------------------------
-class ImmaculateGridUtils:
-    @staticmethod
-    def df_to_immaculate_grid_objs(df):
-        """
-        Convert a DataFrame into a dictionary of ImmaculateGridResult objects grouped by name.
-    
-        Parameters:
-            df (pd.DataFrame): The DataFrame containing the necessary columns to create ImmaculateGridResult objects.
-    
-        Returns:
-            dict: A dictionary where the key is the player's name and the value is a list of ImmaculateGridResult objects.
-        """
-        results = {}
-        for _, row in df.iterrows():
-            try:
-                # Extract values from the row
-                grid_number = row['grid_number']
-                correct = row['correct']
-                score = row['score']
-                date = row['date']
-                matrix = json.loads(row['matrix']) if pd.notna(row['matrix']) else None
-                name = row['name']
-    
-                # Add the result to the list for the specific player name
-                result = ImmaculateGridResult(
-                    grid_number=grid_number,
-                    correct=correct,
-                    score=score,
-                    date=date,
-                    matrix=matrix,
-                    name=name
-                )
-    
-                if name not in results:
-                    results[name] = []
-                results[name].append(result)
-    
-            except Exception as e:
-                print(f"Error processing row: {row.to_dict()}\nField causing error: {e}")
-                continue
-    
-        return results
-
-    @staticmethod
-    def _convert_timestamp(ts):
-        """
-        Convert Apple Messages timestamp to a human-readable date in YYYY-MM-DD format.
-        
-        Parameters:
-            ts (int): The timestamp from Apple Messages database.
-        
-        Returns:
-            str: The formatted date.
-        """
-        apple_timestamp_seconds = ts / 1e9
-        unix_timestamp_seconds = apple_timestamp_seconds + 978307200
-        return pd.to_datetime(unix_timestamp_seconds, unit='s').date().strftime('%Y-%m-%d')
-
-    @staticmethod
-    def _grid_number_from_text(text):
-        try:
-            match = re.search(r"Immaculate Grid (\d+) (\d)/\d", text)
-            if not match:
-                raise ValueError(f"No match found for text: '{text}'")
-            else:
-                parsed = match.groups()
-                return int(parsed[0])
-        except ValueError as e:
-            print(e)
-            print(text)
-            return None
-
-    @staticmethod
-    def _fixed_date_from_grid_number(n):
-        start_date = datetime(2023, 4, 2) # hardcoded start day of immaculate grid universe
-        result_date = start_date + timedelta(days=n)
-        return result_date.strftime('%Y-%m-%d')
-
-    @staticmethod
-    def _correct_from_text(text):
-        parsed = re.search(r"Immaculate Grid (\d+) (\d)/\d", text).groups()
-        return int(parsed[1])
-
-    @staticmethod
-    def _score_from_text(text):
-        return int(re.search(r"Rarity: (\d{1,3})", text).groups()[0])
-
-    @staticmethod
-    def _matrix_from_text(text):
-        """
-        Extract matrix from the raw text of a message
-        """
-        matrix = []
-        for text_row in text.split("\n"):
-            current = []
-            for char in text_row:
-                if ord(char) == 11036:  # "⬜️":
-                    current.append(False)
-                elif ord(char) == 129001:  # "🟩":
-                    current.append(True)
-            if len(current) > 0:
-                if len(current) != 3:
-                    print(row.text)
-                    assert len(current) == 3
-                else:
-                    matrix.append(current)
-        assert len(matrix) == 3
-        matrix = str(matrix).lower()
-        return matrix
-
-    @staticmethod
-    def _row_to_name(phone_number, is_from_me):
-        """
-        Map phone numbers to known names or the user's own name.
-        
-        Parameters:
-            phone_number (str): The phone number from the messages dataframe.
-            is_from_me (bool): Flag indicating if the message is from the user.
-        
-        Returns:
-            str: The name of the sender or recipient.
-        """
-        
-        if is_from_me:
-            return MY_NAME
-        for name, details in GRID_PLAYERS.items():
-            if details["phone_number"] == phone_number:
-                return name
-        return "Unknown"
-
-    @staticmethod
-    def _is_valid_message(name, text):
-        """
-        Validate messages based on specific content and exclusion criteria.
-        
-        Parameters:
-            name (str): The name of the sender.
-            text (str): The message text content.
-        
-        Returns:
-            bool: True if the message is valid, False otherwise.
-        """
-        exclusion_keywords = [
-            "Emphasized", "Laughed at", "Loved", 
-            "Questioned", "Liked", "Disliked", "🏀"
-        ]
-    
-        if text is not None:
-            if name is not None and name != "Unknown":
-                # Is not a reaction message
-                if not any(keyword in text for keyword in exclusion_keywords):
-                    # Has rarity
-                    if "Rarity: " in text:                    
-                        # Has the proper immaculate grid format
-                        if "Immaculate Grid " in text:
-                            return True
-        return False
+from constants import APPLE_TEXTS_DB_PATH, MESSAGES_CSV_PATH, PROMPTS_CSV_PATH, IMM_GRID_START_DATE, csv_dir
 
 # --------------------------------------------------------------------------------------
 # Message handling functions
@@ -266,8 +76,9 @@ def process_messages(messages_df):
     
     # Apply the _convert_timestamp function to clean the date field
     print("Formatting the date...")
-    messages_df['date'] = messages_df['date'].apply(ImmaculateGridUtils._convert_timestamp)
-    
+    # Ensure you're modifying the DataFrame explicitly using .loc
+    messages_df.loc[:, 'date'] = messages_df['date'].apply(ImmaculateGridUtils._convert_timestamp)
+
     # Sort the DataFrame by the cleaned date in ascending order
     print("Further cleaning...")
     messages_df = messages_df.sort_values(by="date", ascending=True)
@@ -304,21 +115,38 @@ def test_messages(messages_df):
         print("No messages to test...")
         return
 
-    ####################### Examine instances where grid number and date do not match ########################
+    # ####################### Examine instances where grid number and date do not match ########################
 
-    print("*" * 80)
-    print("Printing instances of messages where date of message does not match date of grid result")
-    print(messages_df[messages_df['date'] != messages_df['grid_number'].apply(ImmaculateGridUtils._fixed_date_from_grid_number)])
-    print("Count of these instances: {}".format(
-        len(messages_df[messages_df['date'] != messages_df['grid_number'].apply(ImmaculateGridUtils._fixed_date_from_grid_number)])
-    ))
-
+    # print("*" * 80)
+    # print("Printing instances of messages where date of message does not match date of grid result")
+    # print(messages_df[messages_df['date'] != messages_df['grid_number'].apply(ImmaculateGridUtils._fixed_date_from_grid_number)])
+    # print("Count of these instances: {}".format(
+    #     len(messages_df[messages_df['date'] != messages_df['grid_number'].apply(ImmaculateGridUtils._fixed_date_from_grid_number)])
+    # ))
 
     ####################### Multiple texts from the same person for the same grid ########################
     print("*" * 80)
     print("Printing instances of multiple messages from same person for same grid")
-    messages_by_person_by_grid = messages_df.groupby(['name','grid_number']).size().reset_index(name='message_count')
-    print(messages_by_person_by_grid[messages_by_person_by_grid['message_count'] > 1])
+
+    # Group by 'name' and 'grid_number', and count messages
+    messages_by_person_by_grid = messages_df.groupby(['name', 'grid_number']).size().reset_index(name='message_count')
+
+    # Filter for entries where the same person has more than one message for a grid
+    filtered_df = messages_by_person_by_grid[messages_by_person_by_grid['message_count'] > 1]
+
+    # Compute the maximum date for each grid_number
+    min_date_per_grid = messages_df.groupby('grid_number')['date'].min().reset_index()
+
+    # Merge the maximum date with the filtered DataFrame
+    filtered_df = filtered_df.merge(min_date_per_grid, on='grid_number')
+
+    # Sort the resulting DataFrame by 'grid_number' in ascending order
+    sorted_filtered_df = filtered_df.sort_values(by='grid_number')
+
+    # Print the final DataFrame
+    print(sorted_filtered_df)
+
+    # Print the count of these instances
     print("Count of these instances: {}".format(len(messages_by_person_by_grid[messages_by_person_by_grid['message_count'] > 1])))
 
     ################################# Examine range of dates in the messages #################################
@@ -333,46 +161,50 @@ def test_messages(messages_df):
     print("Minimum date in dataset: {} (Grid Number: {})".format(min_date, min_grid))
     print("Maximum date in dataset: {} (Grid Number: {})".format(max_date, max_grid))
     
-    # Generate a complete date range from min_date to max_date
-    complete_date_range = pd.DataFrame(pd.date_range(start=min_date, end=max_date), columns=['date'])
-    
-    # Group messages by the cleaned date to count occurrences
-    message_summary = messages_df.groupby('date').size().reset_index(name='message_count')
-    
-    # Ensure the cleaned_date column in message_summary is also of datetime type
-    message_summary['date'] = pd.to_datetime(message_summary['date'])
-    
-    # Merge the complete date range with the message summary to ensure all dates are represented
-    full_summary = complete_date_range.merge(message_summary, on='date', how='left').fillna(0)
-    full_summary['message_count'] = full_summary['message_count'].astype(int)
-    
-    # Display the summary of the number of rows of data by cleaned date
-    # print("Summary of message counts by date:")
-    # print(full_summary)
+    ################################# Check for missing grid numbers #################################
 
-    # Call out instances where there are zero messages on that date
-    # print("\nDates with zero messages:")
-    # zero = full_summary[full_summary['message_count'] == 0]
-    # if not zero.empty:
-    #     print(zero)
-    # else:
-    #     print("No dates with zero messages.")
-    
-    # Call out instances where there are zero or fewer than 5 messages on that date
-    # print("\nDates with fewer than 5 messages (including zero):")
-    # fewer_than_5 = full_summary[full_summary['message_count'] < 5]
-    # if not fewer_than_5.empty:
-    #     print(fewer_than_5)
-    # else:
-    #     print("No dates with fewer than 5 messages (including zero).")
+    # Get today's grid number
+    today_grid = get_today_grid_id()
 
-    # # Call out instances where there are more than 5 messages on that date
-    # print("\nDates with more than 5 messages:")
-    # more_than_5 = full_summary[full_summary['message_count'] > 5]
-    # if not more_than_5.empty:
-    #     print(more_than_5)
-    # else:
-    #     print("No dates with more than 5 messages.")
+    # Get the number of distinct names in the dataset
+    num_names = messages_df['name'].nunique()
+
+    # Determine the valid grid range
+    valid_grid_range = range(messages_df['grid_number'].min(), today_grid + 1)
+
+    # Count the number of entries for each grid number
+    grid_counts = messages_df['grid_number'].value_counts()
+
+    # Identify grids with fewer than num_names entries within the valid range
+    grid_counts_below_num_names = {
+        grid: count
+        for grid, count in grid_counts.items()
+        if grid in valid_grid_range and count < num_names
+    }
+
+    # Add grids completely missing from the dataset
+    all_grids_in_range = set(valid_grid_range)
+    missing_grids = all_grids_in_range - set(grid_counts.index)
+    for grid in missing_grids:
+        grid_counts_below_num_names[grid] = 0
+
+    # Convert to a DataFrame
+    incomplete_grids_df = pd.DataFrame.from_dict(
+        grid_counts_below_num_names, orient='index', columns=['message_count']
+    ).reset_index().rename(columns={'index': 'grid_number'})
+
+    # Add the maximum date for each grid number (use NaT for missing grids)
+    min_date_per_grid = messages_df.groupby('grid_number')['date'].min().reset_index()
+    incomplete_grids_df = incomplete_grids_df.merge(min_date_per_grid, on='grid_number', how='left')
+
+    # Sort by grid number
+    incomplete_grids_df = incomplete_grids_df.sort_values(by='grid_number')
+
+    # Replace NaT for completely missing grids
+    incomplete_grids_df['date'] = incomplete_grids_df['date'].fillna('Missing')
+
+    # Display the final table
+    print(incomplete_grids_df)
 
     ###################################################################################################
     

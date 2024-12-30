@@ -1,8 +1,42 @@
 from datetime import datetime, timedelta
 import json
-from refresh_db import ImmaculateGridResult
 import pandas as pd
+import re
+from pydantic import BaseModel
+import json
 
+from constants import MY_NAME, GRID_PLAYERS
+
+# --------------------------------------------------------------------------------------
+# Data Models
+class ImmaculateGridResult(BaseModel):
+    """
+    A class to represent the results of an Immaculate Grid game using the Pydantic BaseModel.
+    """
+
+    grid_number: int
+    correct: int
+    score: int
+    date: str
+    matrix: list[list[bool]] = None
+    name: str  # New field for player name (grid player; not MLB player)
+    
+    def to_dict(self):
+        """
+        Convert the ImmaculateGridResult instance to a dictionary format for easy CSV export.
+        Returns:
+            dict: A dictionary containing the result fields for CSV storage.
+        """
+        return {
+            "grid_number": self.grid_number,
+            "correct": self.correct,
+            "score": self.score,
+            "date": self.date,  # Date will now be in YYYY-MM-DD format
+            "matrix": json.dumps(self.matrix),  # Convert matrix to JSON string for CSV
+            "name": self.name,  # Include the name in the dictionary
+        }
+
+# --------------------------------------------------------------------------------------
 class ImmaculateGridUtils:
     @staticmethod
     def df_to_immaculate_grid_objs(df):
@@ -60,6 +94,7 @@ class ImmaculateGridUtils:
         apple_timestamp_seconds = ts / 1e9
         unix_timestamp_seconds = apple_timestamp_seconds + 978307200
         return pd.to_datetime(unix_timestamp_seconds, unit='s').date().strftime('%Y-%m-%d')
+    
 
     @staticmethod
     def _grid_number_from_text(text):
@@ -151,7 +186,7 @@ class ImmaculateGridUtils:
         ]
     
         if text is not None:
-            if name is not None:
+            if name is not None and name != "Unknown":
                 # Is not a reaction message
                 if not any(keyword in text for keyword in exclusion_keywords):
                     # Has rarity
