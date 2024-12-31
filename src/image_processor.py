@@ -207,9 +207,15 @@ def preprocess_image(img, crop_function):
     # Apply the crop function
     cropped_img = crop_function(img_cv2)
 
-    if cropped_img is not None:
-        # Convert back to PIL Image format after cropping
-        img = Image.fromarray(cv2.cvtColor(cropped_img, cv2.COLOR_BGR2RGB))
+    if cropped_img is not None and cropped_img.size != 0:
+        # Check if cropped image has valid dimensions
+        if cropped_img.shape[0] > 0 and cropped_img.shape[1] > 0:
+            # Convert back to PIL Image format after cropping
+            img = Image.fromarray(cv2.cvtColor(cropped_img, cv2.COLOR_BGR2RGB))
+        else:
+            print("Cropped image has invalid dimensions.")
+    else:
+        print("Cropped image is None or empty.")
 
     return img
 
