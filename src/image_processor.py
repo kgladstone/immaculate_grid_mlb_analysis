@@ -7,8 +7,9 @@ import json
 from PIL import Image, ImageOps, ImageEnhance
 import cv2
 import numpy as np
+import pandas as pd
 
-from constants import GRID_PLAYERS, IMAGES_PATH, IMAGES_METADATA_PATH, LOGO_DARK_PATH, LOGO_LIGHT_PATH, APPLE_IMAGES_PATH
+from constants import GRID_PLAYERS, MY_NAME, IMAGES_PATH, IMAGES_METADATA_PATH, LOGO_DARK_PATH, LOGO_LIGHT_PATH, APPLE_IMAGES_PATH
 from utils import ImmaculateGridUtils
 
 # Global Tesseract config for OCR
@@ -61,7 +62,7 @@ def crop_text_box_dynamic(image_path):
     return cropped_pil_img
 
 
-def find_logo_position(main_image_path, threshold=0.6):
+def find_logo_position(main_image_path, threshold=0.5):
     """
     Find the position of a target subimage (logo) within a main image.
 
@@ -99,11 +100,12 @@ def find_logo_position(main_image_path, threshold=0.6):
 
         # Check if match is strong enough
         if max_val >= threshold:
+
             # Calculate bounding box of the detected logo
             logo_h, logo_w = logo_gray.shape
             top_left = max_loc
             bottom_right = (top_left[0] + logo_w, top_left[1] + logo_h)
-            print(f"Logo found using {logo_path}.")
+            print(f"Logo found using {logo_path}. (confidence: {max_val:.2f}).")
             return top_left, bottom_right
 
         print(f"Logo not found using {logo_path} (confidence: {max_val:.2f}).")
@@ -135,30 +137,46 @@ def divide_image_into_grid(main_image_path, top_left, bottom_right):
     logo_width = bottom_right[0] - top_left[0]
     logo_height = bottom_right[1] - top_left[1]
 
-    WIDTH_SCALAR = 1.7
-    HEIGHT_SCALAR = 1.9
+    img_height, img_width, _ = main_image.shape
+
+    WIDTH_SCALAR = img_width / logo_width / 4 * 0.98
+    HEIGHT_SCALAR = img_width / logo_width / 4 * 1.10
     TOP_ADJUSTMENT = 0.25
-    LEFT_ADJUSTMENT = 0.25
+    LEFT_ADJUSTMENT = 0.0015 * logo_width
+
+    # Cell width
+    cell_width = int(logo_width * WIDTH_SCALAR)
+    cell_height = int(logo_height * HEIGHT_SCALAR)
 
     # Start grid at the top of the logo
-    grid_start_x = top_left[0] - int(LEFT_ADJUSTMENT * logo_width)
-    grid_start_y = top_left[1] - int(TOP_ADJUSTMENT * logo_height)
+    grid_start_x = max(0, top_left[0] - int(LEFT_ADJUSTMENT * cell_width))
+    grid_start_y = max(0, top_left[1] - int(TOP_ADJUSTMENT * cell_height))
 
     grid_cells = []
-
+    
     # Divide the image into a 4x4 grid based on the logo dimensions
     for row in range(4):
         for col in range(4):
             # Calculate the coordinates of the current cell
-            x_start = grid_start_x + col * int(logo_width * WIDTH_SCALAR)
-            x_end = x_start + int(logo_width * WIDTH_SCALAR)
-            y_start = grid_start_y + row * int(logo_height * HEIGHT_SCALAR)
-            y_end = y_start + int(logo_height * HEIGHT_SCALAR)
+            x_start = grid_start_x + col * cell_width
+            x_end = x_start + cell_width
+            y_start = grid_start_y + row * cell_height
+            y_end = y_start + cell_height
 
             # Ensure we don't exceed the image bounds
             if x_end > main_image.shape[1] or y_end > main_image.shape[0]:
                 print(f"Skipping cell ({row}, {col}) - Out of bounds")
-                continue
+                print(img_width)
+                print(img_height)
+                print(top_left)
+                print(bottom_right)
+                print(x_start)
+                print(y_start)
+                print(x_end)
+                print(y_end)
+                print(cell_width)
+                print(cell_height)
+                quit(f"Quitting on {main_image_path}")
 
             # Append the cell's coordinates to the list
             if row > 0 and col > 0:
@@ -205,7 +223,8 @@ def preprocess_image(img, crop_function):
     img_cv2 = cv2.cvtColor(np.array(img), cv2.COLOR_GRAY2BGR)
 
     # Apply the crop function
-    cropped_img = crop_function(img_cv2)
+    cropped_img = img_cv2
+    #cropped_img = crop_function(img_cv2)
 
     if cropped_img is not None and cropped_img.size != 0:
         # Check if cropped image has valid dimensions
@@ -441,7 +460,7 @@ def process_image_with_dynamic_grid(image_path, submitter, image_date, images_fo
 
     # # Show any subimages that did not extract text
     # for cell, text in players_by_cell.items():
-    #     if text is None:
+    #     # if text is None:
     #         for cell_data in grid_cells:
     #             if cell_data["row"] == cell[0] and cell_data["col"] == cell[1]:
     #                 top_left = cell_data["top_left"]
@@ -497,18 +516,82 @@ def process_image_with_dynamic_grid(image_path, submitter, image_date, images_fo
     return grid_number
 
 
+def get_image_files_from_query(images_save_folder, metadata_file, GRID_PLAYERS):
+    """
+    Query the attachments database
+    """
+    
+    # Paths to Messages database and attachments folder
+    db_path = os.path.expanduser("~/Library/Messages/chat.db")
+    attachments_base_path = os.path.expanduser("~/Library/Messages/Attachments/")
+
+    # Map phone numbers to player names
+    phone_to_player = {details["phone_number"]: player for player, details in GRID_PLAYERS.items()}
+    phone_numbers = list(phone_to_player.keys())
+
+    # Connect to the Messages database
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    try:
+        # Query to find attachments with metadata
+        query = f"""
+        SELECT 
+            attachment.filename, 
+            attachment.mime_type, 
+            message.date, 
+            COALESCE(handle.id, ?) AS sender
+        FROM message
+        LEFT JOIN handle ON message.handle_id = handle.ROWID
+        JOIN message_attachment_join ON message.ROWID = message_attachment_join.message_id
+        JOIN attachment ON message_attachment_join.attachment_id = attachment.ROWID
+        WHERE (handle.id IN ({','.join(['?' for _ in phone_numbers])})
+            OR message.is_from_me = 1)
+        AND (attachment.mime_type LIKE 'image/png'
+            OR attachment.mime_type LIKE 'image/jpeg')
+        AND (attachment.filename LIKE '%IMG_%' 
+            OR attachment.filename LIKE '%Screenshot%')
+        """
+        
+        # Execute the query with your name and phone numbers
+        cursor.execute(query, [MY_NAME] + phone_numbers)
+        results = cursor.fetchall()
+
+        # # Process and display results
+        # for row in results:
+        #     print(f"Filename: {row[0]}, MIME Type: {row[1]}, Date: {row[2]}, Sender: {row[3]}")
+
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+    finally:
+        conn.close()
+
+    cleaned_results = []
+
+    for filename, mime_type, message_date, sender_phone in results:
+        cleaned_result = {}
+        if filename:
+            # Resolve the source path
+            if filename.startswith(APPLE_IMAGES_PATH):
+                filename_tmp = filename.replace(APPLE_IMAGES_PATH, "")
+                cleaned_result['path'] = os.path.join(attachments_base_path, filename_tmp.lstrip("/"))
+                if sender_phone == MY_NAME:
+                    cleaned_result['submitter'] = MY_NAME
+                else:
+                    cleaned_result['submitter'] = phone_to_player.get(sender_phone, "Unknown")
+                cleaned_result['image_date'] = ImmaculateGridUtils._convert_timestamp(message_date)
+                cleaned_results.append(cleaned_result)
+
+    return pd.DataFrame(cleaned_results)
+
+
 def refresh_image_data(images_save_folder, metadata_file, GRID_PLAYERS):
     """
     Refresh the image folder by copying screenshots from Messages to a specified folder.
     Only process messages from a person/date combination not already in the metadata file.
     """
-    # Paths to Messages database and attachments folder
-    db_path = os.path.expanduser("~/Library/Messages/chat.db")
-    attachments_base_path = os.path.expanduser("~/Library/Messages/Attachments/")
-    
-    # Map phone numbers to player names
-    phone_to_player = {details["phone_number"]: player for player, details in GRID_PLAYERS.items()}
-    phone_numbers = list(phone_to_player.keys())
 
     # Ensure the save folder exists
     os.makedirs(images_save_folder, exist_ok=True)
@@ -523,63 +606,36 @@ def refresh_image_data(images_save_folder, metadata_file, GRID_PLAYERS):
     # Extract existing grid_number and submitter combos
     existing_combinations = {(entry["grid_number"], entry["submitter"]) for entry in existing_metadata}
 
-    # Connect to the Messages database
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+    # Query the attachments database
+    results = get_image_files_from_query(images_save_folder, metadata_file, GRID_PLAYERS)
+    
+    # Process each attachment
+    for _, result in results.iterrows():
+        path = result['path']
+        submitter = result['submitter']
+        image_date = result['image_date']
 
-    try:
-        # Query to find attachments with metadata
-        query = f"""
-        SELECT attachment.filename, attachment.mime_type, message.date, handle.id
-        FROM message
-        JOIN handle ON message.handle_id = handle.ROWID
-        JOIN message_attachment_join ON message.ROWID = message_attachment_join.message_id
-        JOIN attachment ON message_attachment_join.attachment_id = attachment.ROWID
-        WHERE handle.id IN ({','.join(['?' for _ in phone_numbers])})
-          AND (attachment.mime_type LIKE 'image/png'
-               OR attachment.mime_type LIKE 'image/jpeg')
-          AND (attachment.filename LIKE '%IMG_%' 
-               OR attachment.filename LIKE '%Screenshot%')
-        """
-        cursor.execute(query, phone_numbers)
-        results = cursor.fetchall()
+        if path:
+            print("*" * 50)
+            if os.path.exists(path):
 
-        # Process each attachment
-        for filename, mime_type, message_date, sender_phone in results:
-            if filename:
-                # Resolve the source path
-                if filename.startswith(APPLE_IMAGES_PATH):
-                    filename = filename.replace(APPLE_IMAGES_PATH, "")
-                src_path = os.path.join(attachments_base_path, filename.lstrip("/"))
+                # Extract the grid number for checking
+                text = extract_text_from_image(path) # OCR operation
+                grid_number = grid_number_from_image_text(text) # Text operation
 
-                if os.path.exists(src_path):
-                    submitter = phone_to_player.get(sender_phone, "Unknown")
-                    image_date = ImmaculateGridUtils._convert_timestamp(message_date)
+                if grid_number is None:
+                    print(f"Warning: Invalid image. Could not extract grid number from {path}")
+                    continue
 
-                    # Extract the grid number for checking
-                    text = extract_text_from_image(src_path)
-                    grid_number = grid_number_from_image_text(text)
+                # Check if this combination already exists in metadata
+                if (grid_number, submitter) in existing_combinations:
+                    print(f"Warning: Skipping already processed grid {grid_number} for {submitter}.")
+                    continue
 
-                    if grid_number is None:
-                        print(f"Could not extract grid number from {src_path}")
-                        continue
+                # Process the image
+                process_image_with_dynamic_grid(path, submitter, image_date, images_save_folder, metadata_file) # OCR operation
 
-                    # Check if this combination already exists in metadata
-                    if (grid_number, submitter) in existing_combinations:
-                        print(f"Skipping already processed grid {grid_number} for {submitter}.")
-                        continue
-
-                    # Process the image
-                    process_image_with_dynamic_grid(src_path, submitter, image_date, images_save_folder, metadata_file)
-
-        print(f"Screenshots saved to {images_save_folder}")
-
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
-    except Exception as e:
-        print(f"Unexpected error: {e}")
-    finally:
-        conn.close()
+    print(f"Screenshots saved to {images_save_folder}")
 
 # Usage example
 refresh_image_data(IMAGES_PATH, IMAGES_METADATA_PATH, GRID_PLAYERS)
