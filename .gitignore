@@ -16,6 +16,11 @@ backups/
 
 # Ignore sensitive JSON files
 config.json
+images_metadata.json
 
 # Ignore pdf files
 *.pdf
+
+# Ignore images
+images/
+*.jpg
