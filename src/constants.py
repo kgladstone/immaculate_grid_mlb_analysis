@@ -44,6 +44,7 @@ csv_dir = root_dir / "csv/"  # Target the 'csv' folder in the root directory
 
 CONFIG_PATH = root_dir / 'config.json'  # Path to the configuration file
 APPLE_TEXTS_DB_PATH = '~/Library/Messages/chat.db'  # Path to the Apple Messages database
+APPLE_IMAGES_PATH = "~/Library/Messages/Attachments/"
 MESSAGES_CSV_PATH = csv_dir / "results.csv"
 PROMPTS_CSV_PATH = csv_dir / "prompts.csv"
 IMAGES_PATH = root_dir / "images/"  # Path to the images folder

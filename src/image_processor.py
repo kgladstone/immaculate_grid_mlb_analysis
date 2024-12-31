@@ -8,7 +8,7 @@ from PIL import Image, ImageOps, ImageEnhance
 import cv2
 import numpy as np
 
-from constants import GRID_PLAYERS, IMAGES_PATH, IMAGES_METADATA_PATH, LOGO_DARK_PATH, LOGO_LIGHT_PATH
+from constants import GRID_PLAYERS, IMAGES_PATH, IMAGES_METADATA_PATH, LOGO_DARK_PATH, LOGO_LIGHT_PATH, APPLE_IMAGES_PATH
 from utils import ImmaculateGridUtils
 
 # Global Tesseract config for OCR
@@ -500,6 +500,7 @@ def process_image_with_dynamic_grid(image_path, submitter, image_date, images_fo
 def refresh_image_data(images_save_folder, metadata_file, GRID_PLAYERS):
     """
     Refresh the image folder by copying screenshots from Messages to a specified folder.
+    Only process messages from a person/date combination not already in the metadata file.
     """
     # Paths to Messages database and attachments folder
     db_path = os.path.expanduser("~/Library/Messages/chat.db")
@@ -508,9 +509,19 @@ def refresh_image_data(images_save_folder, metadata_file, GRID_PLAYERS):
     # Map phone numbers to player names
     phone_to_player = {details["phone_number"]: player for player, details in GRID_PLAYERS.items()}
     phone_numbers = list(phone_to_player.keys())
-    
+
     # Ensure the save folder exists
     os.makedirs(images_save_folder, exist_ok=True)
+
+    # Load existing metadata
+    if os.path.exists(metadata_file):
+        with open(metadata_file, 'r') as f:
+            existing_metadata = json.load(f)
+    else:
+        existing_metadata = []
+
+    # Extract existing grid_number and submitter combos
+    existing_combinations = {(entry["grid_number"], entry["submitter"]) for entry in existing_metadata}
 
     # Connect to the Messages database
     conn = sqlite3.connect(db_path)
@@ -536,20 +547,30 @@ def refresh_image_data(images_save_folder, metadata_file, GRID_PLAYERS):
         # Process each attachment
         for filename, mime_type, message_date, sender_phone in results:
             if filename:
-                print("*" * 40)
-
                 # Resolve the source path
-                if filename.startswith("~/Library/Messages/Attachments/"):
-                    filename = filename.replace("~/Library/Messages/Attachments/", "")
+                if filename.startswith(APPLE_IMAGES_PATH):
+                    filename = filename.replace(APPLE_IMAGES_PATH, "")
                 src_path = os.path.join(attachments_base_path, filename.lstrip("/"))
 
                 if os.path.exists(src_path):
                     submitter = phone_to_player.get(sender_phone, "Unknown")
                     image_date = ImmaculateGridUtils._convert_timestamp(message_date)
-                    grid_number = process_image_with_dynamic_grid(src_path, submitter, image_date, images_save_folder, metadata_file)
+
+                    # Extract the grid number for checking
+                    text = extract_text_from_image(src_path)
+                    grid_number = grid_number_from_image_text(text)
 
                     if grid_number is None:
                         print(f"Could not extract grid number from {src_path}")
+                        continue
+
+                    # Check if this combination already exists in metadata
+                    if (grid_number, submitter) in existing_combinations:
+                        print(f"Skipping already processed grid {grid_number} for {submitter}.")
+                        continue
+
+                    # Process the image
+                    process_image_with_dynamic_grid(src_path, submitter, image_date, images_save_folder, metadata_file)
 
         print(f"Screenshots saved to {images_save_folder}")
 
@@ -559,7 +580,6 @@ def refresh_image_data(images_save_folder, metadata_file, GRID_PLAYERS):
         print(f"Unexpected error: {e}")
     finally:
         conn.close()
-
 
 # Usage example
 refresh_image_data(IMAGES_PATH, IMAGES_METADATA_PATH, GRID_PLAYERS)
