@@ -39,7 +39,7 @@ Example config.json:
 # File Paths
 
 current_file = Path(__file__).resolve()  # Get the absolute path of the current script
-root_dir = current_file.parent.parent  # Move up to the root directory
+root_dir = current_file.parent.parent.parent  # Move up to the root directory
 csv_dir = root_dir / "csv/"  # Target the 'csv' folder in the root directory
 
 CONFIG_PATH = root_dir / 'config.json'  # Path to the configuration file

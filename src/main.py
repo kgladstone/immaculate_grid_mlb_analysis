@@ -1,7 +1,7 @@
-from messages_loader import MessagesLoader
-from prompts_loader import PromptsLoader
-from make_report import ReportGenerator
-from constants import APPLE_TEXTS_DB_PATH, MESSAGES_CSV_PATH, PROMPTS_CSV_PATH, PDF_FILENAME, GRID_PLAYERS
+from data.messages_loader import MessagesLoader
+from data.prompts_loader import PromptsLoader
+from analysis.reporter import ReportGenerator
+from utils.constants import APPLE_TEXTS_DB_PATH, MESSAGES_CSV_PATH, PROMPTS_CSV_PATH, PDF_FILENAME, GRID_PLAYERS
 
 def refresh_data():
     print("Starting the data refresh process...")

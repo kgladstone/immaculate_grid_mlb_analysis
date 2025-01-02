@@ -9,8 +9,8 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from constants import GRID_PLAYERS, MY_NAME, IMAGES_PATH, IMAGES_METADATA_PATH, LOGO_DARK_PATH, LOGO_LIGHT_PATH, APPLE_IMAGES_PATH, APPLE_TEXTS_DB_PATH
-from utils import ImmaculateGridUtils
+from utils.constants import GRID_PLAYERS, MY_NAME, IMAGES_PATH, IMAGES_METADATA_PATH, LOGO_DARK_PATH, LOGO_LIGHT_PATH, APPLE_IMAGES_PATH, APPLE_TEXTS_DB_PATH
+from utils.utils import ImmaculateGridUtils
 
 # Global Tesseract config for OCR
 OCR_CONFIG = r"--oem 3 --psm 6"

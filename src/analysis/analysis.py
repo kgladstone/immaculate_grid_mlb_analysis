@@ -2,7 +2,8 @@
 import numpy as np
 import pandas as pd
 from io import StringIO
-from data_prep import (
+
+from data.data_prep import (
     to_percent,
     make_texts_melted,
     pivot_texts_by_grid_id,
@@ -10,8 +11,7 @@ from data_prep import (
     get_team_from_category,
     get_categories_from_prompt,
     build_intersection_structure_for_person,)
-# from image_processor import ImageProcessor
-from constants import TEAM_LIST, APPLE_TEXTS_DB_PATH, IMAGES_METADATA_PATH, IMAGES_PATH
+from utils.constants import TEAM_LIST, APPLE_TEXTS_DB_PATH, IMAGES_METADATA_PATH, IMAGES_PATH
 
 # Function to calculate smoothed metrics (score, correct, average_score_of_correct) from texts_melted
 def calculate_smoothed_metrics(texts, smoothness=28):

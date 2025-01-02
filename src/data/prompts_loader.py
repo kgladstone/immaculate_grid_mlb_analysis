@@ -2,9 +2,9 @@ import os
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-from loader import Loader
 
-from utils import ImmaculateGridUtils
+from data.loader import Loader
+from utils.utils import ImmaculateGridUtils
 
 class PromptsLoader(Loader):
     def __init__(self, grid_storage_path):

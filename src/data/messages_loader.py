@@ -1,9 +1,9 @@
-from loader import Loader
 import sqlite3
 import pandas as pd
 import os
 
-from utils import ImmaculateGridUtils
+from data.loader import Loader
+from utils.utils import ImmaculateGridUtils
 
 class MessagesLoader(Loader):
     def __init__(self, db_path, cache_path):

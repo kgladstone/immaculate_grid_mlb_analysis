@@ -5,7 +5,7 @@ import re
 from pydantic import BaseModel
 import json
 
-from constants import MY_NAME, GRID_PLAYERS, IMAGES_METADATA_PATH, IMM_GRID_START_DATE
+from utils.constants import MY_NAME, GRID_PLAYERS, IMAGES_METADATA_PATH, IMM_GRID_START_DATE
 
 # --------------------------------------------------------------------------------------
 # Data Models

@@ -1,9 +1,9 @@
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 from datetime import datetime, timedelta
-from data_prep import make_texts_melted, to_percent, format_record
 
-from analysis import calculate_smoothed_metrics, calculate_win_rates
+from data.data_prep import make_texts_melted, to_percent, format_record
+from analysis.analysis import calculate_smoothed_metrics, calculate_win_rates
 
 #--------------------------------------------------------------------------------------------------
 # Plotting functions
