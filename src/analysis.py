@@ -10,7 +10,8 @@ from data_prep import (
     get_team_from_category,
     get_categories_from_prompt,
     build_intersection_structure_for_person,)
-from constants import TEAM_LIST
+from image_processor import ImageProcessor
+from constants import TEAM_LIST, APPLE_TEXTS_DB_PATH, IMAGES_METADATA_PATH, IMAGES_PATH
 
 # Function to calculate smoothed metrics (score, correct, average_score_of_correct) from texts_melted
 def calculate_smoothed_metrics(texts, smoothness=28):
@@ -502,3 +503,28 @@ def analyze_empty_team_team_intersections(texts, prompts, name, categories):
     result_string = result.getvalue()
     result.close()  # Close the StringIO object
     return result_string
+
+
+# # Validate that performance data matches image data
+# def compare_text_result_to_image_result(texts):
+#     image_processor = ImageProcessor(APPLE_TEXTS_DB_PATH, IMAGES_METADATA_PATH, IMAGES_PATH)
+#     image_metadata = image_processor.load_image_metadata()
+
+#     print(image_metadata)
+
+#     texts_melted = make_texts_melted(texts)
+#     print(texts_melted)
+
+#     for _, row in texts_melted.iterrows():
+#         person = row['name']
+#         grid_number = row['grid_number']
+#         performance = row['matrix']
+
+#         image_metadata = image_processor.get_image_metadata_entry(person, grid_number)
+
+#         if image_metadata is not None:
+#             print(person)
+#             print(grid_number)
+#             print(performance)
+#             print(image_metadata['responses'])
+#             quit()

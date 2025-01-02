@@ -5,7 +5,7 @@ import re
 from pydantic import BaseModel
 import json
 
-from constants import MY_NAME, GRID_PLAYERS
+from constants import MY_NAME, GRID_PLAYERS, IMAGES_METADATA_PATH, IMM_GRID_START_DATE
 
 # --------------------------------------------------------------------------------------
 # Data Models
@@ -38,6 +38,16 @@ class ImmaculateGridResult(BaseModel):
 
 # --------------------------------------------------------------------------------------
 class ImmaculateGridUtils:
+
+    @staticmethod
+    def get_today_grid_id():
+        """
+        Calculate the Immaculate Grid ID for today.
+        """
+        today = datetime.now()
+        start_date = datetime.strptime(IMM_GRID_START_DATE, '%Y-%m-%d')
+        return (today - start_date).days
+
     @staticmethod
     def df_to_immaculate_grid_objs(df):
         """
