@@ -5,9 +5,10 @@ from matplotlib.backends.backend_pdf import PdfPages
 import math
 from datetime import datetime
 
-from utils.constants import GRID_PLAYERS
+from utils.constants import GRID_PLAYERS, PROMPTS_CSV_PATH
+from data.prompts_loader import PromptsLoader
 from data.data_prep import (
-    preprocess_data_into_texts_structure, read_prompt_data, make_color_map,
+    preprocess_data_into_texts_structure, make_color_map,
     build_category_structure, build_person_category_structure,
     person_to_type_to_string, person_to_category_to_string
 )
@@ -15,9 +16,7 @@ from analysis.analysis import (
     get_category_clearing_threshold, get_person_to_type, analyze_easiest_teams,
     analyze_team_std_dev, analyze_person_prompt_performance, analyze_hardest_teams,
     analyze_hardest_team_stats, analyze_most_successful_exact_intersections,
-    analyze_empty_team_team_intersections
-)
-from analysis.plotting import (
+    analyze_empty_team_team_intersections, 
     plot_immaculates, plot_correctness, plot_avg, plot_smoothed_metrics, plot_win_rates,
     plot_best_worst_scores, plot_best_worst_scores_30
 )
@@ -33,8 +32,11 @@ class ReportGenerator:
 
     def load_data(self):
         print("Loading data...")
-        self.texts = preprocess_data_into_texts_structure(pd.read_csv(self.messages_path))
-        self.prompts = read_prompt_data(self.prompts_path)
+        texts_df = pd.read_csv(self.messages_path)
+        self.texts = preprocess_data_into_texts_structure(texts_df)
+
+        self.prompts = PromptsLoader(PROMPTS_CSV_PATH)._fetch_prompts_from_cache()
+
         self.color_map = make_color_map(GRID_PLAYERS)
 
     def _make_generic_text_page(self, func, args, page_title):

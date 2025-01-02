@@ -103,39 +103,6 @@ def make_texts_melted(texts):
 # Prompt Data Processing Functions
 # -------------------------------------------------------------------------------------------------
 
-def read_prompt_data(filepath):
-    """
-    Reads the prompt data from a CSV file and processes it for further analysis.
-
-    Args:
-        filepath (str): Path to the input CSV file containing prompt data.
-
-    Returns:
-        pd.DataFrame: A cleaned DataFrame with the game ID and processed prompt values.
-    """
-    with open(os.path.expanduser(filepath)) as f:
-        prompts = pd.read_csv(f, header=None)  # Read raw CSV data
-    # Assign column names to the DataFrame
-    prompts.columns = ["game_id", "00", "01", "02", "10", "11", "12", "20", "21", "22"]
-    prompts = prompts.iloc[1:]  # Remove the header row
-
-    # Process each row to clean and reformat prompt values
-    new_rows = []
-    for _, row in prompts.iterrows():
-        new_row = {}
-        for col, val in row.items():
-            for char in ["(", "'", ")"]:  # Remove unwanted characters
-                val = val.replace(char, "")
-            new_row[col] = val.replace(", ", " + ")  # Replace separator for readability
-        new_rows.append(new_row)
-
-    # Create a new DataFrame with cleaned rows and convert 'game_id' to integer
-    prompts = pd.DataFrame(new_rows)
-    prompts['game_id'] = prompts['game_id'].astype(int)
-
-    return prompts
-
-
 def category_is_team(category):
     """
     Determines if a given category is a team.
