@@ -56,7 +56,8 @@ class ImageProcessor():
             OR message.is_from_me = 1)
         AND (attachment.mime_type LIKE 'image/png'
             OR attachment.mime_type LIKE 'image/jpeg'
-            OR attachment.mime_type LIKE 'image/jpg')
+            OR attachment.mime_type LIKE 'image/jpg',
+            OR attachment.mime_type LIKE 'image/heic')
         ORDER BY message.date DESC
         """
             
