@@ -8,6 +8,7 @@ from PIL import Image, ImageOps, ImageEnhance
 import cv2
 import numpy as np
 import pandas as pd
+import pillow_heif
 
 from utils.constants import (
     GRID_PLAYERS, 
@@ -77,7 +78,12 @@ class ImageProcessor():
                 path = filename.replace(APPLE_TEXTS_DB_PATH, "")
                 submitter = MY_NAME if sender_phone == MY_NAME else phone_to_player.get(sender_phone, "Unknown")
                 image_date = ImmaculateGridUtils._convert_timestamp(message_date)
-                cleaned_results.append({"path": path, "submitter": submitter, "image_date": image_date})
+                cleaned_results.append({
+                    "path": path, 
+                    "mime_type": mime_type,
+                    "submitter": submitter, 
+                    "image_date": image_date
+                    })
 
         return pd.DataFrame(cleaned_results)
     
@@ -153,24 +159,30 @@ class ImageProcessor():
 
         # Collect parser data if parser data file is not empty
         if os.path.exists(IMAGES_PARSER_PATH):
-            parser_existing_data = pd.read_json(IMAGES_PARSER_PATH)
+            
+            parser_existing_data = self.load_parser_metadata()
 
-            # Keep any parser messages with "Invalid image" from the parser_existing_data
-            parser_existing_data = parser_existing_data[
-                parser_existing_data["parser_message"].str.contains(
-                    "Invalid image",
-                    na=False
-                )
-            ]
+            if len(parser_existing_data) > 0:
+                # Keep any parser messages with "Invalid image" from the parser_existing_data
+                parser_existing_data = parser_existing_data[
+                    parser_existing_data["parser_message"].str.contains(
+                        "Invalid image",
+                        na=False
+                    )
+                ]
 
-            # Extract paths from parser_existing_data
-            existing_paths = set(parser_existing_data["path"])
+                # Extract paths from parser_existing_data
+                existing_paths = set(parser_existing_data["path"])
+
+            else:
+                existing_paths = set()
 
         # Process each attachment
         for _, result in results.iterrows():
             path = os.path.expanduser(result['path'])
             submitter = result['submitter']
             image_date = result['image_date']
+            mime_type = result['mime_type']
             parser_message = None
 
             if path:
@@ -212,6 +224,64 @@ class ImageProcessor():
         print(f"Screenshots saved to {self.image_directory}")
 
 
+    def safe_cv2_read(self, image_path):
+        """
+        Safely read an image using OpenCV, handling HEIC format if needed.
+        """
+        mime_type = self.get_mime_type(image_path)
+        if mime_type == 'image/heic':
+            return self.read_heic_with_cv2(image_path)
+        else:
+            return cv2.imread(image_path)
+        if img is None:
+            print("Error: Unable to load the main image.")
+            return None
+
+    
+    def read_image(self, file_path):
+        """
+        Read an image file using PIL, handling HEIC format if needed.
+        """
+
+        mime_type = self.get_mime_type(file_path)
+
+        if mime_type == 'image/heic':
+            # Read the HEIC file
+            heif_file = pillow_heif.open_heif(file_path)
+            
+            # Convert HEIC data to a PIL Image
+            image = Image.frombytes(
+                heif_file.mode, heif_file.size, heif_file.data,
+                "raw", heif_file.mode, heif_file.stride
+            )
+            
+            return image  # Return the PIL Image object for further processing
+        
+        else:
+            return Image.open(file_path)
+
+
+    def read_heic_with_cv2(self, filepath):
+        """
+        Read a HEIC file using pillow-heif and convert it to a NumPy array compatible with OpenCV.
+        """
+        # Load the HEIC file using pillow-heif
+        heif_file = pillow_heif.open_heif(filepath)
+        
+        # Convert the HEIC file into a PIL Image
+        pil_image = Image.frombytes(
+            heif_file.mode, heif_file.size, heif_file.data,
+            "raw", heif_file.mode, heif_file.stride
+        )
+        
+        # Convert the PIL Image into a NumPy array (compatible with OpenCV)
+        cv2_image = np.array(pil_image)
+        
+        # Convert RGB to BGR if needed for OpenCV consistency
+        if cv2_image.ndim == 3:  # Check if the image has color channels
+            cv2_image = cv2.cvtColor(cv2_image, cv2.COLOR_RGB2BGR)
+        
+        return cv2_image
 
     def crop_text_box_dynamic(self, image_path):
         """
@@ -222,10 +292,7 @@ class ImageProcessor():
             PIL.Image: Cropped text box as a PIL Image object, or None if no text box is detected.
         """
         # Load the image
-        img = cv2.imread(image_path)
-        if img is None:
-            print("Error: Unable to load image.")
-            return None
+        img = self.safe_cv2_read(image_path)
 
         # Convert to grayscale
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -260,57 +327,105 @@ class ImageProcessor():
         return cropped_pil_img
 
 
-    def find_logo_position(self, image_path, threshold=0.5):
+    def convert_cv2_to_pil(self, cv2_image):
         """
-        Find the position of a target subimage (logo) within a main image.
+        Convert an OpenCV image to a PIL Image.
+        """
+        return Image.fromarray(cv2.cvtColor(cv2_image, cv2.COLOR_BGR2RGB))
+
+
+    def preprocess_image_for_logo_finder(self, gray_image):
+        """Preprocess the grayscale image to enhance contrast and reduce noise."""
+        # Apply Gaussian blur to reduce noise
+        blurred = cv2.GaussianBlur(gray_image, (5, 5), 0)
+
+        # Enhance contrast using CLAHE (Contrast Limited Adaptive Histogram Equalization)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(blurred)
+
+        return enhanced
+
+
+    def find_logo_position(self, main_image_path, threshold=0.38, scales=None):
+        """
+        Find the position of the logo in the main image using template matching with scaling.
 
         Args:
-            image_path (str): Path to the main image.
-            threshold (float): Matching confidence threshold (default: 0.6).
+            main_image_path (str): Path to the main image.
+            threshold (float): Confidence threshold for template matching.
+            scales (list): List of scales to try for the logo image.
 
         Returns:
-            tuple: (top_left, bottom_right) coordinates of the target subimage in the main image,
-                or None if no match is found.
+            tuple: (top_left, bottom_right) coordinates of the detected logo and the maximum confidence.
         """
+        if scales is None:
+            scales = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2]
+
         # Load the main image
-        main_image = cv2.imread(image_path)
-        if main_image is None:
-            print("Error: Unable to load the main image.")
-            return None
+        main_image = self.safe_cv2_read(main_image_path)
 
-        # Paths to logos
-        logos = [LOGO_LIGHT_PATH, LOGO_DARK_PATH]
+        # crop the main_image to be the top half and left half
+        main_image = main_image[:main_image.shape[0]//2, :main_image.shape[1]//2]
 
-        for logo_path in logos:
-            # Load the logo image
-            logo_image = cv2.imread(logo_path)
-            if logo_image is None:
-                print(f"Error: Unable to load logo image at {logo_path}.")
-                continue
+        logo_image_paths = [LOGO_LIGHT_PATH, LOGO_DARK_PATH]
 
-            # Convert images to grayscale for template matching
+        best_match = None
+        best_val = 0
+
+        for i, logo_image_path in enumerate(logo_image_paths):
+            logo_image = self.safe_cv2_read(logo_image_path)
+
+            if main_image is None or logo_image is None:
+                print("Error: Unable to load one of the images.")
+                return None
+
+            # Convert images to grayscale
             main_gray = cv2.cvtColor(main_image, cv2.COLOR_BGR2GRAY)
             logo_gray = cv2.cvtColor(logo_image, cv2.COLOR_BGR2GRAY)
 
-            # Match template
-            result = cv2.matchTemplate(main_gray, logo_gray, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+            # Preprocess the grayscale images
+            main_preprocessed = self.preprocess_image_for_logo_finder(main_gray)
+            logo_preprocessed = self.preprocess_image_for_logo_finder(logo_gray)
 
-            # Check if match is strong enough
-            if max_val >= threshold:
+            # Iterate over scales
+            for scale in scales:
+                resized_logo = cv2.resize(logo_preprocessed, (0, 0), fx=scale, fy=scale)
 
-                # Calculate bounding box of the detected logo
-                logo_h, logo_w = logo_gray.shape
-                top_left = max_loc
-                bottom_right = (top_left[0] + logo_w, top_left[1] + logo_h)
-                print(f"Success: Logo found using {logo_path}. (confidence: {max_val:.2f}).")
-                return top_left, bottom_right
+                # Template matching
+                result = cv2.matchTemplate(main_preprocessed, resized_logo, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
-            print(f"Warning: Logo not found using {logo_path} (confidence: {max_val:.2f}).")
 
-        # If no match is found
-        print("Warning: Logo not found in either mode.")
-        return None
+                # Update the best match if the confidence is higher
+                if max_val > best_val:
+                    best_val = max_val
+                    best_match = {
+                        "top_left": max_loc,
+                        "bottom_right": (max_loc[0] + resized_logo.shape[1], max_loc[1] + resized_logo.shape[0]),
+                        "confidence": max_val,
+                        "scale": scale
+                    }
+
+                # print(f"Scale {scale:.2f}, Max confidence: {max_val:.2f}")
+
+        if best_match and best_match["confidence"] >= threshold:
+            top_left = best_match["top_left"]
+            bottom_right = best_match["bottom_right"]
+
+            # Draw rectangle on the main image
+            annotated_image = main_image.copy()
+            cv2.rectangle(annotated_image, top_left, bottom_right, (0, 255, 0), 2)  # Green rectangle
+
+            print(f"Success: Logo found at scale {best_match['scale']:.2f}. Confidence: {best_match['confidence']:.2f}")
+            
+            return top_left, bottom_right, best_match["confidence"]
+        else:
+            print("Error: Logo not found at any scale.")
+            # Draw image
+            # img = self.convert_cv2_to_pil(main_image)
+            # img.show()
+            # quit()
+            return None
 
 
     def divide_image_into_grid(self, image_path, top_left, bottom_right):
@@ -325,24 +440,35 @@ class ImageProcessor():
         Returns:
             list: List of dictionaries containing top-left and bottom-right coordinates for each cell.
         """
-        # Load the main image
-        main_image = cv2.imread(image_path)
-        if main_image is None:
-            print("Error: Unable to load the main image.")
+        # Load the main image using PIL
+        img = self.read_image(image_path)
+        img_width, img_height = img.size
+
+        # Assert that the bottom_right second value of the logo is less than half of the image height
+        if bottom_right[1] > img_height / 2:
+            # draw image and quit
+            print("Error: Logo is too low in the image.")
+            # # draw logo outline too
+            # from PIL import ImageDraw
+            # draw = ImageDraw.Draw(img)
+            # draw.rectangle([top_left, bottom_right], outline="red")
+            # img.show()
             return None
+
+        # Adjust bottom_right so that it caps at 1/4 of the image width
+        bottom_right = (int(min(bottom_right[0], img_width/4)), bottom_right[1])
 
         # Calculate the logo dimensions
         logo_width = bottom_right[0] - top_left[0]
         logo_height = bottom_right[1] - top_left[1]
 
-        img_height, img_width, _ = main_image.shape
-
+        # Scalars for cell size adjustments
         WIDTH_SCALAR = img_width / logo_width / 4 * 0.98
         HEIGHT_SCALAR = img_width / logo_width / 4 * 1.10
         TOP_ADJUSTMENT = 0.25
         LEFT_ADJUSTMENT = 0.0015 * logo_width
 
-        # Cell width
+        # Calculate cell width and height
         cell_width = int(logo_width * WIDTH_SCALAR)
         cell_height = int(logo_height * HEIGHT_SCALAR)
 
@@ -352,6 +478,7 @@ class ImageProcessor():
 
         grid_cells = []
         
+
         # Divide the image into a 4x4 grid based on the logo dimensions
         for row in range(4):
             for col in range(4):
@@ -362,20 +489,11 @@ class ImageProcessor():
                 y_end = y_start + cell_height
 
                 # Ensure we don't exceed the image bounds
-                if x_end > main_image.shape[1] or y_end > main_image.shape[0]:
-                    print(f"Warning: Skipping cell ({row}, {col}) - Out of bounds")
-                    print(img_width)
-                    print(img_height)
-                    print(top_left)
-                    print(bottom_right)
-                    print(x_start)
-                    print(y_start)
-                    print(x_end)
-                    print(y_end)
-                    print(cell_width)
-                    print(cell_height)
-                    return None
-
+                if x_end > img_width:
+                    x_end = img_width
+                if y_end > img_height:
+                    y_end = img_height
+                
                 # Append the cell's coordinates to the list
                 if row > 0 and col > 0:
                     grid_cells.append({
@@ -385,7 +503,16 @@ class ImageProcessor():
                         "bottom_right": (x_end, y_end)
                     })
 
+        # # Display the image with green outlines around each cell
+        # from PIL import ImageDraw
+        # img_with_grid = img.copy()
+        # draw = ImageDraw.Draw(img_with_grid)
+        # for cell in grid_cells:
+        #     draw.rectangle([cell["top_left"], cell["bottom_right"]], outline="green")
+        # img_with_grid.show()
+
         return grid_cells
+
 
 
     def preprocess_image(self, img, crop_function):
@@ -488,13 +615,41 @@ class ImageProcessor():
         return cropped_img
 
 
+    def get_mime_type(self, filepath):
+        """
+        Get the MIME type of a file based on its extension.
+        """
+
+        filepath = str(filepath)
+
+        # Define a simple mapping of file extensions to MIME types
+        mime_types = {
+            r'\.jpg$': 'image/jpeg',
+            r'\.jpeg$': 'image/jpeg',
+            r'\.png$': 'image/png',
+            r'\.gif$': 'image/gif',
+            r'\.heic$': 'image/heic',
+            r'\.mp4$': 'video/mp4',
+            r'\.pdf$': 'application/pdf',
+            r'\.txt$': 'text/plain',
+        }
+
+        # Match the file extension using regex
+        for pattern, mime_type in mime_types.items():
+            if re.search(pattern, filepath, re.IGNORECASE):
+                return mime_type
+
+        # Return a default MIME type if no match is found
+        return 'application/octet-stream'
+
 
     def extract_text_from_image(self, image_path):
         """
         Extract text from an image using pytesseract.
         """
+
         try:
-            img = Image.open(image_path)
+            img = self.read_image(image_path)
             return pytesseract.image_to_string(img, config=OCR_CONFIG)
         except Exception as e:
             return f"Error extracting text: {e}"
@@ -511,11 +666,8 @@ class ImageProcessor():
         Returns:
             dict: A dictionary mapping each cell's (row, col) to its OCR text.
         """
-        # Load the main image
-        main_image = cv2.imread(image_path)
-        if main_image is None:
-            print("Error: Unable to load the main image.")
-            return {}
+        # Load the image
+        img = self.safe_cv2_read(image_path)
 
         cell_texts = {}
 
@@ -527,7 +679,7 @@ class ImageProcessor():
             bottom_right = cell["bottom_right"]
 
             # Crop the cell region from the image
-            cropped_cell = main_image[top_left[1]:bottom_right[1], top_left[0]:bottom_right[0]]
+            cropped_cell = img[top_left[1]:bottom_right[1], top_left[0]:bottom_right[0]]
 
             # Convert the cropped cell to a PIL image
             cropped_pil = Image.fromarray(cv2.cvtColor(cropped_cell, cv2.COLOR_BGR2RGB))

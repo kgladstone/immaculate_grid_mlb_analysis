@@ -572,7 +572,7 @@ def analyze_image_data_coverage(texts, image_metadata, image_parser_data):
     parser_data_aggregated = parser_data_aggregated.sort_values(by=['submitter', 'count'], ascending=[True, False])
 
     # Drop rows where clean_parser_message is "Invalid image"
-    parser_data_aggregated = parser_data_aggregated[parser_data_aggregated['clean_parser_message'] != "Invalid image"]
+    #parser_data_aggregated = parser_data_aggregated[parser_data_aggregated['clean_parser_message'] != "Invalid image"]
 
     # Output the DataFrame to a StringIO buffer for a human-readable format
     output = StringIO()
