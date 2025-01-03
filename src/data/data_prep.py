@@ -1,5 +1,5 @@
 import pandas as pd
-import os
+import ast
 
 from utils.constants import TEAM_LIST
 from utils.utils import ImmaculateGridUtils
@@ -375,3 +375,72 @@ def person_to_category_to_string(person_to_category, threshold=25):
                 count += 1
         result += "\n\n"
     return result
+
+def get_image_metadata_entry(image_metadata, person, grid_number):
+    """
+    Quick search of metadata for a specific person and grid number.
+    """
+
+    # Filter the metadata DataFrame
+    filtered = image_metadata[(image_metadata['grid_number'] == grid_number) & (image_metadata['submitter'] == person)]
+
+    # Return the filtered DataFrame or None if empty
+    if not filtered.empty:
+        return filtered.iloc[0].to_dict()
+    else:
+        return None
+
+# Validate that performance data matches image data
+def build_results_image_structure(texts, image_metadata):
+    """
+    Build the results structure for the image data
+    """
+
+    results = dict()
+
+    for _, row in texts.iterrows():
+        person = row['name']
+        grid_number = int(row['grid_number'])
+
+        # Replace JavaScript-style "true" with Python-style "True"
+        python_style_string_performance = row['matrix'].replace('true', 'True').replace('false', 'False')
+
+        # Parse the string into a Python list
+        nested_performance = ast.literal_eval(python_style_string_performance)
+
+        performance = [item for sublist in nested_performance for item in sublist]
+
+        image_metadata_row = get_image_metadata_entry(image_metadata, person, grid_number)
+
+        if person not in results.keys():
+            results[person] = dict()
+
+        if grid_number not in results[person].keys():
+            results[person][grid_number] = dict()
+            results[person][grid_number]['performance'] = performance
+            results[person][grid_number]['image_metadata'] = image_metadata_row
+
+    return results
+
+# Clean image parser data
+def clean_image_parser_data(image_parser_data):
+    def _create_clean_parser_message(parser_message):
+        if "Invalid image" in parser_message:
+            return "Invalid image"
+        elif "Failed to find logo" in parser_message:
+            return "Failed to find logo"
+        elif "grid already exists" in parser_message:
+            return "Grid already exists"
+        elif "failed to divide grid cells" in parser_message:
+            return "Failed to divide grid cells"
+        elif "failed to extract grid number" in parser_message:
+            return "Failed to extract grid number"
+        elif "Success" in parser_message:
+            return "Success"
+        else:
+            return ""
+    
+    # Apply function to create new column in image_parser_data dataframe
+    image_parser_data['clean_parser_message'] = image_parser_data['parser_message'].apply(_create_clean_parser_message)
+
+    return image_parser_data

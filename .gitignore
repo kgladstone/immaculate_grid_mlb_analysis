@@ -17,6 +17,7 @@ backups/
 # Ignore sensitive JSON files
 config.json
 images_metadata.json
+images_parser.json
 
 # Ignore pdf files
 *.pdf
@@ -24,3 +25,6 @@ images_metadata.json
 # Ignore images
 images/
 *.jpg
+
+# Testers
+*_tester.py

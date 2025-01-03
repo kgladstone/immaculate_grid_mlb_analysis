@@ -9,7 +9,14 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from utils.constants import GRID_PLAYERS, MY_NAME, IMAGES_PATH, IMAGES_METADATA_PATH, LOGO_DARK_PATH, LOGO_LIGHT_PATH, APPLE_IMAGES_PATH, APPLE_TEXTS_DB_PATH
+from utils.constants import (
+    GRID_PLAYERS, 
+    MY_NAME, 
+    LOGO_DARK_PATH, 
+    LOGO_LIGHT_PATH, 
+    APPLE_TEXTS_DB_PATH,
+    IMAGES_PARSER_PATH
+)
 from utils.utils import ImmaculateGridUtils
 
 # Global Tesseract config for OCR
@@ -83,6 +90,27 @@ class ImageProcessor():
         if data.empty or not {"path", "submitter", "image_date"}.issubset(data.columns):
             raise ValueError("Validation failed: Missing required fields in image metadata.")
         
+    def load_parser_metadata(self):
+        """
+        Load the parser metadata from the cache file.
+        """
+        if os.path.exists(IMAGES_PARSER_PATH):
+            with open(IMAGES_PARSER_PATH, 'r') as f:
+                try:
+                    data = json.load(f)
+                    # Ensure data is a list of dictionaries
+                    if isinstance(data, list) and all(isinstance(entry, dict) for entry in data):
+                        return pd.DataFrame(data)
+                    else:
+                        print("Warning: Parser metadata is not in the expected format (list of dictionaries). Returning an empty DataFrame.")
+                        return pd.DataFrame()
+                except json.JSONDecodeError as e:
+                    print(f"Error decoding JSON: {e}. Returning an empty DataFrame.")
+                    return pd.DataFrame()
+        else:
+            print("Parser cache file not found. Returning an empty DataFrame.")
+            return pd.DataFrame()
+        
     
     def load_image_metadata(self):
         """
@@ -90,9 +118,19 @@ class ImageProcessor():
         """
         if os.path.exists(self.cache_path):
             with open(self.cache_path, 'r') as f:
-                data = json.load(f)
-                return pd.DataFrame(data)
+                try:
+                    data = json.load(f)
+                    # Ensure data is a list of dictionaries
+                    if isinstance(data, list) and all(isinstance(entry, dict) for entry in data):
+                        return pd.DataFrame(data)
+                    else:
+                        print("Warning: Metadata is not in the expected format (list of dictionaries). Returning an empty DataFrame.")
+                        return pd.DataFrame()
+                except json.JSONDecodeError as e:
+                    print(f"Error decoding JSON: {e}. Returning an empty DataFrame.")
+                    return pd.DataFrame()
         else:
+            print("Cache file not found. Returning an empty DataFrame.")
             return pd.DataFrame()
         
 
@@ -108,16 +146,24 @@ class ImageProcessor():
         existing_metadata = self.load_image_metadata()
 
         # Extract existing grid_number and submitter combos
-        existing_combinations = {(entry["grid_number"], entry["submitter"]) for entry in existing_metadata}
+        existing_combinations = {(row.grid_number, row.submitter) for row in existing_metadata.itertuples()}
 
         # Query the attachments database
         results = self._fetch_images()
+
+        # Collect parser data if parser data file is not empty
+        # if os.path.exists(IMAGES_PARSER_PATH):
+        #     parser_data = pd.read_json(IMAGES_PARSER_PATH)
+
+        # Set up new parser data
+        parser_data = pd.DataFrame()
 
         # Process each attachment
         for _, result in results.iterrows():
             path = os.path.expanduser(result['path'])
             submitter = result['submitter']
             image_date = result['image_date']
+            parser_message = None
 
             if path:
                 print("*" * 50)
@@ -128,30 +174,30 @@ class ImageProcessor():
                     grid_number = self.grid_number_from_image_text(text) # Text operation
 
                     if grid_number is None:
-                        print(f"Warning: Invalid image. Could not extract grid number from {path}")
-                        continue
+                        parser_message = f"Warning: Invalid image. Could not extract grid number from {path}"
 
                     # Check if this combination already exists in metadata
-                    if (grid_number, submitter) in existing_combinations:
-                        print(f"Warning: This grid already exists in metadata (#{grid_number} for {submitter})")
-                        continue
+                    elif (grid_number, submitter) in existing_combinations:
+                        parser_message = f"Warning: This grid already exists in metadata (#{grid_number} for {submitter})"
 
                     # Process the image
-                    self.process_image_with_dynamic_grid(path, submitter, image_date) # OCR operation
+                    else:
+                        parser_message = self.process_image_with_dynamic_grid(path, submitter, image_date) # OCR operation
+            
+            parser_data_entry = {
+                "path": path,
+                "submitter": submitter,
+                "image_date": image_date,
+                "parser_message": parser_message
+            }
+
+            parser_data = pd.concat([parser_data, pd.DataFrame([parser_data_entry])], ignore_index=True)
 
         print(f"Screenshots saved to {self.image_directory}")
 
-    def get_image_metadata_entry(self, person, grid_number):
-        """
-        Quick search of metadata
-        """
-        metadata = self.load_image_metadata()
-        
-        for entry in metadata:
-            if entry["grid_number"] == grid_number and entry["submitter"] == person:
-                return entry
-        
-        return None
+        # Save the parser data
+        parser_data.to_json(IMAGES_PARSER_PATH, orient="records", indent=4)
+
 
     def crop_text_box_dynamic(self, image_path):
         """
@@ -531,33 +577,38 @@ class ImageProcessor():
         return result
 
 
-
-    def save_consolidated_metadata(self, metadata):
+    def save_consolidated_metadata(self, metadata_new_entry):
         """
-        Save or update the consolidated metadata JSON file, ensuring no duplicate entries
+        Save or update the consolidated metadata_new_entry JSON file, ensuring no duplicate entries
         for the same grid_number and submitter combination.
         """
-        # Load existing metadata if the file exists
+        # Load existing metadata_new_entry if the file exists
         consolidated_metadata = self.load_image_metadata()
 
         # Check for existing data with the same grid_number and submitter
         existing_entry = next(
-            (entry for entry in consolidated_metadata if
-            entry["grid_number"] == metadata["grid_number"] and
-            entry["submitter"] == metadata["submitter"]),
+            (entry for entry in consolidated_metadata.itertuples() if
+            entry.grid_number == metadata_new_entry["grid_number"] and
+            entry.submitter == metadata_new_entry["submitter"]),
             None
         )
 
         if existing_entry:
-            print(f"Metadata for grid_number {metadata['grid_number']} and submitter {metadata['submitter']} already exists.")
+            print(f"Metadata for grid_number {metadata_new_entry['grid_number']} and submitter {metadata_new_entry['submitter']} already exists.")
             return
 
-        # Append the new metadata if no duplicate found
-        consolidated_metadata.append(metadata)
+        # Append the new metadata_new_entry if no duplicate found
+        consolidated_metadata = pd.concat(
+            [consolidated_metadata, pd.DataFrame([metadata_new_entry])],
+            ignore_index=True
+        )
+        
+        # Convert DataFrame to a list of dictionaries
+        data_as_dicts = consolidated_metadata.to_dict(orient="records")
 
-        # Save the updated metadata
-        with open(self.cache_path, 'w') as f:
-            json.dump(consolidated_metadata, f, indent=4)
+        # Write JSON with indentation
+        with open(self.cache_path, "w") as f:
+            json.dump(data_as_dicts, f, indent=4)
 
         print(f"Consolidated metadata saved: {self.cache_path}")
 
@@ -578,14 +629,14 @@ class ImageProcessor():
         # Step 1: Find the logo position
         position = self.find_logo_position(image_path)
         if position is None:
-            print(f"Warning: Failed to find logo position in {image_path}")
-            return None
+            parser_message = f"Warning: Failed to find logo position in {image_path}"
+            return parser_message
 
         # Step 2: Get grid cells based on logo position
         grid_cells = self.divide_image_into_grid(image_path, position[0], position[1])
         if not grid_cells:
-            print(f"Warning: Failed to divide grid cells in {image_path}")
-            return None
+            parser_message = f"Warning: Failed to divide grid cells in {image_path}"
+            return parser_message
 
         # Step 3: Extract OCR results from each cell
         players_by_cell = self.extract_text_from_cells(image_path, grid_cells)
@@ -624,8 +675,8 @@ class ImageProcessor():
         text = self.extract_text_from_image(image_path)
         grid_number = self.grid_number_from_image_text(text)
         if grid_number is None:
-            print(f"Failed to extract grid number from {image_path}")
-            return None
+            parser_message = f"Failed to extract grid number from {image_path}"
+            return parser_message
 
         # Step 5: Save the processed image and metadata
         dest_filename = f"{submitter}_{image_date}_grid_{grid_number}.jpg"
@@ -645,9 +696,6 @@ class ImageProcessor():
 
         self.save_consolidated_metadata(metadata)
 
-        return grid_number
+        parser_message = f"Success: Processed image with grid number {grid_number}"
 
-
-# Usage example
-image_processor = ImageProcessor(APPLE_TEXTS_DB_PATH, IMAGES_METADATA_PATH, IMAGES_PATH)
-image_processor.process_images()
+        return parser_message

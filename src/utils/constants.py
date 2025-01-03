@@ -49,6 +49,7 @@ MESSAGES_CSV_PATH = csv_dir / "results.csv"
 PROMPTS_CSV_PATH = csv_dir / "prompts.csv"
 IMAGES_PATH = root_dir / "images/"  # Path to the images folder
 IMAGES_METADATA_PATH = root_dir / "images_metadata.json"  # Path to the images metadata file
+IMAGES_PARSER_PATH = root_dir / "images_parser.json"  # Path to the images parser output file
 PDF_FILENAME = root_dir / "immaculate_grid_report.pdf"  # Path for the PDF output file
 LOGO_DARK_PATH = root_dir / "logo_dark.png"  # Path to the dark logo image
 LOGO_LIGHT_PATH = root_dir / "logo_light.png"  # Path to the light logo image

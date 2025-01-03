@@ -14,8 +14,11 @@ from data.data_prep import (
     category_is_team,
     get_team_from_category,
     get_categories_from_prompt,
-    build_intersection_structure_for_person,)
-from utils.constants import TEAM_LIST, APPLE_TEXTS_DB_PATH, IMAGES_METADATA_PATH, IMAGES_PATH
+    build_intersection_structure_for_person,
+    build_results_image_structure,
+    clean_image_parser_data
+    )
+from utils.constants import TEAM_LIST
 
 # Function to calculate smoothed metrics (score, correct, average_score_of_correct) from texts_melted
 def calculate_smoothed_metrics(texts, smoothness=28):
@@ -509,6 +512,113 @@ def analyze_empty_team_team_intersections(texts, prompts, name, categories):
     return result_string
 
 
+def matrix_and_image_metadata_matches(matrix, image_metadata):
+    image_metadata_responses_list = list(image_metadata['responses'].values())
+    matches = 0
+
+    for i, value in enumerate(matrix):
+        if value:
+            if image_metadata_responses_list[i] != '':
+                matches += 1
+
+    return matches
+
+
+def analyze_image_data_coverage(texts, image_metadata, image_parser_data):
+    """
+    Analyze the coverage of image metadata for text results.
+
+    Text results are the performance data from the text messages
+    Image results are the performance data from the image metadata
+    Avg. Accuaracy of Results is the average accuracy of the text results that have image metadata in the right slots
+    """
+    image_data_structure = build_results_image_structure(texts, image_metadata)
+
+    image_parser_data_clean = clean_image_parser_data(image_parser_data)
+
+    results = []
+
+    for person, data in image_data_structure.items():
+        count_of_text_results = 0
+        count_of_image_results = 0
+        image_text_matches = []
+
+        for _, row in data.items():
+            count_of_text_results += 1
+            if row['image_metadata'] is not None:
+                count_of_image_results += 1
+                image_text_matches.append(matrix_and_image_metadata_matches(row['performance'], row['image_metadata']))
+
+        average_image_text_matches = sum(image_text_matches) / len(image_text_matches) if len(image_text_matches) > 0 else 0
+
+        results.append({
+            'Person': person,
+            'Text Results': count_of_text_results,
+            'Parsed Image Results': count_of_image_results,
+            'Avg. Accuracy of Results': average_image_text_matches,
+        })
+
+    # Convert results to a DataFrame for better formatting
+    df = pd.DataFrame(results).sort_values(by='Avg. Accuracy of Results', ascending=False)
+
+    # Summarize image_parser_data_clean by person and parser_message_clean
+    parser_data_aggregated = image_parser_data_clean.groupby(['submitter', 'clean_parser_message']).size().reset_index(name='count')
+
+    # Sort by person and count in descending order
+    parser_data_aggregated = parser_data_aggregated.sort_values(by=['submitter', 'count'], ascending=[True, False])
+
+    # Output the DataFrame to a StringIO buffer for a human-readable format
+    output = StringIO()
+    print("Image Data Coverage", file=output)
+    df.to_string(buf=output, index=False)
+
+    # Append the parser_data_aggregated to the buffer output
+    print("\n\n", file=output)
+    print("Image Parser Data Aggregated", file=output)
+    parser_data_aggregated.to_string(buf=output, index=False)
+    print("\n\n", file=output)
+
+    return output.getvalue()
+
+
+# Analyze top X players (by frequency) from each submitter
+def analyze_top_players_by_submitter(image_metadata, submitter, cutoff):
+    """
+    Analyze the top players by frequency for each submitter.
+
+    Args:
+        image_metadata (pd.DataFrame): DataFrame containing image metadata.
+        cutoff (int): The number of top players to analyze.
+    """
+    result = StringIO()
+
+    player_frequency = {}
+
+    # Analyze the top 10 players by frequency for each submitter
+    for row in image_metadata.iterrows():
+        submitter_name = row[1]['submitter']
+        if submitter_name != submitter:
+            continue
+        responses = row[1]['responses'].values()
+        for response in responses:
+            if response != '':
+                player_frequency[response] = player_frequency.get(response, 0) + 1
+
+    df = pd.DataFrame(player_frequency.items(), columns=['Player', 'Frequency'])
+    sorted_df = df.sort_values(by='Frequency', ascending=False).reset_index()
+
+    # Output the top 10 players by frequency for the submitter
+    print(f"Top {cutoff} Players for {submitter}", file=result)
+    for i in range(cutoff):
+        if i < len(sorted_df):
+            print(f"{i + 1}. {sorted_df['Player'][i]} ({sorted_df['Frequency'][i]})", file=result)
+    print("\n", file=result)
+
+    # Get the full output as a string
+    result_string = result.getvalue()
+    result.close()  # Close the StringIO object
+    return result_string
+
 #--------------------------------------------------------------------------------------------------
 # Plotting functions
 
@@ -704,27 +814,3 @@ def plot_best_worst_scores_30(texts):
     fig_title = 'Best and Worst Scores (Last 30 Days)'
     plot_best_worst_scores(filtered_texts, fig_title)
 
-
-# # Validate that performance data matches image data
-# def compare_text_result_to_image_result(texts):
-#     image_processor = ImageProcessor(APPLE_TEXTS_DB_PATH, IMAGES_METADATA_PATH, IMAGES_PATH)
-#     image_metadata = image_processor.load_image_metadata()
-
-#     print(image_metadata)
-
-#     texts_melted = make_texts_melted(texts)
-#     print(texts_melted)
-
-#     for _, row in texts_melted.iterrows():
-#         person = row['name']
-#         grid_number = row['grid_number']
-#         performance = row['matrix']
-
-#         image_metadata = image_processor.get_image_metadata_entry(person, grid_number)
-
-#         if image_metadata is not None:
-#             print(person)
-#             print(grid_number)
-#             print(performance)
-#             print(image_metadata['responses'])
-#             quit()
