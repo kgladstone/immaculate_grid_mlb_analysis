@@ -55,9 +55,8 @@ class ImageProcessor():
         WHERE (handle.id IN ({','.join(['?' for _ in phone_numbers])})
             OR message.is_from_me = 1)
         AND (attachment.mime_type LIKE 'image/png'
-            OR attachment.mime_type LIKE 'image/jpeg')
-        AND (attachment.filename LIKE '%IMG_%' 
-            OR attachment.filename LIKE '%Screenshot%')
+            OR attachment.mime_type LIKE 'image/jpeg'
+            OR attachment.mime_type LIKE 'image/jpg')
         ORDER BY message.date DESC
         """
             
@@ -152,11 +151,19 @@ class ImageProcessor():
         results = self._fetch_images()
 
         # Collect parser data if parser data file is not empty
-        # if os.path.exists(IMAGES_PARSER_PATH):
-        #     parser_data = pd.read_json(IMAGES_PARSER_PATH)
+        if os.path.exists(IMAGES_PARSER_PATH):
+            parser_existing_data = pd.read_json(IMAGES_PARSER_PATH)
 
-        # Set up new parser data
-        parser_data = pd.DataFrame()
+            # Keep any parser messages with "Success" or "Invalid image" from the parser_existing_data
+            parser_existing_data = parser_existing_data[
+                parser_existing_data["parser_message"].str.contains(
+                    "Success|Invalid image|Warning: This grid already exists",
+                    na=False
+                )
+            ]
+
+            # Extract paths from parser_existing_data
+            existing_paths = set(parser_existing_data["path"])
 
         # Process each attachment
         for _, result in results.iterrows():
@@ -168,6 +175,12 @@ class ImageProcessor():
             if path:
                 print("*" * 50)
                 if os.path.exists(path):
+
+                    if path in existing_paths:
+                        print(f"Warning: Skipping existing path {path}")
+                        continue
+
+                    print(f"Processing: {path} from {submitter} on {image_date}")
 
                     # Extract the grid number for checking
                     text = self.extract_text_from_image(path) # OCR operation
@@ -191,12 +204,12 @@ class ImageProcessor():
                 "parser_message": parser_message
             }
 
-            parser_data = pd.concat([parser_data, pd.DataFrame([parser_data_entry])], ignore_index=True)
+            # Append the parser data entry
+            print(parser_message)
+            self.save_parser_metadata(parser_data_entry)
 
         print(f"Screenshots saved to {self.image_directory}")
 
-        # Save the parser data
-        parser_data.to_json(IMAGES_PARSER_PATH, orient="records", indent=4)
 
 
     def crop_text_box_dynamic(self, image_path):
@@ -315,7 +328,7 @@ class ImageProcessor():
         main_image = cv2.imread(image_path)
         if main_image is None:
             print("Error: Unable to load the main image.")
-            return []
+            return None
 
         # Calculate the logo dimensions
         logo_width = bottom_right[0] - top_left[0]
@@ -360,7 +373,7 @@ class ImageProcessor():
                     print(y_end)
                     print(cell_width)
                     print(cell_height)
-                    quit(f"Quitting on {image_path}")
+                    return None
 
                 # Append the cell's coordinates to the list
                 if row > 0 and col > 0:
@@ -611,6 +624,29 @@ class ImageProcessor():
             json.dump(data_as_dicts, f, indent=4)
 
         print(f"Consolidated metadata saved: {self.cache_path}")
+
+    # Save parser metadata
+    def save_parser_metadata(self, parser_data_new_entry):
+        """
+        Save or update the parser metadata JSON file.
+        """
+        # Load existing metadata if the file exists
+        parser_metadata = self.load_parser_metadata()
+
+        # Append the new metadata if no duplicate found
+        parser_metadata = pd.concat(
+            [parser_metadata, pd.DataFrame([parser_data_new_entry])],
+            ignore_index=True
+        )
+
+        # Convert DataFrame to a list of dictionaries
+        data_as_dicts = parser_metadata.to_dict(orient="records")
+
+        # Write JSON with indentation
+        with open(IMAGES_PARSER_PATH, "w") as f:
+            json.dump(data_as_dicts, f, indent=4)
+
+        print(f"Parser metadata saved: {IMAGES_PARSER_PATH}")
 
 
     def process_image_with_dynamic_grid(self, image_path, submitter, image_date):

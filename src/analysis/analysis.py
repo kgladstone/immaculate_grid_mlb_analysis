@@ -516,12 +516,16 @@ def matrix_and_image_metadata_matches(matrix, image_metadata):
     image_metadata_responses_list = list(image_metadata['responses'].values())
     matches = 0
 
+    # Get matches
     for i, value in enumerate(matrix):
         if value:
             if image_metadata_responses_list[i] != '':
                 matches += 1
 
-    return matches
+    # Get number of True values in matrix
+    total = sum(matrix)
+
+    return matches / total if total > 0 else 0
 
 
 def analyze_image_data_coverage(texts, image_metadata, image_parser_data):
