@@ -154,10 +154,10 @@ class ImageProcessor():
         if os.path.exists(IMAGES_PARSER_PATH):
             parser_existing_data = pd.read_json(IMAGES_PARSER_PATH)
 
-            # Keep any parser messages with "Success" or "Invalid image" from the parser_existing_data
+            # Keep any parser messages with "Invalid image" from the parser_existing_data
             parser_existing_data = parser_existing_data[
                 parser_existing_data["parser_message"].str.contains(
-                    "Success|Invalid image|Warning: This grid already exists",
+                    "Invalid image",
                     na=False
                 )
             ]
@@ -638,6 +638,9 @@ class ImageProcessor():
             [parser_metadata, pd.DataFrame([parser_data_new_entry])],
             ignore_index=True
         )
+
+        # drop duplicates
+        parser_metadata = parser_metadata.drop_duplicates(subset=["path"], keep="last")
 
         # Convert DataFrame to a list of dictionaries
         data_as_dicts = parser_metadata.to_dict(orient="records")

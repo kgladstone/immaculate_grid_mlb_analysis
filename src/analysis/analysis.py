@@ -571,16 +571,23 @@ def analyze_image_data_coverage(texts, image_metadata, image_parser_data):
     # Sort by person and count in descending order
     parser_data_aggregated = parser_data_aggregated.sort_values(by=['submitter', 'count'], ascending=[True, False])
 
+    # Drop rows where clean_parser_message is "Invalid image"
+    parser_data_aggregated = parser_data_aggregated[parser_data_aggregated['clean_parser_message'] != "Invalid image"]
+
     # Output the DataFrame to a StringIO buffer for a human-readable format
     output = StringIO()
     print("Image Data Coverage", file=output)
     df.to_string(buf=output, index=False)
 
     # Append the parser_data_aggregated to the buffer output
-    print("\n\n", file=output)
-    print("Image Parser Data Aggregated", file=output)
-    parser_data_aggregated.to_string(buf=output, index=False)
-    print("\n\n", file=output)
+    print("\n", file=output)
+
+    # iterate through names and print each name's parser_data_aggregated
+    for name in parser_data_aggregated['submitter'].unique():
+        print(f"\nParser results for {name}", file=output)
+        person_specifc_aggregated = parser_data_aggregated[parser_data_aggregated['submitter'] == name]
+        person_specifc_aggregated.to_string(buf=output, index=False)
+        print("\n", file=output)
 
     return output.getvalue()
 

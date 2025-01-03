@@ -430,15 +430,15 @@ def clean_image_parser_data(image_parser_data):
         elif "Failed to find logo" in parser_message:
             return "Failed to find logo"
         elif "grid already exists" in parser_message:
-            return "Grid already exists"
-        elif "failed to divide grid cells" in parser_message:
+            return "Success"
+        elif "Failed to divide grid cells" in parser_message:
             return "Failed to divide grid cells"
         elif "failed to extract grid number" in parser_message:
             return "Failed to extract grid number"
         elif "Success" in parser_message:
             return "Success"
         else:
-            return ""
+            return parser_message
     
     # Apply function to create new column in image_parser_data dataframe
     image_parser_data['clean_parser_message'] = image_parser_data['parser_message'].apply(_create_clean_parser_message)
