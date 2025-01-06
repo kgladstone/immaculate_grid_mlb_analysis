@@ -512,8 +512,37 @@ def analyze_empty_team_team_intersections(texts, prompts, name, categories):
     return result_string
 
 
-def matrix_and_image_metadata_matches(matrix, image_metadata):
-    image_metadata_responses_list = list(image_metadata['responses'].values())
+def grid_numbers_with_matrix_image_nonmatches(texts, image_metadata, person):
+    """
+    """
+    image_data_structure = build_results_image_structure(texts, image_metadata)
+
+    grid_numbers = []
+
+    for grid_number, results in image_data_structure[person].items():
+
+        if results['image_metadata'] is None:
+            # print(f"Skipping grid {grid_number} due to missing image metadata.")
+            continue
+        else:
+            image_responses = list(results['image_metadata']['responses'].values())
+            if len(results['performance']) != len(image_responses):
+                print(f"Mismatch in lengths: performance={len(results['performance'])}, responses={len(image_responses)}")
+                continue
+            for i, matrix_element in enumerate(results['performance']):
+                if matrix_element == True:
+                    if image_responses[i] == '':
+                        break
+                elif matrix_element == False:
+                    if image_responses[i] != '':
+                        break
+            grid_numbers.append(grid_number)
+    
+    return grid_numbers
+
+
+def matrix_and_image_metadata_matches(matrix, image_metadata_day):
+    image_metadata_responses_list = list(image_metadata_day['responses'].values())
     matches = 0
 
     # Get matches

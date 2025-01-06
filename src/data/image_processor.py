@@ -48,7 +48,10 @@ class ImageProcessor():
             attachment.filename, 
             attachment.mime_type, 
             message.date, 
-            COALESCE(handle.id, ?) AS sender
+            CASE
+                WHEN message.is_from_me = 1 THEN ?
+                ELSE COALESCE(handle.id, 'Unknown') 
+            END AS sender
         FROM message
         LEFT JOIN handle ON message.handle_id = handle.ROWID
         JOIN message_attachment_join ON message.ROWID = message_attachment_join.message_id
@@ -166,7 +169,7 @@ class ImageProcessor():
                 # Keep any parser messages with "Invalid image" from the parser_existing_data
                 parser_existing_data = parser_existing_data[
                     parser_existing_data["parser_message"].str.contains(
-                        "Invalid image",
+                        "Invalid image|Success|This grid already exists",
                         na=False
                     )
                 ]
@@ -233,9 +236,6 @@ class ImageProcessor():
             return self.read_heic_with_cv2(image_path)
         else:
             return cv2.imread(image_path)
-        if img is None:
-            print("Error: Unable to load the main image.")
-            return None
 
     
     def read_image(self, file_path):
@@ -325,6 +325,47 @@ class ImageProcessor():
         cropped_pil_img = Image.fromarray(cv2.cvtColor(cropped_img, cv2.COLOR_BGR2RGB))
 
         return cropped_pil_img
+    
+    # Function given a submitter and a grid_number, removes it from both the parser metadata and images_metadata
+    def remove_entry(self, submitter, grid_number):
+        """
+        Remove entries matching the submitter and grid_number from the parser and image metadata.
+        """
+        # Load the parser metadata
+        parser_metadata = self.load_parser_metadata()
+
+        # Load the images metadata
+        images_metadata = self.load_image_metadata()
+
+        # Check initial counts for debugging
+        print(f"Initial images metadata count: {len(images_metadata)}")
+        print(f"Initial parser metadata count: {len(parser_metadata)}")
+
+        # Remove the entry from the images metadata
+        images_metadata = images_metadata[
+            ~((images_metadata["submitter"] == submitter) & (images_metadata["grid_number"] == grid_number))
+        ]
+
+        # Remove the entry from the parser metadata
+        parser_metadata = parser_metadata[
+            ~((parser_metadata["submitter"] == submitter) & (parser_metadata["parser_message"].str.contains(str(grid_number), na=False)))
+        ]
+
+        # Check updated counts for debugging
+        print(f"Updated images metadata count: {len(images_metadata)}")
+        print(f"Updated parser metadata count: {len(parser_metadata)}")
+
+        # Save the updated parser metadata
+        parser_metadata_dicts = parser_metadata.to_dict(orient="records")
+        with open(IMAGES_PARSER_PATH, "w") as f:
+            json.dump(parser_metadata_dicts, f, indent=4)
+
+        # Save the updated images metadata
+        images_metadata_dicts = images_metadata.to_dict(orient="records")
+        with open(self.cache_path, "w") as f:
+            json.dump(images_metadata_dicts, f, indent=4)
+
+        print(f"Entry for {submitter} and grid number {grid_number} removed from metadata.")
 
 
     def convert_cv2_to_pil(self, cv2_image):
@@ -344,9 +385,10 @@ class ImageProcessor():
         enhanced = clahe.apply(blurred)
 
         return enhanced
+        
 
 
-    def find_logo_position(self, main_image_path, threshold=0.38, scales=None):
+    def find_logo_position(self, main_image_path, threshold=0.5, scales=None):
         """
         Find the position of the logo in the main image using template matching with scaling.
 
@@ -359,7 +401,7 @@ class ImageProcessor():
             tuple: (top_left, bottom_right) coordinates of the detected logo and the maximum confidence.
         """
         if scales is None:
-            scales = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2]
+            scales = [0.05, 0.1, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2]
 
         # Load the main image
         main_image = self.safe_cv2_read(main_image_path)
@@ -395,7 +437,6 @@ class ImageProcessor():
                 result = cv2.matchTemplate(main_preprocessed, resized_logo, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
-
                 # Update the best match if the confidence is higher
                 if max_val > best_val:
                     best_val = max_val
@@ -403,7 +444,8 @@ class ImageProcessor():
                         "top_left": max_loc,
                         "bottom_right": (max_loc[0] + resized_logo.shape[1], max_loc[1] + resized_logo.shape[0]),
                         "confidence": max_val,
-                        "scale": scale
+                        "scale": scale,
+                        "mode": "light" if i == 0 else "dark"
                     }
 
                 # print(f"Scale {scale:.2f}, Max confidence: {max_val:.2f}")
@@ -412,23 +454,15 @@ class ImageProcessor():
             top_left = best_match["top_left"]
             bottom_right = best_match["bottom_right"]
 
-            # Draw rectangle on the main image
-            annotated_image = main_image.copy()
-            cv2.rectangle(annotated_image, top_left, bottom_right, (0, 255, 0), 2)  # Green rectangle
+            print(f"Success: Logo {i+1} found at scale {best_match['scale']:.2f}. Confidence: {best_match['confidence']:.2f}")
 
-            print(f"Success: Logo found at scale {best_match['scale']:.2f}. Confidence: {best_match['confidence']:.2f}")
-            
-            return top_left, bottom_right, best_match["confidence"]
+            return top_left, bottom_right, best_match["scale"], best_match["mode"]
         else:
             print("Error: Logo not found at any scale.")
-            # Draw image
-            # img = self.convert_cv2_to_pil(main_image)
-            # img.show()
-            # quit()
             return None
 
 
-    def divide_image_into_grid(self, image_path, top_left, bottom_right):
+    def divide_image_into_grid(self, image_path, top_left, bottom_right, logo_scale, logo_type):
         """
         Divide the main image into a 4x4 grid based on the size of the logo.
 
@@ -436,81 +470,77 @@ class ImageProcessor():
             image_path (str): Path to the main image.
             top_left (tuple): (x, y) coordinates of the top-left corner of the logo.
             bottom_right (tuple): (x, y) coordinates of the bottom-right corner of the logo.
+            logo_type: "light or "dark"
 
         Returns:
             list: List of dictionaries containing top-left and bottom-right coordinates for each cell.
         """
+
         # Load the main image using PIL
         img = self.read_image(image_path)
         img_width, img_height = img.size
 
-        # Assert that the bottom_right second value of the logo is less than half of the image height
-        if bottom_right[1] > img_height / 2:
-            # draw image and quit
-            print("Error: Logo is too low in the image.")
-            # # draw logo outline too
-            # from PIL import ImageDraw
-            # draw = ImageDraw.Draw(img)
-            # draw.rectangle([top_left, bottom_right], outline="red")
-            # img.show()
-            return None
+        # Calculate the logo width for scaling purposes
+        logo_width = (bottom_right[0] - top_left[0]) #/ logo_scale
 
-        # Adjust bottom_right so that it caps at 1/4 of the image width
-        bottom_right = (int(min(bottom_right[0], img_width/4)), bottom_right[1])
+        # These scale factors are EXTREMELY sensitive
+        if logo_type == "light": # assume mobile
+            # Cell should be scaled proportionally to logo width
+            cell_width = logo_width * (275 / 165)
+            x_offset = logo_width * (182 / 160)
+            y_offset = logo_width * (150 / 145)
+        else:
+            MOBILE_CUTOFF = 150 # mobile if higher pixels, computer if lower pixels
+            DENOMINATOR_LG = 180 # for mobile
+            DENOMINATOR_SM = 195 # for computer
+            DENOMINATOR = DENOMINATOR_SM if logo_width < MOBILE_CUTOFF else DENOMINATOR_LG
+            cell_width = logo_width * (290 / DENOMINATOR)
+            x_offset = logo_width * (210 / DENOMINATOR) 
+            y_offset = logo_width * (180 / DENOMINATOR)
 
-        # Calculate the logo dimensions
-        logo_width = bottom_right[0] - top_left[0]
-        logo_height = bottom_right[1] - top_left[1]
-
-        # Scalars for cell size adjustments
-        WIDTH_SCALAR = img_width / logo_width / 4 * 0.98
-        HEIGHT_SCALAR = img_width / logo_width / 4 * 1.10
-        TOP_ADJUSTMENT = 0.25
-        LEFT_ADJUSTMENT = 0.0015 * logo_width
-
-        # Calculate cell width and height
-        cell_width = int(logo_width * WIDTH_SCALAR)
-        cell_height = int(logo_height * HEIGHT_SCALAR)
-
-        # Start grid at the top of the logo
-        grid_start_x = max(0, top_left[0] - int(LEFT_ADJUSTMENT * cell_width))
-        grid_start_y = max(0, top_left[1] - int(TOP_ADJUSTMENT * cell_height))
+        # Start grid using the offsets
+        grid_start_x = top_left[0] + int(x_offset)
+        grid_start_y = top_left[1] + int(y_offset)
 
         grid_cells = []
-        
 
-        # Divide the image into a 4x4 grid based on the logo dimensions
-        for row in range(4):
-            for col in range(4):
+        # Divide the image into a 3x3 grid based on the logo dimensions
+        for row in range(3):
+            for col in range(3):
                 # Calculate the coordinates of the current cell
                 x_start = grid_start_x + col * cell_width
                 x_end = x_start + cell_width
-                y_start = grid_start_y + row * cell_height
-                y_end = y_start + cell_height
+                y_start = grid_start_y + row * cell_width
+                y_end = y_start + cell_width
 
                 # Ensure we don't exceed the image bounds
                 if x_end > img_width:
                     x_end = img_width
                 if y_end > img_height:
                     y_end = img_height
+
+                # Ensure grid has a width and height
+                if x_end <= x_start or y_end <= y_start:
+                    print("Error: Did not parse grid correctly")
+                    continue
                 
                 # Append the cell's coordinates to the list
-                if row > 0 and col > 0:
-                    grid_cells.append({
-                        "row": row - 1,
-                        "col": col - 1,
-                        "top_left": (x_start, y_start),
-                        "bottom_right": (x_end, y_end)
-                    })
-
+                grid_cells.append({
+                    "row": row,
+                    "col": col,
+                    "top_left": (int(x_start), int(y_start)),
+                    "bottom_right": (int(x_end), int(y_end))
+                })
+        
         # # Display the image with green outlines around each cell
         # from PIL import ImageDraw
         # img_with_grid = img.copy()
         # draw = ImageDraw.Draw(img_with_grid)
+        # draw.rectangle([top_left, bottom_right], outline="red", width=3)
         # for cell in grid_cells:
-        #     draw.rectangle([cell["top_left"], cell["bottom_right"]], outline="green")
+        #     draw.rectangle([cell["top_left"], cell["bottom_right"]], outline="green", width=3)
         # img_with_grid.show()
-
+        # quit()
         return grid_cells
 
 
@@ -689,7 +719,7 @@ class ImageProcessor():
             ocr_text = pytesseract.image_to_string(cropped_pil, config=OCR_CONFIG).strip()
 
             # Save the OCR text to the dictionary
-            cell_texts[(row, col)] = self.mlb_player_from_text(ocr_text)
+            cell_texts[(row, col)] = ocr_text
 
         return cell_texts
 
@@ -700,47 +730,6 @@ class ImageProcessor():
         """
         match = re.search(r"BASEBALL GRID #(\d+)", text)
         return int(match.group(1)) if match else None
-
-
-    def mlb_player_from_text(self, text):
-        """
-        Extract MLB player names from OCR text using regex and filtering.
-        Exclude lines containing any reserved words.
-
-        Args:
-            text (str): OCR-extracted text.
-
-        Returns:
-            str: Concatenated MLB player names.
-        """
-        reserved_words = ["Previous", "Baseball", "Message", "Soccer", "Football", "Basketball", "Summary"]
-
-        # Helper function for filtering lines
-        def filter_reserved_words(lines):
-            return [
-                line for line in lines
-                if not any(word.lower() in line.lower() for word in reserved_words) and len(line) > 2
-            ]
-
-        # Split and filter text
-        lines = text.splitlines()
-        filtered_lines = filter_reserved_words(lines)
-
-        # Use regex to match potential player names in filtered lines
-        name_pattern = r"\b[\p{L}\p{M}][\p{L}\p{M}']+\s[\p{L}\p{M}][\p{L}\p{M}']+(?:\s[\p{L}\p{M}][\p{L}\p{M}']+)?\b"
-        filtered_text = "\n".join(filtered_lines)
-        potential_names = re.findall(name_pattern, filtered_text)
-
-        # Filter names with 2-3 words
-        filtered_names = [
-            name for name in potential_names
-            if len(name.split()) in [2, 3]
-        ]
-
-        result = ", ".join(filtered_names)
-
-        # Concatenate player names into a single string
-        return result
 
 
     def save_consolidated_metadata(self, metadata_new_entry):
@@ -825,7 +814,7 @@ class ImageProcessor():
             return parser_message
 
         # Step 2: Get grid cells based on logo position
-        grid_cells = self.divide_image_into_grid(image_path, position[0], position[1])
+        grid_cells = self.divide_image_into_grid(image_path, position[0], position[1], position[2], position[3])
         if not grid_cells:
             parser_message = f"Warning: Failed to divide grid cells in {image_path}"
             return parser_message
@@ -869,6 +858,7 @@ class ImageProcessor():
         if grid_number is None:
             parser_message = f"Failed to extract grid number from {image_path}"
             return parser_message
+    
 
         # Step 5: Save the processed image and metadata
         dest_filename = f"{submitter}_{image_date}_grid_{grid_number}.jpg"
