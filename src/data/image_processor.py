@@ -131,7 +131,7 @@ class ImageProcessor():
                     data = json.load(f)
                     # Ensure data is a list of dictionaries
                     if isinstance(data, list) and all(isinstance(entry, dict) for entry in data):
-                        return pd.DataFrame(data)
+                        return pd.DataFrame(data).sort_values(by='grid_number')
                     else:
                         print("Warning: Metadata is not in the expected format (list of dictionaries). Returning an empty DataFrame.")
                         return pd.DataFrame()
@@ -431,24 +431,28 @@ class ImageProcessor():
 
             # Iterate over scales
             for scale in scales:
-                resized_logo = cv2.resize(logo_preprocessed, (0, 0), fx=scale, fy=scale)
+                try:
+                    resized_logo = cv2.resize(logo_preprocessed, (0, 0), fx=scale, fy=scale)
 
-                # Template matching
-                result = cv2.matchTemplate(main_preprocessed, resized_logo, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, max_loc = cv2.minMaxLoc(result)
+                    # Template matching
+                    result = cv2.matchTemplate(main_preprocessed, resized_logo, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
-                # Update the best match if the confidence is higher
-                if max_val > best_val:
-                    best_val = max_val
-                    best_match = {
-                        "top_left": max_loc,
-                        "bottom_right": (max_loc[0] + resized_logo.shape[1], max_loc[1] + resized_logo.shape[0]),
-                        "confidence": max_val,
-                        "scale": scale,
-                        "mode": "light" if i == 0 else "dark"
-                    }
+                    # Update the best match if the confidence is higher
+                    if max_val > best_val:
+                        best_val = max_val
+                        best_match = {
+                            "top_left": max_loc,
+                            "bottom_right": (max_loc[0] + resized_logo.shape[1], max_loc[1] + resized_logo.shape[0]),
+                            "confidence": max_val,
+                            "scale": scale,
+                            "mode": "light" if i == 0 else "dark"
+                        }
 
-                # print(f"Scale {scale:.2f}, Max confidence: {max_val:.2f}")
+                    # print(f"Scale {scale:.2f}, Max confidence: {max_val:.2f}")
+                except cv2.error as e:
+                    print(e)
+                    continue
 
         if best_match and best_match["confidence"] >= threshold:
             top_left = best_match["top_left"]
@@ -808,18 +812,21 @@ class ImageProcessor():
         """
 
         # Step 1: Find the logo position
+        print("Step 1: Finding logo...")
         position = self.find_logo_position(image_path)
         if position is None:
             parser_message = f"Warning: Failed to find logo position in {image_path}"
             return parser_message
 
         # Step 2: Get grid cells based on logo position
+        print("Step 2: Dividing image into cells based on logo...")
         grid_cells = self.divide_image_into_grid(image_path, position[0], position[1], position[2], position[3])
         if not grid_cells:
             parser_message = f"Warning: Failed to divide grid cells in {image_path}"
             return parser_message
 
         # Step 3: Extract OCR results from each cell
+        print("Step 3: Extracting text from image...")
         players_by_cell = self.extract_text_from_cells(image_path, grid_cells)
 
         # # Show any subimages that did not extract text
@@ -853,6 +860,7 @@ class ImageProcessor():
                 responses[position] = text
 
         # Step 4: Extract grid number from the image
+        print("Step 4: Extracting grid number from image...")
         text = self.extract_text_from_image(image_path)
         grid_number = self.grid_number_from_image_text(text)
         if grid_number is None:
@@ -861,6 +869,7 @@ class ImageProcessor():
     
 
         # Step 5: Save the processed image and metadata
+        print("Step 5: Copying and saving image...")
         dest_filename = f"{submitter}_{image_date}_grid_{grid_number}.jpg"
         dest_image_path = os.path.join(self.image_directory, dest_filename)
         shutil.copy(image_path, dest_image_path)

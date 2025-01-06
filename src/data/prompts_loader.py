@@ -75,7 +75,17 @@ class PromptsLoader(Loader):
         """
         Fetch multiple Immaculate Grids and return as a DataFrame.
         """
-        header = ['grid_id'] + [f"cell{i}" for i in range(1, 10)]
+        header = ['grid_id'
+            "top_left",
+            "top_center",
+            "top_right",
+            "middle_left",
+            "middle_center",
+            "middle_right",
+            "bottom_left",
+            "bottom_center",
+            "bottom_right"
+        ]
         grids_data = [PromptsLoader._fetch_grid_online(i) for i in index_list]
         return pd.DataFrame(grids_data, columns=header)
 

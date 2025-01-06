@@ -422,6 +422,7 @@ def build_results_image_structure(texts, image_metadata):
 
     return results
 
+
 # Clean image parser data
 def clean_image_parser_data(image_parser_data):
     def _create_clean_parser_message(parser_message):
@@ -444,3 +445,26 @@ def clean_image_parser_data(image_parser_data):
     image_parser_data['clean_parser_message'] = image_parser_data['parser_message'].apply(_create_clean_parser_message)
 
     return image_parser_data
+
+
+# Detailed grid cell view
+def create_grid_cell_image_view(image_metadata):
+    df = pd.DataFrame()
+    for _, row in image_metadata.iterrows():
+        grid_number = row['grid_number']
+        submitter = row['submitter']
+        responses = row['responses']
+        for position, response in responses.items():
+            if response == '':
+                continue
+            result = {
+                'grid_number': grid_number,
+                'submitter': submitter,
+                'position': position,
+                'response': response
+            }
+            df = pd.concat(
+                [df, pd.DataFrame([result])]
+                ,ignore_index=True)
+    df = df.sort_values(by='grid_number')
+    return df

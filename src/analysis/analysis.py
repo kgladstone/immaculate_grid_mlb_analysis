@@ -1,10 +1,13 @@
 # analysis.py
+import re
 import numpy as np
 import pandas as pd
 from io import StringIO
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 from datetime import datetime, timedelta
+from collections import Counter, defaultdict
+from rapidfuzz import fuzz, process
 
 from data.data_prep import (
     format_record,
@@ -16,7 +19,8 @@ from data.data_prep import (
     get_categories_from_prompt,
     build_intersection_structure_for_person,
     build_results_image_structure,
-    clean_image_parser_data
+    clean_image_parser_data,
+    create_grid_cell_image_view
     )
 from utils.constants import TEAM_LIST
 
@@ -634,10 +638,10 @@ def analyze_top_players_by_submitter(image_metadata, submitter, cutoff):
 
     player_frequency = {}
 
-    # Analyze the top 10 players by frequency for each submitter
+    # Analyze the top players by frequency for each submitter
     for row in image_metadata.iterrows():
         submitter_name = row[1]['submitter']
-        if submitter_name != submitter:
+        if submitter_name != submitter and submitter != "All":
             continue
         responses = row[1]['responses'].values()
         for response in responses:
@@ -647,7 +651,7 @@ def analyze_top_players_by_submitter(image_metadata, submitter, cutoff):
     df = pd.DataFrame(player_frequency.items(), columns=['Player', 'Frequency'])
     sorted_df = df.sort_values(by='Frequency', ascending=False).reset_index()
 
-    # Output the top 10 players by frequency for the submitter
+    # Output the top players by frequency for the submitter
     print(f"Top {cutoff} Players for {submitter}", file=result)
     for i in range(cutoff):
         if i < len(sorted_df):
@@ -658,6 +662,140 @@ def analyze_top_players_by_submitter(image_metadata, submitter, cutoff):
     result_string = result.getvalue()
     result.close()  # Close the StringIO object
     return result_string
+
+
+def analyze_strings(string_list, similarity_threshold=85):
+    """
+    Analyze a list of strings, count the instances of each string, and handle typos or similar strings.
+
+    Args:
+        string_list (list): List of strings to analyze.
+        similarity_threshold (int): The minimum similarity score (0-100) to consider two strings as the same.
+
+    Returns:
+        dict: A dictionary where keys are the normalized string and values are their counts.
+    """
+    # Preprocess: Strip whitespace and convert to lowercase
+    string_list = [s.strip().lower() for s in string_list if s]
+
+    # Counter to store the final aggregated results
+    final_counts = Counter()
+
+    # Iterate through the input list
+    for string in string_list:
+        # Try to match the string with existing keys in the final_counts
+        match_score = process.extractOne(string, final_counts.keys(), scorer=fuzz.ratio)
+
+        # Check if a match is found
+        if match_score is not None:
+            match = match_score[0]  # Extract the matched string
+            score = match_score[1]  # Extract the similarity score
+
+            # If the match is above the threshold, update its count
+            if score >= similarity_threshold:
+                final_counts[match] += 1
+            else:
+                # Otherwise, treat it as a new entry
+                final_counts[string] += 1
+        else:
+            # If no match is found, treat it as a new entry
+            final_counts[string] += 1
+
+    # Return the final aggregated counts as a dictionary
+    return dict(final_counts)
+
+
+def analyze_grid_cell_with_shared_guesses(image_metadata, prompts):
+    """
+    Analyze the grid cells and apply string analysis to each grouped response.
+
+    Args:
+        image_metadata: Input metadata for the grid cells.
+
+    Returns:
+        DataFrame: A DataFrame with analyzed responses and submitters for each grid cell.
+    """
+    # Step 1: Create the grid cell image view
+    grid_view = create_grid_cell_image_view(image_metadata)
+
+    # Step 2: Group by 'grid_number' and 'position', aggregate lists of responses and submitters
+    grouped = grid_view.groupby(['grid_number', 'position']).agg({
+        "response": list,
+        "submitter": list  # Collect submitters for each cell
+    }).reset_index()
+
+    # Step 3: Normalize and map responses to submitters
+    def normalize_response(response):
+        """
+        Normalize a response string by removing special characters, extra spaces, and converting to lowercase.
+        """
+        return re.sub(r'\s+', ' ', re.sub(r'[^\w\s]', '', response.strip().lower()))
+
+    def build_analyzed_response(responses, submitters):
+        """
+        Build the analyzed response with normalized responses, counts, original responses, and submitters.
+        """
+        # Normalize responses and track their original values and submitters
+        response_mapping = defaultdict(list)
+        for resp, submitter in zip(responses, submitters):
+            norm_resp = normalize_response(resp)
+            response_mapping[norm_resp].append((resp, submitter))
+
+        # Build the analyzed response
+        analyzed = defaultdict(lambda: {"count": 0, "original_responses": [], "submitters": []})
+        for norm_resp, details in response_mapping.items():
+            # Count occurrences and collect original responses and submitters
+            analyzed[norm_resp]["count"] = len(details)
+            analyzed[norm_resp]["original_responses"] = list({resp for resp, _ in details})  # Unique original responses
+            analyzed[norm_resp]["submitters"] = list({submitter for _, submitter in details})  # Unique submitters
+
+        return dict(analyzed)
+
+    grouped["analyzed_response"] = grouped.apply(
+        lambda row: build_analyzed_response(row["response"], row["submitter"]), axis=1
+    )
+
+    # Step 4: Filter rows where at least one player is repeated
+    def has_repeated_players(analyzed_response, n_repeats):
+        return any(details["count"] > n_repeats for details in analyzed_response.values())
+
+    filtered_rows = grouped[grouped["analyzed_response"].apply(
+        lambda x: has_repeated_players(x, 3)
+    )]
+
+    # Step 5: Extract prompt by grid_number and position
+    def get_prompt(prompts, grid_number, position):
+        """
+        Get the prompt value for a specific grid_number and position.
+
+        Args:
+            prompts (DataFrame): The DataFrame containing prompt data.
+            grid_number (int): The grid number to filter on.
+            position (str): The position in the grid.
+
+        Returns:
+            The prompt value for the given grid_number and position, or None if not found.
+        """
+        # Filter the DataFrame for the given grid number
+        prompt_for_grid = prompts[prompts['grid_id'] == grid_number]
+
+        # Ensure the position exists as a column
+        if position in prompt_for_grid.columns:
+            value = prompt_for_grid[position].iloc[0] if not prompt_for_grid.empty else None
+        else:
+            value = None  # Handle cases where the position column doesn't exist
+
+        return value
+
+    # Apply the function to add the 'prompt' column
+    filtered_rows["prompt"] = filtered_rows.apply(
+        lambda row: get_prompt(prompts, row["grid_number"], row["position"]), axis=1
+    )
+
+    return filtered_rows
+
+
+
 
 #--------------------------------------------------------------------------------------------------
 # Plotting functions
