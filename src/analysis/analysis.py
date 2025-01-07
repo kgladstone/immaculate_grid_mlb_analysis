@@ -537,32 +537,95 @@ def analyze_empty_team_team_intersections(texts, prompts, name, categories):
     return result_string
 
 
+def analyze_person_to_category(person_to_category, threshold=25):
+    """
+    Convert the person-to-category performance dictionary into a formatted string.
+
+    Args:
+        person_to_category (dict): Performance data for each person and category.
+        threshold (int): Minimum attempts required for a category to be included.
+
+    Returns:
+        str: Formatted string summarizing performance metrics for each person and category.
+    """
+    # Create a dictionary to hold table data and consensus calculation data
+    table_data = {}
+    consensus_data = {}
+
+    # Process each person's performance data
+    for person, category_data in person_to_category.items():
+        for category, (correct, total) in category_data.items():
+            # Only include categories that meet the attempt threshold
+            if total > threshold:
+                accuracy = (correct / total) * 100  # Calculate accuracy as percentage
+                value = f"{round(accuracy, 2)}% ({total})"  # Format value
+                if category not in table_data:
+                    table_data[category] = {}
+                    consensus_data[category] = {"weighted_sum": 0, "total_weight": 0}
+                
+                # Add accuracy data to table
+                table_data[category][person] = value
+
+                # Update consensus data
+                consensus_data[category]["weighted_sum"] += accuracy * total
+                consensus_data[category]["total_weight"] += total
+
+    # Compute consensus for each category
+    for category in consensus_data:
+        total_weight = consensus_data[category]["total_weight"]
+        weighted_sum = consensus_data[category]["weighted_sum"]
+        consensus = weighted_sum / total_weight if total_weight > 0 else 0
+        table_data[category]["Consensus"] = f"{round(consensus, 2)}%"
+
+    # Convert the dictionary to a pandas DataFrame
+    df = pd.DataFrame(table_data).T  # Transpose to make categories the rows
+    df.index.name = "Category"  # Name the index
+    df.reset_index(inplace=True)  # Convert the index into a regular column
+    df.fillna("N/A", inplace=True)  # Replace missing values with "N/A"
+
+    # Sort the DataFrame by the Consensus column
+    df["Consensus"] = df["Consensus"].str.rstrip('%').astype(float)  # Convert to numeric
+    df.sort_values(by="Consensus", ascending=False, inplace=True)
+    df['Consensus'] = df.apply(lambda x: str(x['Consensus']) + '%', axis=1)
+
+    # Convert the DataFrame to a string with tabular formatting
+    return df
+
+
 def grid_numbers_with_matrix_image_nonmatches(texts, image_metadata, person):
     """
+    Identify grid numbers where there is a mismatch between the performance matrix 
+    and image metadata responses for a specific person.
+
+    Args:
+        texts (dict): Parsed text data.
+        image_metadata (dict): Image metadata for grids.
+        person (str): The person whose grids are being analyzed.
+
+    Returns:
+        list: List of grid numbers with mismatches.
     """
     image_data_structure = build_results_image_structure(texts, image_metadata)
-
     grid_numbers = []
 
-    for grid_number, results in image_data_structure[person].items():
+    for grid_number, results in image_data_structure.get(person, {}).items():
+        image_metadata_day = results.get('image_metadata')
 
-        if results['image_metadata'] is None:
-            # print(f"Skipping grid {grid_number} due to missing image metadata.")
+        # Skip grids with missing image metadata
+        if image_metadata_day is None:
             continue
-        else:
-            image_responses = list(results['image_metadata']['responses'].values())
-            if len(results['performance']) != len(image_responses):
-                print(f"Mismatch in lengths: performance={len(results['performance'])}, responses={len(image_responses)}")
-                continue
-            for i, matrix_element in enumerate(results['performance']):
-                if matrix_element == True:
-                    if image_responses[i] == '':
-                        break
-                elif matrix_element == False:
-                    if image_responses[i] != '':
-                        break
+
+        # Calculate the identification rate using the helper function
+        performance_matrix = results.get('performance', [])
+        if not performance_matrix:
+            continue
+
+        id_rate = get_image_cell_id_rate(performance_matrix, image_metadata_day)
+
+        # If identification rate is less than 100%, there's a mismatch
+        if id_rate < 1.0:
             grid_numbers.append(grid_number)
-    
+
     return grid_numbers
 
 
@@ -639,12 +702,12 @@ def analyze_image_data_coverage(texts, image_metadata, image_parser_data):
     # Append the parser_data_aggregated to the buffer output
     print("\n", file=output)
 
-    # iterate through names and print each name's parser_data_aggregated
-    for name in parser_data_aggregated['submitter'].unique():
-        print(f"\nParser results for {name}", file=output)
-        person_specifc_aggregated = parser_data_aggregated[parser_data_aggregated['submitter'] == name]
-        person_specifc_aggregated.to_string(buf=output, index=False)
-        print("\n", file=output)
+    # # iterate through names and print each name's parser_data_aggregated
+    # for name in parser_data_aggregated['submitter'].unique():
+    #     print(f"\nParser results for {name}", file=output)
+    #     person_specifc_aggregated = parser_data_aggregated[parser_data_aggregated['submitter'] == name]
+    #     person_specifc_aggregated.to_string(buf=output, index=False)
+    #     print("\n", file=output)
 
     return output.getvalue()
 

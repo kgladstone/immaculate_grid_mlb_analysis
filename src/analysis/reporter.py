@@ -20,7 +20,7 @@ from data.image_processor import ImageProcessor
 from data.data_prep import (
     preprocess_data_into_texts_structure, make_color_map,
     build_category_structure, build_person_category_structure,
-    person_to_type_to_string, person_to_category_to_string
+    person_to_type_to_string
 )
 from analysis.analysis import (
     get_category_clearing_threshold, get_person_to_type, analyze_easiest_teams,
@@ -33,6 +33,7 @@ from analysis.analysis import (
     analyze_grid_cell_with_shared_guesses,
     analyze_top_players_by_month,
     plot_top_n_grids,
+    analyze_person_to_category
 )
 
 class ReportGenerator:
@@ -227,7 +228,7 @@ class ReportGenerator:
         # Generic text page functions
         generic_pages = [
             ("Type Performance Overview", person_to_type_to_string, (person_to_type,)),
-            ("Category Performance Overview", person_to_category_to_string, (person_to_category,)),
+            ("Category Performance Overview", analyze_person_to_category, (person_to_category,)),
             ("Easiest Teams Overview", analyze_easiest_teams, (categories, person_to_category)),
             ("Easiest Teams Standard Deviation", analyze_team_std_dev, (categories, person_to_category)),
             ("Best Team Overview", analyze_person_prompt_performance, (categories, person_to_category, categories_clearing_threshold, "Best", "Team")),

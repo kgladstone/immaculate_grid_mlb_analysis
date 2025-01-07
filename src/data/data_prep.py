@@ -351,36 +351,6 @@ def person_to_type_to_string(person_to_type):
     return result
 
 
-def person_to_category_to_string(person_to_category, threshold=25):
-    """
-    Convert the person-to-category performance dictionary into a formatted string.
-
-    Args:
-        person_to_category (dict): Performance data for each person and category.
-        threshold (int): Minimum attempts required for a category to be included.
-
-    Returns:
-        str: Formatted string summarizing performance metrics for each person and category.
-    """
-    result = ""
-    # Iterate through each person's performance data
-    for person, value in person_to_category.items():
-        # Sort categories by accuracy in descending order
-        rankings = sorted(
-            [(cat, correct / total, total) for cat, (correct, total) in value.items()],
-            key=lambda x: x[1],
-            reverse=True
-        )
-        result += f"====={person}=====\n"
-        count = 1
-        # Include only categories that meet the attempt threshold
-        for category, accuracy, total in rankings:
-            if total > threshold:
-                result += f"{count}. {category} ({round(accuracy, 2)}) ({total})\n"
-                count += 1
-        result += "\n\n"
-    return result
-
 def get_image_metadata_entry(image_metadata, person, grid_number):
     """
     Quick search of metadata for a specific person and grid number.
@@ -428,8 +398,17 @@ def build_results_image_structure(texts, image_metadata):
     return results
 
 
-# Clean image parser data
 def clean_image_parser_data(image_parser_data):
+    """
+    Cleans the parser_message column in the image_parser_data DataFrame 
+    and preserves only grid_number, clean_parser_message, and submitter columns.
+
+    Args:
+        image_parser_data (pd.DataFrame): Input DataFrame with parser_message column.
+
+    Returns:
+        pd.DataFrame: Cleaned DataFrame with selected columns.
+    """
     def _create_clean_parser_message(parser_message):
         if "Invalid image" in parser_message:
             return "Invalid image"
@@ -446,10 +425,11 @@ def clean_image_parser_data(image_parser_data):
         else:
             return parser_message
     
-    # Apply function to create new column in image_parser_data dataframe
+    # Create the clean_parser_message column
     image_parser_data['clean_parser_message'] = image_parser_data['parser_message'].apply(_create_clean_parser_message)
-
-    return image_parser_data
+    
+    # Return only the relevant columns
+    return image_parser_data[['path', 'image_date', 'clean_parser_message', 'submitter']]
 
 
 # Detailed grid cell view
