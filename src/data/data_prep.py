@@ -9,14 +9,14 @@ def to_percent(y, position):
     return f"{100 * y:.0f}%"
 
 # Function to format each record with proper alignment
-def format_record(rank, name, score, date, game_id, name_width=7, score_width=2, date_width=10, game_id_width=4):
+def format_record(rank, name, score, date, grid_id, name_width=7, score_width=2, date_width=10, grid_id_width=4):
     formatted_rank = f'{rank:<2}'
     formatted_name = f'{name:<{name_width}}'
     formatted_score = f'{str(score):<{score_width}}'
     formatted_date = f'{str(date):<{date_width}}'
-    formatted_game_id = f'{str(game_id):<{game_id_width}}'
+    formatted_grid_id = f'{str(grid_id):<{grid_id_width}}'
     
-    return f'{formatted_rank} | {formatted_name} | {formatted_score} | {formatted_date} | {formatted_game_id}'
+    return f'{formatted_rank} | {formatted_name} | {formatted_score} | {formatted_date} | {formatted_grid_id}'
 
 def make_color_map(grid_players):
     color_map = {}
@@ -167,10 +167,10 @@ def build_category_structure(texts, prompts):
     categories = set()
     for person, games in texts.items():
         for game in games:
-            prompt_rows = prompts[prompts['game_id'] == game.grid_number]
+            prompt_rows = prompts[prompts['grid_id'] == game.grid_number]
             if len(prompt_rows) != 1:  # Skip games with invalid or missing data
                 continue
-            prompt_row = prompt_rows.iloc[0][1:]  # Exclude the 'game_id' column
+            prompt_row = prompt_rows.iloc[0][1:]  # Exclude the 'grid_id' column
             for prompt in prompt_row:
                 part_one, part_two = get_categories_from_prompt(prompt)
                 categories.update([part_one, part_two])  # Add both parts to the category set
@@ -189,16 +189,21 @@ def build_person_category_structure(texts, prompts, categories):
     Returns:
         dict: A nested dictionary with performance metrics for each person and category.
     """
+
+    prompts_clean = prompts.copy()
+
+    prompts_clean.columns = ["grid_id", "00", "01", "02", "10", "11", "12", "20", "21", "22"]
+    
     # Initialize a structure where each person has a dictionary of categories with performance metrics
     person_to_category = {person: {cat: [0, 0] for cat in categories} for person in texts}
 
     for person, games in texts.items():
         for game in games:
             id = game.grid_number
-            prompt_rows = prompts[prompts["game_id"] == id]
+            prompt_rows = prompts_clean[prompts_clean["grid_id"] == id]
             if len(prompt_rows) != 1:
                 continue
-            prompt_row = prompt_rows.iloc[0][1:]  # Exclude the 'game_id' column
+            prompt_row = prompt_rows.iloc[0][1:]  # Exclude the 'grid_id' column
 
             # Update category performance based on the game's matrix
             matrix = game.matrix
@@ -213,9 +218,9 @@ def build_person_category_structure(texts, prompts, categories):
     return person_to_category
 
 
-def get_all_responses_from_game_id(texts, game_id):
+def get_all_responses_from_grid_id(texts, grid_id):
     """
-    Retrieves responses from all players for a given game_id
+    Retrieves responses from all players for a given grid_id
 
     Args:
         texts (dict): Dictionary of persons and their associated games.
@@ -226,7 +231,7 @@ def get_all_responses_from_game_id(texts, game_id):
     result = dict()
     for person, games in texts.items():
         for game in games:        
-            if game.grid_number == game_id:
+            if game.grid_number == grid_id:
                 result[person] = dict()
                 result[person]['matrix'] = [item for sublist in game.matrix for item in sublist]
                 result[person]['score'] = game.score
@@ -247,12 +252,12 @@ def build_game_prompt_response_structure(texts, prompts):
 
     result = dict()
     
-    for game_id in range(min(prompts['game_id']), max(prompts['game_id'])):
-        prompt = [item for item in prompts[prompts['game_id'] == game_id].iloc[0][1:]]
-        response = get_all_responses_from_game_id(texts, game_id)
-        result[game_id] = dict()
-        result[game_id]['prompt'] = prompt
-        result[game_id]['response'] = response
+    for grid_id in range(min(prompts['grid_id']), max(prompts['grid_id'])):
+        prompt = [item for item in prompts[prompts['grid_id'] == grid_id].iloc[0][1:]]
+        response = get_all_responses_from_grid_id(texts, grid_id)
+        result[grid_id] = dict()
+        result[grid_id]['prompt'] = prompt
+        result[grid_id]['response'] = response
 
     return result
 
@@ -264,7 +269,7 @@ def build_intersection_structure(texts, prompts):
     intersections = dict()
     game_prompt_response = build_game_prompt_response_structure(texts, prompts)
 
-    for game_id, game_data in game_prompt_response.items():
+    for grid_id, game_data in game_prompt_response.items():
         prompt = game_data['prompt']
         response = game_data['response']
         for i, prompt_i in enumerate(prompt):
@@ -295,7 +300,7 @@ def build_intersection_structure(texts, prompts):
                     intersections[category_pair][person]['successes'] += 1
 
                 # Compile list of raw detail per person
-                intersections[category_pair][person]['detail'] += [{'game_id' : game_id, 'result' : result}]
+                intersections[category_pair][person]['detail'] += [{'grid_id' : grid_id, 'result' : result}]
 
     return intersections
 
@@ -449,6 +454,8 @@ def clean_image_parser_data(image_parser_data):
 
 # Detailed grid cell view
 def create_grid_cell_image_view(image_metadata):
+    if len(image_metadata) == 0:
+        return None
     df = pd.DataFrame()
     for _, row in image_metadata.iterrows():
         grid_number = row['grid_number']

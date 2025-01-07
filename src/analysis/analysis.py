@@ -1,5 +1,6 @@
 # analysis.py
 import re
+import os
 import numpy as np
 import pandas as pd
 from io import StringIO
@@ -8,6 +9,8 @@ from matplotlib.ticker import FuncFormatter
 from datetime import datetime, timedelta
 from collections import Counter, defaultdict
 from rapidfuzz import fuzz, process
+from PIL import Image
+from data.image_processor import ImageProcessor
 
 from data.data_prep import (
     format_record,
@@ -20,9 +23,15 @@ from data.data_prep import (
     build_intersection_structure_for_person,
     build_results_image_structure,
     clean_image_parser_data,
-    create_grid_cell_image_view
+    create_grid_cell_image_view,
     )
-from utils.constants import TEAM_LIST
+from utils.constants import (
+    TEAM_LIST, 
+    GRID_PLAYERS_RESTRICTED, 
+    IMAGES_PATH, 
+    APPLE_TEXTS_DB_PATH, 
+    IMAGES_METADATA_PATH
+)
 
 # Function to calculate smoothed metrics (score, correct, average_score_of_correct) from texts_melted
 def calculate_smoothed_metrics(texts, smoothness=28):
@@ -160,6 +169,10 @@ def get_person_to_type(texts, prompts, person_to_category):
     Returns:
         dict: Nested dictionary with counts for each type of category pair (correct and total).
     """
+
+    prompts_clean = prompts.copy()
+    prompts_clean.columns = ["grid_id", "00", "01", "02", "10", "11", "12", "20", "21", "22"]
+
     # Define category pair types and initialize the structure for storing results
     types = ["Team-Team", "Team-Stat", "Stat-Stat"]
     person_to_type = {person: {t: [0, 0] for t in types} for person in person_to_category}
@@ -168,10 +181,10 @@ def get_person_to_type(texts, prompts, person_to_category):
     for person, games in texts.items():
         for game in games:
             id = game.grid_number
-            prompt_rows = prompts[prompts["game_id"] == id]
+            prompt_rows = prompts_clean[prompts_clean["grid_id"] == id]
             if len(prompt_rows) != 1:  # Skip invalid or missing prompts
                 continue
-            prompt_row = prompt_rows.iloc[0][1:]  # Exclude the 'game_id' column
+            prompt_row = prompt_rows.iloc[0][1:]  # Exclude the 'grid_id' column
             
             # Analyze the category pair for each cell in the game matrix
             matrix = game.matrix
@@ -310,6 +323,10 @@ def analyze_hardest_teams(texts, prompts):
     Returns:
         str: A formatted string summarizing the hardest team intersections.
     """
+
+    prompts_clean = prompts.copy()
+    prompts_clean.columns = ["grid_id", "00", "01", "02", "10", "11", "12", "20", "21", "22"]
+
     result = StringIO()
     hardest_teams = {person: {team: [0, 0] for team in TEAM_LIST} for person in texts}
 
@@ -317,7 +334,7 @@ def analyze_hardest_teams(texts, prompts):
     for person, games in texts.items():
         for game in games:
             id = game.grid_number
-            prompt_rows = prompts[prompts["game_id"] == id]
+            prompt_rows = prompts_clean[prompts_clean["grid_id"] == id]
             if len(prompt_rows) != 1:
                 continue
             prompt_row = prompt_rows.iloc[0][1:]
@@ -369,6 +386,10 @@ def analyze_hardest_team_stats(texts, prompts):
     Returns:
         str: A formatted string summarizing the hardest team-to-stat intersections.
     """
+
+    prompts_clean = prompts.copy()
+    prompts_clean.columns = ["grid_id", "00", "01", "02", "10", "11", "12", "20", "21", "22"]
+
     result = StringIO()
     hardest_team_stats = {person: {team: [0, 0] for team in TEAM_LIST} for person in texts}
 
@@ -376,7 +397,7 @@ def analyze_hardest_team_stats(texts, prompts):
     for person, games in texts.items():
         for game in games:
             id = game.grid_number
-            prompt_rows = prompts[prompts["game_id"] == id]
+            prompt_rows = prompts_clean[prompts_clean["grid_id"] == id]
             if len(prompt_rows) != 1:
                 continue
             prompt_row = prompt_rows.iloc[0][1:]
@@ -545,20 +566,23 @@ def grid_numbers_with_matrix_image_nonmatches(texts, image_metadata, person):
     return grid_numbers
 
 
-def matrix_and_image_metadata_matches(matrix, image_metadata_day):
+def get_image_cell_id_rate(matrix, image_metadata_day):
+    """
+    Get the image cell ID rate for a given person-grid-day
+    """
     image_metadata_responses_list = list(image_metadata_day['responses'].values())
-    matches = 0
+    correct_identification = 0
 
-    # Get matches
+    # Count the number of "true" responses with a nonempty string in image cell position
     for i, value in enumerate(matrix):
         if value:
             if image_metadata_responses_list[i] != '':
-                matches += 1
+                correct_identification += 1
 
     # Get number of True values in matrix
-    total = sum(matrix)
+    potential_cells_to_identify_in_image = sum(matrix)
 
-    return matches / total if total > 0 else 0
+    return correct_identification / potential_cells_to_identify_in_image if potential_cells_to_identify_in_image > 0 else 0
 
 
 def analyze_image_data_coverage(texts, image_metadata, image_parser_data):
@@ -578,21 +602,21 @@ def analyze_image_data_coverage(texts, image_metadata, image_parser_data):
     for person, data in image_data_structure.items():
         count_of_text_results = 0
         count_of_image_results = 0
-        image_text_matches = []
+        image_cell_id_rates = []
 
         for _, row in data.items():
             count_of_text_results += 1
             if row['image_metadata'] is not None:
                 count_of_image_results += 1
-                image_text_matches.append(matrix_and_image_metadata_matches(row['performance'], row['image_metadata']))
+                image_cell_id_rates.append(get_image_cell_id_rate(row['performance'], row['image_metadata']))
 
-        average_image_text_matches = sum(image_text_matches) / len(image_text_matches) if len(image_text_matches) > 0 else 0
+        average_image_cell_id_rate_unweighted = sum(image_cell_id_rates) / len(image_cell_id_rates) if len(image_cell_id_rates) > 0 else 0
 
         results.append({
             'Person': person,
             'Text Results': count_of_text_results,
             'Parsed Image Results': count_of_image_results,
-            'Avg. Accuracy of Results': average_image_text_matches,
+            'Avg. Accuracy of Results': average_image_cell_id_rate_unweighted,
         })
 
     # Convert results to a DataFrame for better formatting
@@ -625,8 +649,27 @@ def analyze_image_data_coverage(texts, image_metadata, image_parser_data):
     return output.getvalue()
 
 
+def analyze_top_players_by_month(image_metadata, cutoff):
+    grid_month_mapping = [(entry['grid_number'], entry['date'][:7]) for (_, entry) in image_metadata.iterrows()]
+    grid_month_dict = {}
+    for grid_number, month in grid_month_mapping:
+        if month not in grid_month_dict:
+            grid_month_dict[month] = list()
+        grid_month_dict[month].append(grid_number)
+        
+    result = StringIO()
+
+    # For each month, get the list of grids and get consensus top players
+    for month in dict(sorted(grid_month_dict.items())):
+        players_of_month = analyze_top_players_by_submitter(image_metadata, "All", cutoff, grid_month_dict[month])
+        print(f"Month: {month}", file=result)
+        print(players_of_month, file=result)
+
+    return result.getvalue()
+
+
 # Analyze top X players (by frequency) from each submitter
-def analyze_top_players_by_submitter(image_metadata, submitter, cutoff):
+def analyze_top_players_by_submitter(image_metadata, submitter, cutoff, grid_number_list=None):
     """
     Analyze the top players by frequency for each submitter.
 
@@ -638,10 +681,16 @@ def analyze_top_players_by_submitter(image_metadata, submitter, cutoff):
 
     player_frequency = {}
 
+    # Preprocess image list based on grid numbers
+    if grid_number_list is not None:
+        image_metadata_preprocessed = image_metadata[image_metadata['grid_number'].isin(grid_number_list)]
+    else:
+        image_metadata_preprocessed = image_metadata
+
     # Analyze the top players by frequency for each submitter
-    for row in image_metadata.iterrows():
+    for row in image_metadata_preprocessed.iterrows():
         submitter_name = row[1]['submitter']
-        if submitter_name != submitter and submitter != "All":
+        if submitter_name != submitter and not (submitter == "All" and submitter_name in GRID_PLAYERS_RESTRICTED):
             continue
         responses = row[1]['responses'].values()
         for response in responses:
@@ -652,7 +701,10 @@ def analyze_top_players_by_submitter(image_metadata, submitter, cutoff):
     sorted_df = df.sort_values(by='Frequency', ascending=False).reset_index()
 
     # Output the top players by frequency for the submitter
-    print(f"Top {cutoff} Players for {submitter}", file=result)
+    if submitter != "All":
+        print(f"Top {cutoff} Players for {submitter}", file=result)
+    else:
+        print(f"Top {cutoff} Players Overall", file=result)
     for i in range(cutoff):
         if i < len(sorted_df):
             print(f"{i + 1}. {sorted_df['Player'][i]} ({sorted_df['Frequency'][i]})", file=result)
@@ -664,48 +716,7 @@ def analyze_top_players_by_submitter(image_metadata, submitter, cutoff):
     return result_string
 
 
-def analyze_strings(string_list, similarity_threshold=85):
-    """
-    Analyze a list of strings, count the instances of each string, and handle typos or similar strings.
-
-    Args:
-        string_list (list): List of strings to analyze.
-        similarity_threshold (int): The minimum similarity score (0-100) to consider two strings as the same.
-
-    Returns:
-        dict: A dictionary where keys are the normalized string and values are their counts.
-    """
-    # Preprocess: Strip whitespace and convert to lowercase
-    string_list = [s.strip().lower() for s in string_list if s]
-
-    # Counter to store the final aggregated results
-    final_counts = Counter()
-
-    # Iterate through the input list
-    for string in string_list:
-        # Try to match the string with existing keys in the final_counts
-        match_score = process.extractOne(string, final_counts.keys(), scorer=fuzz.ratio)
-
-        # Check if a match is found
-        if match_score is not None:
-            match = match_score[0]  # Extract the matched string
-            score = match_score[1]  # Extract the similarity score
-
-            # If the match is above the threshold, update its count
-            if score >= similarity_threshold:
-                final_counts[match] += 1
-            else:
-                # Otherwise, treat it as a new entry
-                final_counts[string] += 1
-        else:
-            # If no match is found, treat it as a new entry
-            final_counts[string] += 1
-
-    # Return the final aggregated counts as a dictionary
-    return dict(final_counts)
-
-
-def analyze_grid_cell_with_shared_guesses(image_metadata, prompts):
+def analyze_grid_cell_with_shared_guesses(image_metadata, prompts, player_list):
     """
     Analyze the grid cells and apply string analysis to each grouped response.
 
@@ -715,8 +726,15 @@ def analyze_grid_cell_with_shared_guesses(image_metadata, prompts):
     Returns:
         DataFrame: A DataFrame with analyzed responses and submitters for each grid cell.
     """
+
+    # Step 0: Subset image_metadata on relevant submitters
+    image_metadata_relevant = image_metadata[image_metadata['submitter'].isin(player_list)]
+
     # Step 1: Create the grid cell image view
-    grid_view = create_grid_cell_image_view(image_metadata)
+    grid_view = create_grid_cell_image_view(image_metadata_relevant)
+
+    if grid_view is None:
+        return None
 
     # Step 2: Group by 'grid_number' and 'position', aggregate lists of responses and submitters
     grouped = grid_view.groupby(['grid_number', 'position']).agg({
@@ -760,7 +778,7 @@ def analyze_grid_cell_with_shared_guesses(image_metadata, prompts):
         return any(details["count"] > n_repeats for details in analyzed_response.values())
 
     filtered_rows = grouped[grouped["analyzed_response"].apply(
-        lambda x: has_repeated_players(x, 3)
+        lambda x: has_repeated_players(x, 2)
     )]
 
     # Step 5: Extract prompt by grid_number and position
@@ -776,6 +794,7 @@ def analyze_grid_cell_with_shared_guesses(image_metadata, prompts):
         Returns:
             The prompt value for the given grid_number and position, or None if not found.
         """
+
         # Filter the DataFrame for the given grid number
         prompt_for_grid = prompts[prompts['grid_id'] == grid_number]
 
@@ -792,9 +811,68 @@ def analyze_grid_cell_with_shared_guesses(image_metadata, prompts):
         lambda row: get_prompt(prompts, row["grid_number"], row["position"]), axis=1
     )
 
-    return filtered_rows
+    def generate_analysis_dataframe(filtered_rows, player_list):
+        """
+        Generates a DataFrame summarizing the analysis of the filtered rows.
+        
+        Args:
+            filtered_rows (DataFrame): Input DataFrame containing rows to be analyzed.
+        
+        Returns:
+            DataFrame: A DataFrame with the columns:
+                - grid_number
+                - position
+                - prompt
+                - player_in_question
+                - verdict (ban or save)
+                - saved_by_person (if verdict == save)
+        """
+        result_data = []
 
+        for _, row in filtered_rows.iterrows():
+            grid_number = row['grid_number']
+            position = row['position']
+            prompt = row['prompt']
 
+            for key, value in row['analyzed_response'].items():
+                player = key.title()  # Capitalize the player's name
+                count = value['count']
+                
+                if count < 3:
+                    continue  # Skip players with less than 3 mentions
+                
+                if count >= 4:
+                    # Banned player
+                    result_data.append({
+                        "grid_number": grid_number,
+                        "position": position,
+                        "prompt": prompt,
+                        "player": player,
+                        "verdict": "ban",
+                        "saved_by": None
+                    })
+                elif count == 3:
+                    # Saved player
+                    excluded_submitters = [x for x in player_list if x not in value['submitters']]
+                    result_data.append({
+                        "grid_number": grid_number,
+                        "position": position,
+                        "prompt": prompt,
+                        "player": player,
+                        "verdict": "save",
+                        "saved_by": ", ".join(excluded_submitters)  # Join the savers into a single string
+                    })
+
+        # Create a DataFrame from the result data
+        result_df = pd.DataFrame(result_data, columns=[
+            "grid_number", "prompt", "player", "verdict", "saved_by"
+        ])
+
+        return result_df.sort_values(by=['verdict', 'grid_number'])
+    
+    result_df = generate_analysis_dataframe(filtered_rows, player_list)
+
+    return result_df
 
 
 #--------------------------------------------------------------------------------------------------
@@ -927,16 +1005,9 @@ def plot_win_rates(texts, color_map):
     plt.show()
 
 
-def plot_best_worst_scores(texts, fig_title='Best and Worst Scores (All Time)'):
-    """
-    Creates a summary page in the PDF with the best and worst scores.
-
-    Parameters:
-    - texts: Data used for creating score records.
-    """
-
-    # Prepare score records
+def get_top_n_scores(texts, direction, cutoff):
     score_records = []
+    # Prepare score records
     for person, games in texts.items():
         for game in games:
             grid_id = game.grid_number
@@ -946,8 +1017,93 @@ def plot_best_worst_scores(texts, fig_title='Best and Worst Scores (All Time)'):
     sorted_records = sorted(score_records, key=lambda x: x[1])
     
     # Extract best and worst scores
-    best_records = sorted_records[:25]
-    worst_records = sorted_records[-25:][::-1]
+    if direction == "best":
+        return sorted_records[:cutoff]
+    else:
+        return sorted_records[-cutoff:][::-1]
+    
+
+def plot_top_n_grids(image_metadata, texts, cutoff):
+    """
+    Plots the top N grids in a single Matplotlib figure with images arranged in a grid.
+
+    Args:
+        image_metadata (DataFrame): DataFrame containing grid_number, submitter, and image path.
+        texts: Text data used to determine top grids.
+        cutoff (int): Number of top grids to process.
+    """
+
+    # Create a summary page with results
+    best_scores = get_top_n_scores(texts, "best", cutoff)
+
+    # Determine the grid layout
+    num_images = len(best_scores)
+    grid_cols = 2  # Number of columns
+    grid_rows = (num_images + grid_cols - 1) // grid_cols  # Calculate rows dynamically
+
+    fig, axes = plt.subplots(grid_rows, grid_cols, figsize=(15, 5 * grid_rows))
+    fig.suptitle('Top Grids of All Time', fontsize=25, fontweight='bold', ha='center')
+    axes = axes.flatten()  # Flatten the axes array for easy indexing
+
+    for idx, row in enumerate(best_scores):
+        submitter = row[0]
+        score = row[1]
+        grid_number = row[3]
+
+        # Lookup the image path for the given grid number and submitter
+        image_path = None
+        for _, entry in image_metadata.iterrows():
+            if entry['grid_number'] == grid_number and entry['submitter'] == submitter:
+                image_path = entry.get('image_filename')
+                break
+
+        # Get the current subplot axis
+        ax = axes[idx]
+        ax.axis('off')
+
+        if image_path is None:
+            ax.text(0.5, 0.5, f"No image found... :(\nGrid {grid_number}\nSubmitter: {submitter}",
+                    fontsize=10, ha='center', va='center', color='red')
+            continue
+
+        # First see if image is valid 
+        image_path = IMAGES_PATH / image_path
+
+        if not os.path.exists(image_path):
+            ax.text(0.5, 0.5, f"Image filepath does not exist\nGrid {grid_number}\nSubmitter: {submitter}",
+                    fontsize=10, ha='center', va='center', color='red')
+            continue
+        
+        try:
+            img = Image.open(image_path)
+        except:
+            image_processor = ImageProcessor(APPLE_TEXTS_DB_PATH, IMAGES_METADATA_PATH, IMAGES_PATH)
+            img_cv2 = image_processor.read_heic_with_cv2(image_path)
+            img = image_processor.convert_cv2_to_pil(img_cv2)
+
+        ax.imshow(img, aspect='equal')
+        ax.set_title(f"Grid {grid_number} by {submitter} (Score: {score})", fontsize=12, pad=10)
+
+    # Hide any unused subplots
+    for ax in axes[num_images:]:
+        ax.axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+
+
+def plot_best_worst_scores(texts, fig_title='Best and Worst Scores (All Time)'):
+    """
+    Creates a summary page in the PDF with the best and worst scores.
+
+    Parameters:
+    - texts: Data used for creating score records.
+    """
+
+    # Extract best and worst scores
+    best_records = get_top_n_scores(texts, "best", 25)
+    worst_records = get_top_n_scores(texts, "worst", 25)
     
     # Create a summary page with results
     plt.figure(figsize=(8.5, 11))
@@ -957,8 +1113,8 @@ def plot_best_worst_scores(texts, fig_title='Best and Worst Scores (All Time)'):
     plt.text(0, 0.85, 'Best Scores:', fontsize=16, ha='left', va='top', fontweight='bold')
     plt.text(0, 0.80, 'Rank | Name        | Score  | Date       | Game ID', fontsize=10, ha='left', va='top')
     
-    for i, (name, score, date, game_id) in enumerate(best_records):
-        record_text = format_record(i + 1, name, score, date, game_id)
+    for i, (name, score, date, grid_id) in enumerate(best_records):
+        record_text = format_record(i + 1, name, score, date, grid_id)
         plt.text(0, 0.75 - i * 0.025, record_text, fontsize=10, ha='left', va='top', fontfamily='monospace')
     
     # Worst Scores Section
@@ -966,8 +1122,8 @@ def plot_best_worst_scores(texts, fig_title='Best and Worst Scores (All Time)'):
     plt.text(0.6, 0.80, 'Rank | Name        | Score  | Date       | Game ID', fontsize=10, ha='left', va='top')
     
     # Display worst scores in a structured format with dynamic spacing
-    for i, (name, score, date, game_id) in enumerate(worst_records):
-        record_text = format_record(i + 1, name, score, date, game_id)
+    for i, (name, score, date, grid_id) in enumerate(worst_records):
+        record_text = format_record(i + 1, name, score, date, grid_id)
         plt.text(0.6, 0.75 - i * 0.025, record_text, fontsize=10, ha='left', va='top', fontfamily='monospace')
 
     

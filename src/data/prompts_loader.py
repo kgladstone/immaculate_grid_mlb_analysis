@@ -28,7 +28,18 @@ class PromptsLoader(Loader):
         with open(os.path.expanduser(self.cache_path)) as f:
             prompts = pd.read_csv(f, header=None)  # Read raw CSV data
         # Assign column names to the DataFrame
-        prompts.columns = ["game_id", "00", "01", "02", "10", "11", "12", "20", "21", "22"]
+        header = ['grid_id',
+            "top_left",
+            "top_center",
+            "top_right",
+            "middle_left",
+            "middle_center",
+            "middle_right",
+            "bottom_left",
+            "bottom_center",
+            "bottom_right"
+        ]
+        prompts.columns = header
         prompts = prompts.iloc[1:]  # Remove the header row
 
         # Process each row to clean and reformat prompt values
@@ -43,7 +54,7 @@ class PromptsLoader(Loader):
 
         # Create a new DataFrame with cleaned rows and convert 'game_id' to integer
         prompts = pd.DataFrame(new_rows)
-        prompts['game_id'] = prompts['game_id'].astype(int)
+        prompts['grid_id'] = prompts['grid_id'].astype(int)
 
         return prompts
 
@@ -75,7 +86,7 @@ class PromptsLoader(Loader):
         """
         Fetch multiple Immaculate Grids and return as a DataFrame.
         """
-        header = ['grid_id'
+        header = ['grid_id',
             "top_left",
             "top_center",
             "top_right",

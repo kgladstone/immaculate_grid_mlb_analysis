@@ -5,8 +5,18 @@ from matplotlib.backends.backend_pdf import PdfPages
 import math
 from datetime import datetime
 
-from utils.constants import GRID_PLAYERS, PROMPTS_CSV_PATH
+from utils.constants import (
+    GRID_PLAYERS, 
+    GRID_PLAYERS_RESTRICTED,
+    PROMPTS_CSV_PATH,
+    MESSAGES_CSV_PATH,
+    APPLE_TEXTS_DB_PATH, 
+    IMAGES_METADATA_PATH, 
+    IMAGES_PATH
+)
 from data.prompts_loader import PromptsLoader
+from data.messages_loader import MessagesLoader
+from data.image_processor import ImageProcessor
 from data.data_prep import (
     preprocess_data_into_texts_structure, make_color_map,
     build_category_structure, build_person_category_structure,
@@ -18,40 +28,129 @@ from analysis.analysis import (
     analyze_hardest_team_stats, analyze_most_successful_exact_intersections,
     analyze_empty_team_team_intersections, 
     plot_immaculates, plot_correctness, plot_avg, plot_smoothed_metrics, plot_win_rates,
-    plot_best_worst_scores, plot_best_worst_scores_30
+    plot_best_worst_scores, plot_best_worst_scores_30,
+    analyze_top_players_by_submitter,
+    analyze_grid_cell_with_shared_guesses,
+    analyze_top_players_by_month,
+    plot_top_n_grids,
 )
 
 class ReportGenerator:
-    def __init__(self, messages_path, prompts_path, pdf_filename):
-        self.messages_path = messages_path
-        self.prompts_path = prompts_path
+    def __init__(self, pdf_filename):
         self.pdf_filename = pdf_filename
         self.texts = None
         self.prompts = None
         self.color_map = None
+        self.image_metadata = None
 
     def load_data(self):
         print("Loading data...")
-        texts_df = pd.read_csv(self.messages_path)
+        texts_df = MessagesLoader(APPLE_TEXTS_DB_PATH, MESSAGES_CSV_PATH).load().get_data()
         self.texts = preprocess_data_into_texts_structure(texts_df)
-
         self.prompts = PromptsLoader(PROMPTS_CSV_PATH)._fetch_prompts_from_cache()
-
+        self.image_metadata = ImageProcessor(APPLE_TEXTS_DB_PATH, IMAGES_METADATA_PATH, IMAGES_PATH).load_image_metadata()
         self.color_map = make_color_map(GRID_PLAYERS)
 
-    def _make_generic_text_page(self, func, args, page_title):
+    def _make_generic_text_page(self, pdf, func, args, page_title):
         """
-        This function prepares a generic page that includes the output from the function being executed
+        This function prepares a generic page that includes the output from the function being executed.
+        Handles large outputs by creating multiple pages if necessary, with tighter margins.
         """
         output = func(*args)
-        MAX_LINES_PER_NORMAL_PAGE = 45
-        page_len_scalar = max([int(math.floor(output.count('\n') / MAX_LINES_PER_NORMAL_PAGE)),1])
-        fig, ax = plt.subplots(figsize=(8, 11*page_len_scalar))
-        ax.axis('off')
-        plt.text(0.5, 1.1, page_title, fontsize=24, ha='center', va='top', fontweight='bold')
-        plt.text(0.0, 1, output, fontsize=8, ha='left', va='top')
-        plt.show()
+        if output is None:
+            print(f"Warning: {func.__name__} returned None")
+            output = "No data available."
+
+        # Check if output is a DataFrame (table)
+        if isinstance(output, pd.DataFrame):
+            MAX_ROWS_PER_PAGE = 50  # Maximum rows to display per page
+            total_pages = math.ceil(len(output) / MAX_ROWS_PER_PAGE)
+
+            for page_num in range(total_pages):
+                # Get the rows for the current page
+                start_row = page_num * MAX_ROWS_PER_PAGE
+                end_row = start_row + MAX_ROWS_PER_PAGE
+                page_df = output.iloc[start_row:end_row]
+
+                # Create a new figure for the page
+                fig, ax = plt.subplots(figsize=(8.5, 11))  # Standard letter size
+                ax.axis('off')
+
+                # Add the title
+                ax.text(0.5, 1.05, f"{page_title} (Page {page_num + 1}/{total_pages})",
+                        fontsize=16, ha='center', va='top', fontweight='bold')
+
+                # Render the DataFrame as a table with adjusted column width
+                table = ax.table(
+                    cellText=page_df.values,
+                    colLabels=page_df.columns,
+                    cellLoc='center',
+                    loc='center'
+                )
+                table.auto_set_font_size(False)
+                table.set_fontsize(8)
+
+                # Adjust column widths
+                n_cols = len(page_df.columns)
+                column_width = min(1.0 / n_cols, 0.1)  # Adjust this value for narrower columns
+                for i in range(n_cols):
+                    table.auto_set_column_width([i])  # Auto-resize column width
+                    table[0, i].set_width(column_width)  # Explicitly set width for each column
+
+                # Apply a green background to the header row
+                for (row, col), cell in table.get_celld().items():
+                    if row == 0:  # Header row
+                        cell.set_facecolor("#32CD32")  # Lime Green color
+                        cell.set_text_props(weight='bold', color='white')  # White text, bold font
+
+                # Adjust layout
+                plt.tight_layout()
+
+                # Save the page to the PDF
+                pdf.savefig(fig)
+                plt.close(fig)
+
+        else:
+            MAX_LINES_PER_NORMAL_PAGE = 45
+
+            # Split the output into lines
+            lines = output.split('\n')
+            total_pages = math.ceil(len(lines) / MAX_LINES_PER_NORMAL_PAGE)
+
+            for page_num in range(total_pages):
+                # Get the lines for the current page
+                start_line = page_num * MAX_LINES_PER_NORMAL_PAGE
+                end_line = start_line + MAX_LINES_PER_NORMAL_PAGE
+                page_content = '\n'.join(lines[start_line:end_line])
+
+                # Create a new figure for the page
+                fig, ax = plt.subplots(figsize=(8, 11))  # Standard letter size
+                ax.axis('off')
+
+                # Adjust margins and spacing
+                title_y_pos = 0.98  # Slightly below the top edge
+                content_y_start = 0.92  # Start content closer to the title
+                line_spacing = 0.02  # Decrease line spacing for tighter content placement
+
+                # Add title
+                if total_pages > 1:
+                    ax.text(0.5, title_y_pos, f"{page_title} (Page {page_num + 1}/{total_pages})",
+                            fontsize=14, ha='center', va='top', fontweight='bold')
+                else:
+                    ax.text(0.5, title_y_pos, page_title,
+                            fontsize=14, ha='center', va='top', fontweight='bold')
+
+                # Add content
+                for i, line in enumerate(page_content.split('\n')):
+                    line_y_pos = content_y_start - i * line_spacing
+                    ax.text(-0.05, line_y_pos, line, fontsize=8, ha='left', va='top')
+
+                # Save the page to the PDF
+                pdf.savefig(fig)
+                plt.close(fig)
+
         return
+
 
     def _add_cover_page(self, pdf):
         """Helper function to create the cover page."""
@@ -82,10 +181,16 @@ class ReportGenerator:
     def _add_graphs_to_pdf(self, pdf, graph_functions):
         """Helper function to generate graphs and add them to the PDF."""
         for func, args, _ in graph_functions:
-            plt.figure()
-            func(*args)
-            pdf.savefig()
-            plt.close()
+            print("*" * 80)
+            print(f"Running {func.__name__}")
+            if func == self._make_generic_text_page:
+                # Pass the pdf object to _make_generic_text_page
+                self._make_generic_text_page(pdf, *args)
+            else:
+                plt.figure()
+                func(*args)
+                pdf.savefig()
+                plt.close()
 
     def prepare_graph_functions(self):
         """
@@ -113,7 +218,8 @@ class ReportGenerator:
             ("Smoothed Avg Score of Correct Over Time", plot_smoothed_metrics, (self.texts, 'smoothed_avg_score', "Smoothed Avg Score of Correct Over Time", "Smoothed Avg Score of Correct", self.color_map)),
             ("Win Rates", plot_win_rates, (self.texts, self.color_map)),
             ("Best and Worst Scores (All Time)", plot_best_worst_scores, (self.texts,)),
-            ("Best and Worst Scores (Last 30 Days)", plot_best_worst_scores_30, (self.texts,))
+            ("Best and Worst Scores (Last 30 Days)", plot_best_worst_scores_30, (self.texts,)),
+            ("Top Grids of All Time", plot_top_n_grids, (self.image_metadata, self.texts, 10))
         ]
 
         graph_functions = [make_graph_function(func, args, title) for title, func, args in core_graphs]
@@ -129,7 +235,9 @@ class ReportGenerator:
             ("Best Category Overview", analyze_person_prompt_performance, (categories, person_to_category, categories_clearing_threshold, "Best", "Category")),
             ("Worst Category Overview", analyze_person_prompt_performance, (categories, person_to_category, categories_clearing_threshold, "Worst", "Category")),
             ("Hardest Teams Overview", analyze_hardest_teams, (self.texts, self.prompts)),
-            ("Hardest Teams Stats Overview", analyze_hardest_team_stats, (self.texts, self.prompts))
+            ("Hardest Teams Stats Overview", analyze_hardest_team_stats, (self.texts, self.prompts)),
+            ("Bans and Saves", analyze_grid_cell_with_shared_guesses, (self.image_metadata, self.prompts, GRID_PLAYERS_RESTRICTED)),
+            ("Popular Players by Month", analyze_top_players_by_month, (self.image_metadata, 5)),
         ]
 
         graph_functions += [
@@ -140,7 +248,8 @@ class ReportGenerator:
         # Person-specific pages
         person_specific_templates = [
             ("Most Successful Intersections", analyze_most_successful_exact_intersections, (self.texts, self.prompts, None)),
-            ("Never Shown Intersections", analyze_empty_team_team_intersections, (self.texts, self.prompts, None, categories))
+            ("Never Shown Intersections", analyze_empty_team_team_intersections, (self.texts, self.prompts, None, categories)),
+            ("Top Players Used", analyze_top_players_by_submitter, (self.image_metadata, None, 25)),
         ]
 
         person_specific_pages = [

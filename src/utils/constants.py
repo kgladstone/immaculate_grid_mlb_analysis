@@ -63,6 +63,7 @@ with open(CONFIG_PATH, 'r') as config_file:
 
 MY_NAME = config['MY_NAME']
 GRID_PLAYERS = config['GRID_PLAYERS']
+GRID_PLAYERS_RESTRICTED = {player: GRID_PLAYERS[player] for player in GRID_PLAYERS if GRID_PLAYERS[player]['restricted'] == "False"}
 
 # --------------------------------------------------------------------------------------------------
 # Immutables

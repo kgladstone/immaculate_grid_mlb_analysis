@@ -30,10 +30,10 @@ def refresh_data():
 
 if __name__ == "__main__":
     # Step 1: Refresh data
-    messages_data, prompts_data = refresh_data()
+    refresh_data()
 
     # Step 2: Generate report
-    generator = ReportGenerator(MESSAGES_CSV_PATH, PROMPTS_CSV_PATH, PDF_FILENAME)
+    generator = ReportGenerator(PDF_FILENAME)
     generator.load_data()
     generator.generate_report()
 

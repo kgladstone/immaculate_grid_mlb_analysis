@@ -4,11 +4,13 @@ import shutil
 import pytesseract
 import regex as re
 import json
-from PIL import Image, ImageOps, ImageEnhance
+from PIL import Image, ImageOps, ImageEnhance, ImageDraw
 import cv2
 import numpy as np
 import pandas as pd
 import pillow_heif
+from collections import Counter
+from rapidfuzz import process, fuzz
 
 from utils.constants import (
     GRID_PLAYERS, 
@@ -19,6 +21,7 @@ from utils.constants import (
     IMAGES_PARSER_PATH
 )
 from utils.utils import ImmaculateGridUtils
+from data.messages_loader import MessagesLoader
 
 # Global Tesseract config for OCR
 OCR_CONFIG = r"--oem 3 --psm 6"
@@ -109,7 +112,10 @@ class ImageProcessor():
                     data = json.load(f)
                     # Ensure data is a list of dictionaries
                     if isinstance(data, list) and all(isinstance(entry, dict) for entry in data):
-                        return pd.DataFrame(data)
+                        df = pd.DataFrame(data)
+                        # Remove duplicates based on all columns
+                        df = df.drop_duplicates()
+                        return df
                     else:
                         print("Warning: Parser metadata is not in the expected format (list of dictionaries). Returning an empty DataFrame.")
                         return pd.DataFrame()
@@ -131,7 +137,10 @@ class ImageProcessor():
                     data = json.load(f)
                     # Ensure data is a list of dictionaries
                     if isinstance(data, list) and all(isinstance(entry, dict) for entry in data):
-                        return pd.DataFrame(data).sort_values(by='grid_number')
+                        if len(data) > 0:
+                            return pd.DataFrame(data).sort_values(by='grid_number')
+                        else:
+                            return pd.DataFrame()
                     else:
                         print("Warning: Metadata is not in the expected format (list of dictionaries). Returning an empty DataFrame.")
                         return pd.DataFrame()
@@ -152,11 +161,6 @@ class ImageProcessor():
         # Ensure the save folder exists
         os.makedirs(self.image_directory, exist_ok=True)
 
-        existing_metadata = self.load_image_metadata()
-
-        # Extract existing grid_number and submitter combos
-        existing_combinations = {(row.grid_number, row.submitter) for row in existing_metadata.itertuples()}
-
         # Query the attachments database
         results = self._fetch_images()
 
@@ -169,7 +173,7 @@ class ImageProcessor():
                 # Keep any parser messages with "Invalid image" from the parser_existing_data
                 parser_existing_data = parser_existing_data[
                     parser_existing_data["parser_message"].str.contains(
-                        "Invalid image|Success|This grid already exists",
+                        "Invalid image|already exists|Success",
                         na=False
                     )
                 ]
@@ -189,18 +193,22 @@ class ImageProcessor():
             parser_message = None
 
             if path:
-                print("*" * 50)
                 if os.path.exists(path):
 
                     if path in existing_paths:
-                        print(f"Warning: Skipping existing path {path}")
+                        # print(f"Warning: Skipping existing path {path}")
                         continue
 
+                    print("*" * 50)
                     print(f"Processing: {path} from {submitter} on {image_date}")
 
                     # Extract the grid number for checking
                     text = self.extract_text_from_image(path) # OCR operation
                     grid_number = self.grid_number_from_image_text(text) # Text operation
+
+                    # Extract existing grid_number and submitter combos
+                    existing_metadata = self.load_image_metadata()
+                    existing_combinations = {(row.grid_number, row.submitter) for row in existing_metadata.itertuples()}
 
                     if grid_number is None:
                         parser_message = f"Warning: Invalid image. Could not extract grid number from {path}"
@@ -326,6 +334,80 @@ class ImageProcessor():
 
         return cropped_pil_img
     
+
+    def get_metadata_from_submitter(self, submitter):
+        """
+        Return subset of metadata from submitter
+        """
+        images_metadata = self.load_image_metadata()
+
+        return images_metadata[images_metadata['submitter'] == submitter]
+
+
+    def get_grid_numbers_from_guess(self, submitter, guess):
+        """
+        Return all grid numbers for a submitter that contain the guess
+        """
+
+        grid_numbers = []
+
+        images_metadata_submitter = self.get_metadata_from_submitter(submitter)
+
+        for _, entry in images_metadata_submitter.iterrows():
+            responses = entry['responses']
+            grid_number = entry['grid_number']
+            for _, response in responses.items():
+                if guess in response:
+                    grid_numbers.append(grid_number)
+        
+        return grid_numbers
+    
+
+    def get_metadata_from_submitter_grid_numbers(self, submitter, grid_number_list):
+        """
+        Return subset of metadata based on grid numbers and submitter
+        """
+
+        images_metadata_submitter = self.get_metadata_from_submitter(submitter)
+
+        return images_metadata_submitter[images_metadata_submitter['grid_number'].isin(grid_number_list)]
+        
+
+    def clear_all_processed_images(self):
+        # Load the parser metadata
+        parser_metadata = self.load_parser_metadata()
+
+        # Load the images metadata
+        images_metadata = self.load_image_metadata()
+
+        # Check initial counts for debugging
+        print(f"Initial images metadata count: {len(images_metadata)}")
+        print(f"Initial parser metadata count: {len(parser_metadata)}")
+
+        # Remove the entry from the images metadata
+        images_metadata = pd.DataFrame()
+
+        # Remove the entry from the parser metadata
+        parser_metadata = parser_metadata[
+            parser_metadata["parser_message"].str.contains("Warning: Invalid image", na=False)
+        ]
+
+        # Check updated counts for debugging
+        print(f"Updated images metadata count: {len(images_metadata)}")
+        print(f"Updated parser metadata count: {len(parser_metadata)}")
+
+        # Save the updated parser metadata
+        parser_metadata_dicts = parser_metadata.to_dict(orient="records")
+        with open(IMAGES_PARSER_PATH, "w") as f:
+            json.dump(parser_metadata_dicts, f, indent=4)
+
+        # Save the updated images metadata
+        images_metadata_dicts = images_metadata.to_dict(orient="records")
+        with open(self.cache_path, "w") as f:
+            json.dump(images_metadata_dicts, f, indent=4)
+
+        print(f"Cache reset for all processed images.")
+
     # Function given a submitter and a grid_number, removes it from both the parser metadata and images_metadata
     def remove_entry(self, submitter, grid_number):
         """
@@ -348,7 +430,7 @@ class ImageProcessor():
 
         # Remove the entry from the parser metadata
         parser_metadata = parser_metadata[
-            ~((parser_metadata["submitter"] == submitter) & (parser_metadata["parser_message"].str.contains(str(grid_number), na=False)))
+            ~((parser_metadata["submitter"] == submitter) & (parser_metadata["parser_message"].str.contains("grid number " + str(grid_number), na=False)))
         ]
 
         # Check updated counts for debugging
@@ -489,15 +571,26 @@ class ImageProcessor():
 
         # These scale factors are EXTREMELY sensitive
         if logo_type == "light": # assume mobile
-            # Cell should be scaled proportionally to logo width
-            cell_width = logo_width * (275 / 165)
-            x_offset = logo_width * (182 / 160)
-            y_offset = logo_width * (150 / 145)
+            print(f"Logo width: {logo_width}")
+            if logo_width < 100:
+                DENOMINATOR = 410
+            else:
+                DENOMINATOR = 382
+            cell_width = logo_width * (638 / DENOMINATOR)
+            x_offset = logo_width * (436 / DENOMINATOR)
+            y_offset = logo_width * (396 / DENOMINATOR)
         else:
-            MOBILE_CUTOFF = 150 # mobile if higher pixels, computer if lower pixels
-            DENOMINATOR_LG = 180 # for mobile
-            DENOMINATOR_SM = 195 # for computer
-            DENOMINATOR = DENOMINATOR_SM if logo_width < MOBILE_CUTOFF else DENOMINATOR_LG
+            print(f"Logo width: {logo_width}")
+            if logo_width < 105:
+                DENOMINATOR = 200
+            elif logo_width < 110:
+                DENOMINATOR = 195
+            elif logo_width < 125:
+                DENOMINATOR = 180
+            elif logo_width < 170:
+                DENOMINATOR = 190
+            else:
+                DENOMINATOR = 180
             cell_width = logo_width * (290 / DENOMINATOR)
             x_offset = logo_width * (210 / DENOMINATOR) 
             y_offset = logo_width * (180 / DENOMINATOR)
@@ -537,7 +630,6 @@ class ImageProcessor():
                 })
         
         # # Display the image with green outlines around each cell
-        # from PIL import ImageDraw
         # img_with_grid = img.copy()
         # draw = ImageDraw.Draw(img_with_grid)
         # draw.rectangle([top_left, bottom_right], outline="red", width=3)
@@ -646,6 +738,13 @@ class ImageProcessor():
         # Step 3: Crop the image to the detected text box
         cropped_img = lower_half[top_border:bottom_border, :]
 
+        # Step 4 chop off the left 2% and right 2%
+        PADDING = 0.03
+        left_crop = int(PADDING * cropped_img.shape[1])  # 2% of the width
+        right_crop = cropped_img.shape[1] - left_crop
+
+        cropped_img = cropped_img[:, left_crop:right_crop]
+
         return cropped_img
 
 
@@ -689,6 +788,46 @@ class ImageProcessor():
             return f"Error extracting text: {e}"
         
 
+    def count_non_letter_characters(self, input_string):
+        """
+        Count the number of non-letter characters in a string.
+
+        Args:
+            input_string (str): The input string to analyze.
+
+        Returns:
+            int: The count of non-letter characters.
+        """
+        # Use regex to find all characters that are not letters (a-z, A-Z)
+        non_letter_characters = re.findall(r'[^a-zA-Z ]', input_string)
+        return len(non_letter_characters)
+    
+
+    def split_and_get_valid_word(self, input_string):
+        """
+        Splits a string on '\n' and returns the first part that is a valid word.
+
+        A valid word starts with a capital letter and contains at least one lowercase letter.
+
+        Args:
+            input_string (str): The input string.
+
+        Returns:
+            str: The first valid word found, or an empty string if none found.
+        """
+        # Split the string on '\n'
+        parts = input_string.split('\n')
+        
+        # Define the regex for a valid word
+        valid_word_regex = r'^[A-Z][a-z]+.*$'
+        
+        # Iterate over parts to find the first valid word
+        for part in parts:
+            if re.match(valid_word_regex, part.strip()):
+                return part.strip()
+        
+        return ""
+
     def extract_text_from_cells(self, image_path, grid_cells):
         """
         Extract OCR text from each cell in the grid.
@@ -704,6 +843,8 @@ class ImageProcessor():
         img = self.safe_cv2_read(image_path)
 
         cell_texts = {}
+
+        invalid_character_count = 0
 
         # Process each cell
         for cell in grid_cells:
@@ -722,9 +863,33 @@ class ImageProcessor():
             # Perform OCR on the cell
             ocr_text = pytesseract.image_to_string(cropped_pil, config=OCR_CONFIG).strip()
 
+            # Deal with unwanted newline characters
+            ocr_text = self.split_and_get_valid_word(ocr_text)
+
+            # Remove all characters until first letter
+            ocr_text = re.sub(r'^[^A-Z]*', '', ocr_text).strip()
+
+            # Remove all characters at the end that are not letters
+            ocr_text = re.sub(r'[^A-Za-z]+$', '', ocr_text).strip() 
+
+            # If ocr_text is too short, then coerce to empty string
+            if len(ocr_text) > 0 and len(ocr_text) < 3:
+                print(f"Warning: Name string {ocr_text} is too short")
+                ocr_text = ""
+
+            # If ocr_text is not a proper word, then return None
+            if len(ocr_text) > 0 and not bool(re.match(r"^[A-Z]", ocr_text)):
+                print(f"Warning: Improper name... {ocr_text}")
+                return None
+
             # Save the OCR text to the dictionary
             cell_texts[(row, col)] = ocr_text
 
+            invalid_character_count += self.count_non_letter_characters(ocr_text)
+
+            if invalid_character_count > 15:
+                return None
+            
         return cell_texts
 
 
@@ -829,17 +994,19 @@ class ImageProcessor():
         print("Step 3: Extracting text from image...")
         players_by_cell = self.extract_text_from_cells(image_path, grid_cells)
 
-        # # Show any subimages that did not extract text
-        # for cell, text in players_by_cell.items():
-        #     # if text is None:
-        #         for cell_data in grid_cells:
-        #             if cell_data["row"] == cell[0] and cell_data["col"] == cell[1]:
-        #                 top_left = cell_data["top_left"]
-        #                 bottom_right = cell_data["bottom_right"]
-        #                 cell_image = Image.open(image_path).crop((*top_left, *bottom_right))
-        #                 prep = preprocess_image(cell_image, dynamic_crop_function)
-        #                 prep.show()
-
+        # If unable to extract players_by_cell
+        if players_by_cell is None:
+            img = self.read_image(image_path)
+            img_with_grid = img.copy()
+            draw = ImageDraw.Draw(img_with_grid)
+            draw.rectangle([position[0], position[1]], outline="red", width=3)
+            for cell in grid_cells:
+                draw.rectangle([cell["top_left"], cell["bottom_right"]], outline="green", width=3)
+            img_with_grid.show()
+            parser_message = f"Warning: Unable to extract player names from grid"
+            quit()
+            return parser_message
+        
         # Convert players_by_cell into a dictionary indexed by position
         responses = {}
         position_mapping = {
@@ -867,7 +1034,6 @@ class ImageProcessor():
             parser_message = f"Failed to extract grid number from {image_path}"
             return parser_message
     
-
         # Step 5: Save the processed image and metadata
         print("Step 5: Copying and saving image...")
         dest_filename = f"{submitter}_{image_date}_grid_{grid_number}.jpg"
@@ -883,10 +1049,81 @@ class ImageProcessor():
             "image_filename": os.path.basename(dest_image_path),
         }
 
-        print(metadata)
+        print(json.dumps(metadata, indent=4, ensure_ascii=False))
 
         self.save_consolidated_metadata(metadata)
 
         parser_message = f"Success: Processed image with grid number {grid_number}"
 
         return parser_message
+    
+
+    def correct_typos_with_fuzzy_matching(self, similarity_threshold=70):
+        """
+        Correct typos in names within a DataFrame using fuzzy matching, create a new DataFrame with corrections,
+        and log all changes.
+
+        Args:
+            similarity_threshold (int): Minimum similarity score to consider two names as matching.
+
+        Returns:
+            tuple: A new corrected DataFrame and a log DataFrame of changes.
+        """
+
+        # Step 0: Load the original DataFrame
+        df = self.load_image_metadata()
+
+        # Step 1: Flatten all names into a single list
+        all_names = []
+        for responses in df['responses']:
+            all_names.extend([name for name in responses.values() if name])
+
+        # Step 2: Count name occurrences
+        name_counter = Counter(all_names)
+        unique_names = list(name_counter.keys())
+
+        # Step 3: Build the canonical mapping using fuzzy matching
+        canonical_mapping = {}
+        for name in unique_names:
+            # Extract the closest match and its similarity score
+            match = process.extractOne(name, unique_names, scorer=fuzz.ratio)
+            if match:  # Ensure a match was found
+                best_match, score = match[0], match[1]
+                if score >= similarity_threshold:
+                    canonical_mapping[name] = best_match
+                else:
+                    canonical_mapping[name] = name  # If no close match, keep the original
+            else:
+                canonical_mapping[name] = name  # In case no match is found
+        
+        # Step 4: Create a new DataFrame with corrected names and log changes
+        corrected_rows = []
+        changes_log = []
+
+        for _, row in df.iterrows():
+            corrected_responses = {}
+            for key, name in row['responses'].items():
+                if name and name in canonical_mapping and name != canonical_mapping[name]:
+                    corrected_name = canonical_mapping[name]
+                    # Log the change
+                    changes_log.append({
+                        "grid_number": row['grid_number'],
+                        "submitter": row['submitter'],
+                        "original_name": name,
+                        "corrected_name": corrected_name,
+                        "response_location": key
+                    })
+                    corrected_responses[key] = corrected_name
+                else:
+                    corrected_responses[key] = name
+
+            # Add the corrected row to the new dataset
+            corrected_row = row.copy()
+            corrected_row['responses'] = corrected_responses
+            corrected_rows.append(corrected_row)
+
+        # Step 5: Create the new DataFrame and the log DataFrame
+        new_df = pd.DataFrame(corrected_rows)
+        log_df = pd.DataFrame(changes_log)
+
+        return new_df, log_df
