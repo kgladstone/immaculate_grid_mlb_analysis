@@ -224,8 +224,12 @@ class ImageProcessor():
 
                     # Process the image
                     else:
-                        matrix = messages_data[(messages_data['grid_number'] == grid_number) & (messages_data['name'] == submitter)]['matrix'].iloc[0]
-                        parser_message = self.process_image_with_dynamic_grid(path, submitter, image_date, grid_number, matrix) # OCR operation
+                        try:
+                            matrix = messages_data[(messages_data['grid_number'] == grid_number) & (messages_data['name'] == submitter)]['matrix'].iloc[0]
+                            parser_message = self.process_image_with_dynamic_grid(path, submitter, image_date, grid_number, matrix) # OCR operation
+                        except IndexError as e:
+                            print(e)
+                            parser_message = f"Warning: Issue with the text matrixs"
             
             parser_data_entry = {
                 "path": path,
@@ -1151,7 +1155,10 @@ class ImageProcessor():
             "image_filename": os.path.basename(dest_image_path),
         }
 
+        print("*" * 80)
+        print("Success!!!")
         print(json.dumps(metadata, indent=4, ensure_ascii=False))
+        print("*" * 80)
 
         self.save_consolidated_metadata(metadata)
 

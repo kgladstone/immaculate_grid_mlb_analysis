@@ -706,12 +706,12 @@ def analyze_image_data_coverage(texts, image_metadata, image_parser_data):
     # Append the parser_data_aggregated to the buffer output
     print("\n", file=output)
 
-    # # iterate through names and print each name's parser_data_aggregated
-    # for name in parser_data_aggregated['submitter'].unique():
-    #     print(f"\nParser results for {name}", file=output)
-    #     person_specifc_aggregated = parser_data_aggregated[parser_data_aggregated['submitter'] == name]
-    #     person_specifc_aggregated.to_string(buf=output, index=False)
-    #     print("\n", file=output)
+    # iterate through names and print each name's parser_data_aggregated
+    for name in parser_data_aggregated['submitter'].unique():
+        print(f"\nParser results for {name}", file=output)
+        person_specifc_aggregated = parser_data_aggregated[parser_data_aggregated['submitter'] == name]
+        person_specifc_aggregated.to_string(buf=output, index=False)
+        print("\n", file=output)
 
     return output.getvalue()
 
