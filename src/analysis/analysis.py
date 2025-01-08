@@ -204,81 +204,114 @@ def get_person_to_type(texts, prompts, person_to_category):
     return person_to_type
 
 
-def analyze_easiest_teams(categories, person_to_category):
+def analyze_person_type_performance(person_to_type):
     """
-    Identify and rank the easiest teams based on average performance.
+    Convert the person-to-type performance dictionary into a crosstab DataFrame with a consensus row.
+
+    Args:
+        person_to_type (dict): Performance data for each person and category type.
+
+    Returns:
+        pd.DataFrame: A crosstab summarizing performance metrics with:
+                      - Rows as persons (including a "Consensus" row).
+                      - Columns as types.
+                      - Values as "Accuracy% (Count)".
+    """
+    rows = []
+
+    # Iterate through each person and their performance data
+    for person, types in person_to_type.items():
+        for tag, (correct, total) in types.items():
+            acc = round(100 * (correct / total)) if total > 0 else 0  # Calculate accuracy
+            rows.append({
+                "Person": person,
+                "Type": tag,
+                "Correct": correct,
+                "Total": total,
+                "Value": f"{acc}% ({total})"
+            })
+
+    # Convert rows into a DataFrame
+    df = pd.DataFrame(rows)
+
+    # Calculate consensus accuracy for each type
+    consensus_data = df.groupby("Type").apply(
+        lambda group: (group["Correct"].sum(), group["Total"].sum())
+    )
+
+    # Prepare the consensus row
+    consensus_row = {
+        "Person": "Consensus",
+    }
+    for tag, (correct_sum, total_sum) in consensus_data.items():
+        if total_sum > 0:
+            consensus_acc = round(100 * correct_sum / total_sum)
+            consensus_row[tag] = f"{consensus_acc}% ({total_sum})"
+        else:
+            consensus_row[tag] = "0% (0)"
+
+    # Create a crosstab with persons as rows and types as columns
+    crosstab_df = df.pivot(index="Person", columns="Type", values="Value").fillna("0% (0)")
+    crosstab_df.reset_index(inplace=True)  # Convert the index into a regular column
+
+    # Append the consensus row
+    consensus_row_df = pd.DataFrame([consensus_row])
+    crosstab_df = pd.concat([crosstab_df, consensus_row_df], ignore_index=True)
+
+    return crosstab_df
+
+
+def analyze_team_performance(categories, person_to_category):
+    """
+    Analyze team performance by calculating consensus accuracy and standard deviation of accuracy.
 
     Args:
         categories (set): Set of all unique categories.
         person_to_category (dict): Performance data for each person and category.
 
     Returns:
-        str: A formatted string listing the easiest teams in descending order of average performance.
+        pd.DataFrame: A DataFrame with columns Team, Consensus Accuracy, and Std Deviation of Accuracy.
     """
     overall = []
-    for category in categories:
-        values = []
-        counts = []
-        for person in person_to_category:
-            # Calculate accuracy for each person in the category
-            values.append(person_to_category[person][category][0] / person_to_category[person][category][1])
-            counts.append(person_to_category[person][category][1])
-        if category_is_team(category):
-            # Calculate average performance for the category
-            overall.append((category, sum(values) / len(values)))
 
-    # Sort teams by their average performance in descending order
-    result = "Consensus Easiest Teams\n"
-    overall = sorted(overall, key=lambda x: x[1], reverse=True)
-    for i, (category, avg) in enumerate(overall):
-        result += f"{i + 1}. {category} ({round(100 * avg)}%)\n"
-    return result
-
-
-def analyze_team_std_dev(categories, person_to_category):
-    """
-    Calculate standard deviation of team performance to identify variability.
-
-    Args:
-        categories (set): Set of all unique categories.
-        person_to_category (dict): Performance data for each person and category.
-
-    Returns:
-        str: A formatted string listing teams ranked by performance variability.
-    """
-    overall = []
     for category in categories:
         values = []
         for person in person_to_category:
-            # Calculate accuracy for each person in the category
-            values.append(person_to_category[person][category][0] / person_to_category[person][category][1])
-        if category_is_team(category):
-            # Calculate standard deviation of performance for the category
-            overall.append((category, np.std(values)))
+            if category in person_to_category[person]:
+                correct, total = person_to_category[person][category]
+                if total > 0:
+                    values.append(correct / total)
+        
+        # Only process teams
+        if category_is_team(category) and values:
+            consensus_accuracy = np.mean(values) * 100  # Average accuracy as percentage
+            std_deviation = np.std(values) * 100  # Standard deviation as percentage
+            overall.append({
+                "Team": category,
+                "Consensus Accuracy": str(round(consensus_accuracy, 1)) + "%",
+                "Std Deviation of Accuracy": str(round(std_deviation, 1)) + "%"
+            })
 
-    # Sort teams by their standard deviation in descending order
-    result = "Biggest Team Standard Deviations\n"
-    overall = sorted(overall, key=lambda x: x[1], reverse=True)
-    for i, (category, std_dev) in enumerate(overall):
-        result += f"{i + 1}. {category} ({round(100 * std_dev)}%)\n"
-    return result
+    # Create and return the DataFrame
+    df = pd.DataFrame(overall)
+    df.sort_values(by="Consensus Accuracy", ascending=False, inplace=True)  # Sort by consensus accuracy
+    return df
 
 
 def analyze_person_prompt_performance(
-    categories, person_to_category, categories_clearing_threshold=None, direction="Best", category_type="Team"
+    categories, person_to_category, categories_clearing_threshold=None, category_type="Team"
 ):
     """
-    Analyze the best or worst performing person for teams or non-team categories.
+    Analyze the best and worst performing persons for teams or non-team categories and return as a DataFrame.
 
     Args:
         categories (set): Set of all unique categories.
         person_to_category (dict): Performance data for each person and category.
         categories_clearing_threshold (list, optional): List of categories meeting the threshold. Required for non-team categories.
-        direction (str): Whether to analyze "Best" or "Worst" performers. Default is "Best".
         category_type (str): Type of category to analyze ("Team" or "Category"). Default is "Team".
 
     Returns:
-        str: A formatted string summarizing the analysis.
+        pd.DataFrame: A DataFrame summarizing the best and worst performers for each category.
     """
     overall = []
     is_team = category_type == "Team"
@@ -286,55 +319,74 @@ def analyze_person_prompt_performance(
         category_is_team if is_team 
         else lambda x: x in (categories_clearing_threshold or []) and not category_is_team(x)
     )
-    comparator = max if direction == "Best" else min
-    default_value = 0 if direction == "Best" else 101
 
-    # Filter categories and find the best or worst performer for each
+    # Filter categories and find the best and worst performers for each
     for category in filter(threshold_filter, categories):
-        extreme_acc = default_value
-        for person in person_to_category:
-            acc = person_to_category[person][category][0] / person_to_category[person][category][1]
-            extreme_acc = comparator(extreme_acc, acc)
+        best_acc = 0
+        worst_acc = 101
+        best_people = []
+        worst_people = []
 
-        # Identify all persons who achieved the extreme accuracy
-        extreme_people = [
-            person for person in person_to_category
-            if abs(person_to_category[person][category][0] / person_to_category[person][category][1] - extreme_acc) < 0.0001
-        ]
-        overall.append((category, ", ".join(extreme_people)))
+        for person, data in person_to_category.items():
+            if category not in data:
+                continue
+            correct, total = data[category]
+            if total == 0:
+                continue
+            acc = correct / total
 
-    # Format the results
-    result_type = f"{direction} Person for Each {'Team' if is_team else 'Non-Team Category'}"
-    result = f"{result_type}\n"
-    spacing = 35  # Define a standard number of spaces for alignment
-    for category, people in sorted(overall, key=lambda x: x[0]):
-        result += f"{category.ljust(spacing)}{people}\n"
-    return result
+            # Update best performers
+            if acc > best_acc:
+                best_acc = acc
+                best_people = [person]
+            elif acc == best_acc:
+                best_people.append(person)
+
+            # Update worst performers
+            if acc < worst_acc:
+                worst_acc = acc
+                worst_people = [person]
+            elif acc == worst_acc:
+                worst_people.append(person)
+
+        if best_people or worst_people:
+            overall.append({
+                "Category": category,
+                "Best Person": ", ".join(best_people),
+                "Best Accuracy": f"{round(best_acc * 100, 1)}%",
+                "Worst Person": ", ".join(worst_people),
+                "Worst Accuracy": f"{round(worst_acc * 100, 1)}%",
+            })
+
+    # Create and return the DataFrame
+    df = pd.DataFrame(overall)
+    df.sort_values(by="Category", inplace=True)  # Sort by category
+    return df
 
 
-def analyze_hardest_teams(texts, prompts):
+def analyze_hardest_intersections(texts, prompts, mode="team"):
     """
-    Identify the hardest team intersections for each person and overall consensus.
+    Identify the hardest intersections aggregated at the team level for each person and overall consensus.
 
     Args:
         texts (dict): Dictionary mapping persons to their games.
         prompts (pd.DataFrame): DataFrame containing prompt data.
+        mode (str): The mode of analysis, either "team" or "stat". Default is "team".
 
     Returns:
-        str: A formatted string summarizing the hardest team intersections.
+        pd.DataFrame: A DataFrame with rows for each team and columns for each person and consensus difficulty.
     """
 
     prompts_clean = prompts.copy()
     prompts_clean.columns = ["grid_id", "00", "01", "02", "10", "11", "12", "20", "21", "22"]
 
-    result = StringIO()
-    hardest_teams = {person: {team: [0, 0] for team in TEAM_LIST} for person in texts}
+    # Initialize data structure for hardest intersections
+    hardest_intersections = {person: {team: [0, 0] for team in TEAM_LIST} for person in texts}
 
-    # Analyze each person's games for hardest team intersections
     for person, games in texts.items():
         for game in games:
-            id = game.grid_number
-            prompt_rows = prompts_clean[prompts_clean["grid_id"] == id]
+            grid_id = game.grid_number
+            prompt_rows = prompts_clean[prompts_clean["grid_id"] == grid_id]
             if len(prompt_rows) != 1:
                 continue
             prompt_row = prompt_rows.iloc[0][1:]
@@ -343,101 +395,53 @@ def analyze_hardest_teams(texts, prompts):
             for i in range(3):
                 for j in range(3):
                     part_one, part_two = get_categories_from_prompt(prompt_row[f"{i}{j}"])
-                    if category_is_team(part_one) and category_is_team(part_two):
-                        team_one = get_team_from_category(part_one)
-                        team_two = get_team_from_category(part_two)
+
+                    if mode == "team":
+                        # Handle team-to-team intersections
+                        if category_is_team(part_one) and category_is_team(part_two):
+                            team_one = get_team_from_category(part_one)
+                            team_two = get_team_from_category(part_two)
+                            if matrix[i][j]:
+                                hardest_intersections[person][team_one][0] += 1
+                                hardest_intersections[person][team_two][0] += 1
+                            hardest_intersections[person][team_one][1] += 1
+                            hardest_intersections[person][team_two][1] += 1
+
+                    elif mode == "stat":
+                        # Handle team-to-stat intersections
+                        if category_is_team(part_one) and not category_is_team(part_two):
+                            team = get_team_from_category(part_one)
+                        elif not category_is_team(part_one) and category_is_team(part_two):
+                            team = get_team_from_category(part_two)
+                        else:
+                            continue
+
                         if matrix[i][j]:
-                            hardest_teams[person][team_one][0] += 1
-                            hardest_teams[person][team_two][0] += 1
-                        hardest_teams[person][team_one][1] += 1
-                        hardest_teams[person][team_two][1] += 1
+                            hardest_intersections[person][team][0] += 1
+                        hardest_intersections[person][team][1] += 1
 
-    # Output results for each person
-    for person in hardest_teams:
-        result.write(f"====={person}=====\n")
-        for i, (team, res) in enumerate(sorted(hardest_teams[person].items(), key=lambda x: x[1][0] / x[1][1], reverse=True)):
-            result.write(f"{i + 1}. {team} ({round(100 * res[0] / res[1])}%)\n")
-        result.write("\n\n")
-
-    # Calculate consensus difficulty for all teams
-    consensus_intersection_difficulty = {}
+    # Build results into a DataFrame
+    rows = []
     for team in TEAM_LIST:
-        right = sum(hardest_teams[person][team][0] for person in hardest_teams)
-        total = sum(hardest_teams[person][team][1] for person in hardest_teams)
-        consensus_intersection_difficulty[team] = right / total
+        row = {"Team": team}
+        correct_total = [0, 0]
 
-    result.write("=====Consensus=====\n")
-    for i, (team, pct) in enumerate(sorted(consensus_intersection_difficulty.items(), key=lambda x: x[1], reverse=True)):
-        result.write(f"{i + 1}. {team} ({round(100 * pct)}%)\n")
+        for person in texts:
+            correct, total = hardest_intersections[person].get(team, [0, 0])
+            accuracy = round(100 * correct / total, 1) if total > 0 else 0.0
+            row[person] = f"{accuracy}%"
+            correct_total[0] += correct
+            correct_total[1] += total
 
-    result_string = result.getvalue()
-    result.close()
-    return result_string
+        # Calculate consensus accuracy
+        consensus_accuracy = round(100 * correct_total[0] / correct_total[1], 1) if correct_total[1] > 0 else 0.0
+        row["Consensus"] = f"{consensus_accuracy}%"
+        rows.append(row)
 
-
-def analyze_hardest_team_stats(texts, prompts):
-    """
-    Identify the hardest team-to-stat intersections for each person and overall consensus.
-
-    Args:
-        texts (dict): Dictionary mapping persons to their games.
-        prompts (pd.DataFrame): DataFrame containing prompt data.
-
-    Returns:
-        str: A formatted string summarizing the hardest team-to-stat intersections.
-    """
-
-    prompts_clean = prompts.copy()
-    prompts_clean.columns = ["grid_id", "00", "01", "02", "10", "11", "12", "20", "21", "22"]
-
-    result = StringIO()
-    hardest_team_stats = {person: {team: [0, 0] for team in TEAM_LIST} for person in texts}
-
-    # Analyze each person's games for hardest team-to-stat intersections
-    for person, games in texts.items():
-        for game in games:
-            id = game.grid_number
-            prompt_rows = prompts_clean[prompts_clean["grid_id"] == id]
-            if len(prompt_rows) != 1:
-                continue
-            prompt_row = prompt_rows.iloc[0][1:]
-
-            matrix = game.matrix
-            for i in range(3):
-                for j in range(3):
-                    part_one, part_two = get_categories_from_prompt(prompt_row[f"{i}{j}"])
-                    if category_is_team(part_one) and not category_is_team(part_two):
-                        team_one = get_team_from_category(part_one)
-                        if matrix[i][j]:
-                            hardest_team_stats[person][team_one][0] += 1
-                        hardest_team_stats[person][team_one][1] += 1
-                    elif not category_is_team(part_one) and category_is_team(part_two):
-                        team_two = get_team_from_category(part_two)
-                        if matrix[i][j]:
-                            hardest_team_stats[person][team_two][0] += 1
-                        hardest_team_stats[person][team_two][1] += 1
-
-    # Output results for each person
-    for person in hardest_team_stats:
-        result.write(f"====={person}=====\n")
-        for i, (team, res) in enumerate(sorted(hardest_team_stats[person].items(), key=lambda x: x[1][0] / x[1][1], reverse=True)):
-            result.write(f"{i + 1}. {team} ({round(100 * res[0] / res[1])}%)\n")
-        result.write("\n\n")
-
-    # Calculate consensus difficulty for all teams
-    consensus_intersection_difficulty = {}
-    for team in TEAM_LIST:
-        right = sum(hardest_team_stats[person][team][0] for person in hardest_team_stats)
-        total = sum(hardest_team_stats[person][team][1] for person in hardest_team_stats)
-        consensus_intersection_difficulty[team] = right / total
-
-    result.write("=====Consensus=====\n")
-    for i, (team, pct) in enumerate(sorted(consensus_intersection_difficulty.items(), key=lambda x: x[1], reverse=True)):
-        result.write(f"{i + 1}. {team} ({round(100 * pct)}%)\n")
-
-    result_string = result.getvalue()
-    result.close()
-    return result_string
+    # Create and return the DataFrame
+    df = pd.DataFrame(rows)
+    df.sort_values(by="Consensus", ascending=True, inplace=True)  # Sort by consensus difficulty
+    return df
 
 
 def analyze_most_successful_exact_intersections(texts, prompts, name):
@@ -558,7 +562,7 @@ def analyze_person_to_category(person_to_category, threshold=25):
             # Only include categories that meet the attempt threshold
             if total > threshold:
                 accuracy = (correct / total) * 100  # Calculate accuracy as percentage
-                value = f"{round(accuracy, 2)}% ({total})"  # Format value
+                value = f"{round(accuracy, 1)}% ({total})"  # Format value
                 if category not in table_data:
                     table_data[category] = {}
                     consensus_data[category] = {"weighted_sum": 0, "total_weight": 0}
@@ -575,7 +579,7 @@ def analyze_person_to_category(person_to_category, threshold=25):
         total_weight = consensus_data[category]["total_weight"]
         weighted_sum = consensus_data[category]["weighted_sum"]
         consensus = weighted_sum / total_weight if total_weight > 0 else 0
-        table_data[category]["Consensus"] = f"{round(consensus, 2)}%"
+        table_data[category]["Consensus"] = f"{round(consensus, 1)}%"
 
     # Convert the dictionary to a pandas DataFrame
     df = pd.DataFrame(table_data).T  # Transpose to make categories the rows
@@ -713,70 +717,111 @@ def analyze_image_data_coverage(texts, image_metadata, image_parser_data):
 
 
 def analyze_top_players_by_month(image_metadata, cutoff):
-    grid_month_mapping = [(entry['grid_number'], entry['date'][:7]) for (_, entry) in image_metadata.iterrows()]
+    """
+    Analyze consensus top players by month and return a formatted string with consistent spacing.
+
+    Args:
+        image_metadata (pd.DataFrame): DataFrame containing image metadata.
+        cutoff (int): The number of top players to analyze for each month.
+
+    Returns:
+        str: A formatted string summarizing consensus top players for each month.
+    """
+    # Map grid numbers to months
+    grid_month_mapping = [(entry['grid_number'], entry['date'][:7]) for _, entry in image_metadata.iterrows()]
     grid_month_dict = {}
     for grid_number, month in grid_month_mapping:
         if month not in grid_month_dict:
-            grid_month_dict[month] = list()
+            grid_month_dict[month] = []
         grid_month_dict[month].append(grid_number)
-        
+    
     result = StringIO()
 
-    # For each month, get the list of grids and get consensus top players
+    # For each month, get the list of grids and compute consensus top players
     for month in dict(sorted(grid_month_dict.items())):
-        players_of_month = analyze_top_players_by_submitter(image_metadata, "All", cutoff, grid_month_dict[month])
-        print(f"Month: {month}", file=result)
-        print(players_of_month, file=result)
+        grid_numbers = grid_month_dict[month]
+
+        # Aggregate player frequencies across all submitters for the given grids
+        player_frequency = {}
+        filtered_metadata = image_metadata[image_metadata['grid_number'].isin(grid_numbers)]
+        for _, row in filtered_metadata.iterrows():
+            responses = row['responses'].values()
+            for response in responses:
+                if response != '':
+                    player_frequency[response] = player_frequency.get(response, 0) + 1
+
+        # Create a sorted list of top players for the month
+        sorted_players = sorted(player_frequency.items(), key=lambda x: x[1], reverse=True)[:cutoff]
+
+        # Add month header
+        result.write(f"Month: {month}\n")
+        result.write(f"{'Rank':<6}{'Player':<20}{'Frequency':<10}\n")  # Header with spacing
+        result.write("-" * 40 + "\n")  # Separator
+
+        # Add rows with consistent spacing
+        for rank, (player, frequency) in enumerate(sorted_players, start=1):
+            result.write(f"{rank:<6}{player:<20}{frequency:<10}\n")
+
+        result.write("\n")
 
     return result.getvalue()
 
 
-# Analyze top X players (by frequency) from each submitter
-def analyze_top_players_by_submitter(image_metadata, submitter, cutoff, grid_number_list=None):
+def analyze_top_players_by_submitter(image_metadata, cutoff, grid_number_list=None):
     """
-    Analyze the top players by frequency for each submitter.
+    Analyze the top players by frequency for each submitter, outputting a DataFrame.
 
     Args:
         image_metadata (pd.DataFrame): DataFrame containing image metadata.
         cutoff (int): The number of top players to analyze.
+        grid_number_list (list, optional): List of grid numbers to filter the data.
+
+    Returns:
+        pd.DataFrame: A DataFrame with columns for Rank and each submitter, where values are
+                      the player at rank with the count in parentheses.
     """
-    result = StringIO()
-
-    player_frequency = {}
-
-    # Preprocess image list based on grid numbers
+    # Filter image metadata based on grid numbers if provided
     if grid_number_list is not None:
         image_metadata_preprocessed = image_metadata[image_metadata['grid_number'].isin(grid_number_list)]
     else:
         image_metadata_preprocessed = image_metadata
 
-    # Analyze the top players by frequency for each submitter
-    for row in image_metadata_preprocessed.iterrows():
-        submitter_name = row[1]['submitter']
-        if submitter_name != submitter and not (submitter == "All" and submitter_name in GRID_PLAYERS_RESTRICTED):
-            continue
-        responses = row[1]['responses'].values()
+    # Initialize player frequency dictionary by submitter
+    submitter_to_player_frequency = {}
+
+    # Populate player frequency data for each submitter
+    for _, row in image_metadata_preprocessed.iterrows():
+        submitter_name = row['submitter']
+        responses = row['responses'].values()
+        if submitter_name not in submitter_to_player_frequency:
+            submitter_to_player_frequency[submitter_name] = {}
         for response in responses:
             if response != '':
-                player_frequency[response] = player_frequency.get(response, 0) + 1
+                submitter_to_player_frequency[submitter_name][response] = (
+                    submitter_to_player_frequency[submitter_name].get(response, 0) + 1
+                )
 
-    df = pd.DataFrame(player_frequency.items(), columns=['Player', 'Frequency'])
-    sorted_df = df.sort_values(by='Frequency', ascending=False).reset_index()
+    # Create DataFrame for the top players
+    data = []
+    for submitter, player_freq in submitter_to_player_frequency.items():
+        sorted_players = sorted(player_freq.items(), key=lambda x: x[1], reverse=True)[:cutoff]
+        for rank, (player, freq) in enumerate(sorted_players, start=1):
+            if len(data) < rank:
+                data.append({"Rank": rank})
+            data[rank - 1][submitter] = f"{player} ({freq})"
 
-    # Output the top players by frequency for the submitter
-    if submitter != "All":
-        print(f"Top {cutoff} Players for {submitter}", file=result)
-    else:
-        print(f"Top {cutoff} Players Overall", file=result)
-    for i in range(cutoff):
-        if i < len(sorted_df):
-            print(f"{i + 1}. {sorted_df['Player'][i]} ({sorted_df['Frequency'][i]})", file=result)
-    print("\n", file=result)
+    # Convert the list of dictionaries to a DataFrame
+    df = pd.DataFrame(data)
 
-    # Get the full output as a string
-    result_string = result.getvalue()
-    result.close()  # Close the StringIO object
-    return result_string
+    # Ensure all columns are present even if some submitters have fewer players
+    for submitter in submitter_to_player_frequency:
+        if submitter not in df.columns:
+            df[submitter] = None
+
+    # Sort columns so "Rank" is first
+    df = df[["Rank"] + [col for col in df.columns if col != "Rank"]]
+
+    return df
 
 
 def analyze_grid_cell_with_shared_guesses(image_metadata, prompts, player_list):
@@ -941,14 +986,64 @@ def analyze_grid_cell_with_shared_guesses(image_metadata, prompts, player_list):
 #--------------------------------------------------------------------------------------------------
 # Plotting functions
 
-# Graph number of immaculates
-def plot_immaculates(texts, color_map):
+def plot_summary_metrics(texts, color_map):
+    """
+    Create a 2x2 grid of subplots to visualize:
+    1. Number of Immaculates
+    2. Average Correct
+    3. Average Score
+    4. Average Rarity of Correct Square
+
+    Args:
+        texts (dict): Dictionary containing player data.
+        color_map (dict): Dictionary mapping player names to colors.
+    """
+    # Initialize the figure and subplots
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    plt.subplots_adjust(hspace=0.4, wspace=0.3)  # Adjust spacing between subplots
+
+    # Plot 1: Number of Immaculates
     counts = []
     for person in texts:
         data = [(1 if obj.correct == 9 else 0) for obj in texts[person]]
         counts.append(sum(data))
-    plt.bar([person for person in texts], counts, color=[color_map[person] for person in texts])
-    plt.title("Number of Immaculates")
+    axes[0, 0].bar([person for person in texts], counts, color=[color_map[person] for person in texts])
+    axes[0, 0].set_title("Number of Immaculates")
+
+    # Prepare data for the other plots
+    texts_melted = make_texts_melted(texts)
+
+    # Plot 2: Average Correct
+    analysis_correct = texts_melted.groupby('name')['correct'].mean().reset_index()
+    axes[0, 1].bar(
+        analysis_correct['name'],
+        analysis_correct['correct'],
+        color=[color_map[person] for person in analysis_correct['name']]
+    )
+    axes[0, 1].set_title("Average Correct")
+
+    # Plot 3: Average Score
+    analysis_score = texts_melted.groupby('name')['score'].mean().reset_index()
+    axes[1, 0].bar(
+        analysis_score['name'],
+        analysis_score['score'],
+        color=[color_map[person] for person in analysis_score['name']]
+    )
+    axes[1, 0].set_title("Average Score")
+
+    # Plot 4: Average Rarity of Correct Square
+    analysis_rarity = texts_melted.groupby('name')['average_score_of_correct'].mean().reset_index()
+    axes[1, 1].bar(
+        analysis_rarity['name'],
+        analysis_rarity['average_score_of_correct'],
+        color=[color_map[person] for person in analysis_rarity['name']]
+    )
+    axes[1, 1].set_title("Average Rarity of Correct Square")
+
+    # Set overall plot title
+    fig.suptitle("Summary Metrics for Players", fontsize=16, fontweight='bold')
+    
+    # Show the plots
     plt.show()
 
     
@@ -990,30 +1085,8 @@ def plot_correctness(texts, color_map):
     if len(texts) < 6:
         axs[5].set_visible(False)
     
-    fig.suptitle("Correctness Distribution")
+    fig.suptitle("Correctness Distribution", fontsize=16, fontweight='bold')
     plt.subplots_adjust(hspace=0.5)
-    plt.show()
-
-def plot_avg(texts, color_map, title):
-    texts_melted = make_texts_melted(texts)
-    
-    if title == "Average Correct":
-        analysis_summary = texts_melted.groupby('name')['correct'].mean().reset_index().rename(columns={"correct": "value"})
-
-    elif title == "Average Score":
-        analysis_summary = texts_melted.groupby('name')['score'].mean().reset_index().rename(columns={"score": "value"})
-
-    elif title == "Average Rarity of Correct Square":
-        analysis_summary = texts_melted.groupby('name')['average_score_of_correct'].mean().reset_index().rename(columns={"average_score_of_correct" : "value"})
-
-    else:
-        return None
-    
-    plt.bar(
-        analysis_summary.name, 
-        analysis_summary.value, 
-        color=[color_map[person] for person in analysis_summary.name])
-    plt.title(title)
     plt.show()
 
 
@@ -1033,7 +1106,7 @@ def plot_smoothed_metrics(texts, metric, title, ylabel, color_map):
 
     # Formatting the plot
     plt.legend()
-    plt.title(title)
+    plt.title(title, fontsize=16, fontweight='bold')
     plt.xlabel("Date")
     plt.ylabel(ylabel)
     plt.xticks(rotation=45)
@@ -1065,6 +1138,7 @@ def plot_win_rates(texts, color_map):
 
     # Adjust the layout of the subplots
     plt.subplots_adjust(hspace=0.5, wspace=0.5)
+    fig.suptitle("Win Rates", fontsize=16, fontweight='bold')
     plt.show()
 
 

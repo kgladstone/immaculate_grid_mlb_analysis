@@ -20,14 +20,13 @@ from data.image_processor import ImageProcessor
 from data.data_prep import (
     preprocess_data_into_texts_structure, make_color_map,
     build_category_structure, build_person_category_structure,
-    person_to_type_to_string
 )
 from analysis.analysis import (
-    get_category_clearing_threshold, get_person_to_type, analyze_easiest_teams,
-    analyze_team_std_dev, analyze_person_prompt_performance, analyze_hardest_teams,
-    analyze_hardest_team_stats, analyze_most_successful_exact_intersections,
-    analyze_empty_team_team_intersections, 
-    plot_immaculates, plot_correctness, plot_avg, plot_smoothed_metrics, plot_win_rates,
+    get_category_clearing_threshold, get_person_to_type, 
+    analyze_person_type_performance, analyze_team_performance, 
+    analyze_person_prompt_performance, analyze_hardest_intersections, 
+    analyze_most_successful_exact_intersections, analyze_empty_team_team_intersections, 
+    plot_summary_metrics, plot_correctness, plot_smoothed_metrics, plot_win_rates,
     plot_best_worst_scores, plot_best_worst_scores_30,
     analyze_top_players_by_submitter,
     analyze_grid_cell_with_shared_guesses,
@@ -64,7 +63,7 @@ class ReportGenerator:
 
         # Check if output is a DataFrame (table)
         if isinstance(output, pd.DataFrame):
-            MAX_ROWS_PER_PAGE = 50  # Maximum rows to display per page
+            MAX_ROWS_PER_PAGE = 45  # Maximum rows to display per page
             total_pages = math.ceil(len(output) / MAX_ROWS_PER_PAGE)
 
             for page_num in range(total_pages):
@@ -77,9 +76,13 @@ class ReportGenerator:
                 fig, ax = plt.subplots(figsize=(8.5, 11))  # Standard letter size
                 ax.axis('off')
 
-                # Add the title
-                ax.text(0.5, 1.05, f"{page_title} (Page {page_num + 1}/{total_pages})",
-                        fontsize=16, ha='center', va='top', fontweight='bold')
+                # Add title
+                if total_pages > 1:
+                    ax.text(0.5, 1, f"{page_title} (Page {page_num + 1}/{total_pages})",
+                            fontsize=14, ha='center', va='top', fontweight='bold')
+                else:
+                    ax.text(0.5, 1, page_title,
+                            fontsize=14, ha='center', va='top', fontweight='bold')
 
                 # Render the DataFrame as a table with adjusted column width
                 table = ax.table(
@@ -98,11 +101,26 @@ class ReportGenerator:
                     table.auto_set_column_width([i])  # Auto-resize column width
                     table[0, i].set_width(column_width)  # Explicitly set width for each column
 
-                # Apply a green background to the header row
+                # Apply a green background to the header row and format text
                 for (row, col), cell in table.get_celld().items():
                     if row == 0:  # Header row
+                        # Format header text: Title case and replace underscores with spaces
+                        cell_text = cell.get_text().get_text()
+                        formatted_text = cell_text.replace("_", " ").title()
+                        cell.get_text().set_text(formatted_text)      
+
+                        # Apply styling
                         cell.set_facecolor("#32CD32")  # Lime Green color
                         cell.set_text_props(weight='bold', color='white')  # White text, bold font
+
+                    # Check if the row contains "Consensus" and format it
+                    else:
+                        # Extract the cell's text content
+                        cell_text = cell.get_text().get_text()
+
+                        # Check if the cell belongs to a row containing "Consensus"
+                        if "Consensus" in table[row, 0].get_text().get_text():  # Check the first column of the row
+                            cell.set_text_props(weight='bold')  # Bold text for all cells in the "Consensus" row
 
                 # Adjust layout
                 plt.tight_layout()
@@ -209,10 +227,7 @@ class ReportGenerator:
 
         # Core graph functions
         core_graphs = [
-            ("Number of Immaculates", plot_immaculates, (self.texts, self.color_map)),
-            ("Average Correct", plot_avg, (self.texts, self.color_map, 'Average Correct')),
-            ("Average Score", plot_avg, (self.texts, self.color_map, 'Average Score')),
-            ("Average Rarity of Correct Square", plot_avg, (self.texts, self.color_map, 'Average Rarity of Correct Square')),
+            ("High Level Summary Metrics", plot_summary_metrics, (self.texts, self.color_map)),
             ("Correctness Distribution", plot_correctness, (self.texts, self.color_map)),
             ("Smoothed Scores Over Time", plot_smoothed_metrics, (self.texts, 'smoothed_score', "Smoothed Scores Over Time", "Smoothed Score", self.color_map)),
             ("Smoothed Correct Over Time", plot_smoothed_metrics, (self.texts, 'smoothed_correct', "Smoothed Correct Over Time", "Smoothed Correct", self.color_map)),
@@ -227,16 +242,14 @@ class ReportGenerator:
 
         # Generic text page functions
         generic_pages = [
-            ("Type Performance Overview", person_to_type_to_string, (person_to_type,)),
+            ("Type Performance Overview", analyze_person_type_performance, (person_to_type,)),
             ("Category Performance Overview", analyze_person_to_category, (person_to_category,)),
-            ("Easiest Teams Overview", analyze_easiest_teams, (categories, person_to_category)),
-            ("Easiest Teams Standard Deviation", analyze_team_std_dev, (categories, person_to_category)),
-            ("Best Team Overview", analyze_person_prompt_performance, (categories, person_to_category, categories_clearing_threshold, "Best", "Team")),
-            ("Worst Team Overview", analyze_person_prompt_performance, (categories, person_to_category, categories_clearing_threshold, "Worst", "Team")),
-            ("Best Category Overview", analyze_person_prompt_performance, (categories, person_to_category, categories_clearing_threshold, "Best", "Category")),
-            ("Worst Category Overview", analyze_person_prompt_performance, (categories, person_to_category, categories_clearing_threshold, "Worst", "Category")),
-            ("Hardest Teams Overview", analyze_hardest_teams, (self.texts, self.prompts)),
-            ("Hardest Teams Stats Overview", analyze_hardest_team_stats, (self.texts, self.prompts)),
+            ("Easiest Teams Overview (Consensus)", analyze_team_performance, (categories, person_to_category)),
+            ("Best/Worst Team Overview (Individual)", analyze_person_prompt_performance, (categories, person_to_category, categories_clearing_threshold, "Team")),
+            ("Best/Worst Category Overview (Individual)", analyze_person_prompt_performance, (categories, person_to_category, categories_clearing_threshold, "Category")),
+            ("Hardest Teams for Team-Team Intersections", analyze_hardest_intersections, (self.texts, self.prompts, "team")),
+            ("Hardest Teams for Team-Stat Intersections", analyze_hardest_intersections, (self.texts, self.prompts, "stat")),
+            ("Top Players Used", analyze_top_players_by_submitter, (self.image_metadata, 25)),
             ("Bans and Saves", analyze_grid_cell_with_shared_guesses, (self.image_metadata, self.prompts, GRID_PLAYERS_RESTRICTED)),
             ("Popular Players by Month", analyze_top_players_by_month, (self.image_metadata, 5)),
         ]
@@ -250,7 +263,6 @@ class ReportGenerator:
         person_specific_templates = [
             ("Most Successful Intersections", analyze_most_successful_exact_intersections, (self.texts, self.prompts, None)),
             ("Never Shown Intersections", analyze_empty_team_team_intersections, (self.texts, self.prompts, None, categories)),
-            ("Top Players Used", analyze_top_players_by_submitter, (self.image_metadata, None, 25)),
         ]
 
         person_specific_pages = [

@@ -329,28 +329,6 @@ def build_intersection_structure_for_person(texts, prompts, name):
     return result
 
 
-def person_to_type_to_string(person_to_type):
-    """
-    Convert the person-to-type performance dictionary into a formatted string.
-
-    Args:
-        person_to_type (dict): Performance data for each person and category type.
-
-    Returns:
-        str: Formatted string summarizing performance metrics.
-    """
-    result = ""
-    # Iterate through each person and their performance data
-    for person in person_to_type:
-        result += f"{person}\n"
-        for tag, (correct, total) in person_to_type[person].items():
-            acc = correct / total  # Calculate accuracy as a percentage
-            line = f"{tag}: {round(100 * acc)}% ({total})"
-            result += f"{line}\n"
-        result += "\n"
-    return result
-
-
 def get_image_metadata_entry(image_metadata, person, grid_number):
     """
     Quick search of metadata for a specific person and grid number.
