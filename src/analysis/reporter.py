@@ -32,7 +32,8 @@ from analysis.analysis import (
     analyze_grid_cell_with_shared_guesses,
     analyze_top_players_by_month,
     plot_top_n_grids,
-    analyze_person_to_category
+    analyze_person_to_category,
+    analyze_submitter_specific_players
 )
 
 class ReportGenerator:
@@ -51,6 +52,39 @@ class ReportGenerator:
         self.image_metadata = ImageProcessor(APPLE_TEXTS_DB_PATH, IMAGES_METADATA_PATH, IMAGES_PATH).load_image_metadata()
         self.color_map = make_color_map(GRID_PLAYERS)
 
+    def _wrap_text(self, value, max_line_length=25):
+        """
+        Wrap text for a given value to ensure it doesn't exceed max_line_length.
+
+        Args:
+            value: The value to wrap (can be string or other types).
+            max_line_length (int): Maximum characters in a single line.
+
+        Returns:
+            str: Wrapped text or the original value if not a string.
+        """
+        if isinstance(value, str) and len(value) > max_line_length:
+            return '\n'.join([value[i:i + max_line_length] for i in range(0, len(value), max_line_length)])
+        return value
+    
+    def _calculate_dynamic_max_line_length(self, page_df):
+        """
+        Dynamically calculate an appropriate max line length based on the table structure.
+
+        Args:
+            page_df (pd.DataFrame): The DataFrame for the current page.
+
+        Returns:
+            int: Calculated max line length.
+        """
+        total_columns = len(page_df.columns)
+        avg_chars_per_cell = page_df.applymap(lambda val: len(str(val))).values.mean()
+
+        # Adjust max line length based on column density and average characters per cell
+        # Fewer columns + lower density = longer lines, More columns + higher density = shorter lines
+        max_line_length = int(150 / total_columns * (50 / avg_chars_per_cell))
+        return max(10, min(200, max_line_length))  # Ensure bounds for reasonable wrapping
+
     def _make_generic_text_page(self, pdf, func, args, page_title):
         """
         This function prepares a generic page that includes the output from the function being executed.
@@ -61,30 +95,32 @@ class ReportGenerator:
             print(f"Warning: {func.__name__} returned None")
             output = "No data available."
 
-        # Check if output is a DataFrame (table)
-        if isinstance(output, pd.DataFrame):
-            MAX_ROWS_PER_PAGE = 45  # Maximum rows to display per page
+        if isinstance(output, pd.DataFrame):  # Handle table (DataFrame) output
+            MAX_ROWS_PER_PAGE = 45
             total_pages = math.ceil(len(output) / MAX_ROWS_PER_PAGE)
 
             for page_num in range(total_pages):
-                # Get the rows for the current page
+                # Get rows for the current page
                 start_row = page_num * MAX_ROWS_PER_PAGE
                 end_row = start_row + MAX_ROWS_PER_PAGE
                 page_df = output.iloc[start_row:end_row]
+
+                # Apply text wrapping
+                max_line_length = self._calculate_dynamic_max_line_length(page_df)
+                page_df = page_df.applymap(lambda value: self._wrap_text(value, max_line_length=max_line_length))
 
                 # Create a new figure for the page
                 fig, ax = plt.subplots(figsize=(8.5, 11))  # Standard letter size
                 ax.axis('off')
 
                 # Add title
-                if total_pages > 1:
-                    ax.text(0.5, 1, f"{page_title} (Page {page_num + 1}/{total_pages})",
-                            fontsize=14, ha='center', va='top', fontweight='bold')
-                else:
-                    ax.text(0.5, 1, page_title,
-                            fontsize=14, ha='center', va='top', fontweight='bold')
+                ax.text(
+                    0.5, 1,
+                    f"{page_title} (Page {page_num + 1}/{total_pages})" if total_pages > 1 else page_title,
+                    fontsize=14, ha='center', va='top', fontweight='bold'
+                )
 
-                # Render the DataFrame as a table with adjusted column width
+                # Render table with wrapped text
                 table = ax.table(
                     cellText=page_df.values,
                     colLabels=page_df.columns,
@@ -94,33 +130,40 @@ class ReportGenerator:
                 table.auto_set_font_size(False)
                 table.set_fontsize(8)
 
-                # Adjust column widths
-                n_cols = len(page_df.columns)
-                column_width = min(1.0 / n_cols, 0.1)  # Adjust this value for narrower columns
-                for i in range(n_cols):
-                    table.auto_set_column_width([i])  # Auto-resize column width
-                    table[0, i].set_width(column_width)  # Explicitly set width for each column
+                # Calculate column widths dynamically based on wrapped text
+                col_widths = [max(len(str(val)) for val in page_df[col]) for col in page_df.columns]
+                total_width = sum(col_widths)
 
-                # Apply a green background to the header row and format text
+                for i, col in enumerate(page_df.columns):
+                    table.auto_set_column_width([i])  # Auto-size column width
+                    width_ratio = col_widths[i] / total_width
+                    table[0, i].set_width(min(width_ratio, 0.2))  # Limit column width to 20% of page width
+
+                # Adjust cell heights dynamically based on the maximum lines in each row
+                row_line_counts = []
+                for row in range(len(page_df) + 1):  # +1 to account for header
+                    line_counts = [
+                        cell.get_text().get_text().count('\n') + 1
+                        for (cell_row, cell_col), cell in table.get_celld().items()
+                        if cell_row == row
+                    ]
+                    row_line_counts.append(max(line_counts, default=1))  # Default to 1 line if no content
+
+                scaling_factor = 0.018  # Adjust height proportionally to line counts
                 for (row, col), cell in table.get_celld().items():
                     if row == 0:  # Header row
-                        # Format header text: Title case and replace underscores with spaces
                         cell_text = cell.get_text().get_text()
                         formatted_text = cell_text.replace("_", " ").title()
-                        cell.get_text().set_text(formatted_text)      
-
-                        # Apply styling
+                        cell.get_text().set_text(formatted_text)
                         cell.set_facecolor("#32CD32")  # Lime Green color
                         cell.set_text_props(weight='bold', color='white')  # White text, bold font
-
-                    # Check if the row contains "Consensus" and format it
+                        cell.set_height(scaling_factor)  # Fixed height for header
                     else:
-                        # Extract the cell's text content
-                        cell_text = cell.get_text().get_text()
+                        cell.set_height(scaling_factor * row_line_counts[row])
 
-                        # Check if the cell belongs to a row containing "Consensus"
-                        if "Consensus" in table[row, 0].get_text().get_text():  # Check the first column of the row
-                            cell.set_text_props(weight='bold')  # Bold text for all cells in the "Consensus" row
+                    # Bold "Consensus" row
+                    if row > 0 and "Consensus" in str(page_df.iloc[row - 1, 0]):
+                        cell.set_text_props(weight='bold')
 
                 # Adjust layout
                 plt.tight_layout()
@@ -204,6 +247,7 @@ class ReportGenerator:
             print(f"Running {func.__name__}")
             if func == self._make_generic_text_page:
                 # Pass the pdf object to _make_generic_text_page
+                print(f"Specific function: {args[0].__name__}")
                 self._make_generic_text_page(pdf, *args)
             else:
                 plt.figure()
@@ -250,6 +294,7 @@ class ReportGenerator:
             ("Hardest Teams for Team-Team Intersections", analyze_hardest_intersections, (self.texts, self.prompts, "team")),
             ("Hardest Teams for Team-Stat Intersections", analyze_hardest_intersections, (self.texts, self.prompts, "stat")),
             ("Top Players Used", analyze_top_players_by_submitter, (self.image_metadata, 25)),
+            ("Our Personal Favorites", analyze_submitter_specific_players, (self.image_metadata, 20)),
             ("Bans and Saves", analyze_grid_cell_with_shared_guesses, (self.image_metadata, self.prompts, GRID_PLAYERS_RESTRICTED)),
             ("Popular Players by Month", analyze_top_players_by_month, (self.image_metadata, 5)),
         ]

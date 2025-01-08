@@ -18,13 +18,15 @@ from utils.constants import (
     LOGO_DARK_PATH, 
     LOGO_LIGHT_PATH, 
     APPLE_TEXTS_DB_PATH,
-    IMAGES_PARSER_PATH
+    IMAGES_PARSER_PATH,
+    MESSAGES_CSV_PATH
 )
 from utils.utils import ImmaculateGridUtils
 from data.messages_loader import MessagesLoader
-
-# Global Tesseract config for OCR
-OCR_CONFIG = r"--oem 3 --psm 6"
+from data.data_prep import (
+    matrix_string_to_flat_list, 
+    compare_flat_matrix_with_flat_image_responses
+)
 
 class ImageProcessor():
     def __init__(self, db_path, cache_path, image_directory):
@@ -184,6 +186,9 @@ class ImageProcessor():
             else:
                 existing_paths = set()
 
+        # Preload messages
+        messages_data = MessagesLoader(APPLE_TEXTS_DB_PATH, MESSAGES_CSV_PATH).load().get_data()
+
         # Process each attachment
         for _, result in results.iterrows():
             path = os.path.expanduser(result['path'])
@@ -219,7 +224,8 @@ class ImageProcessor():
 
                     # Process the image
                     else:
-                        parser_message = self.process_image_with_dynamic_grid(path, submitter, image_date) # OCR operation
+                        matrix = messages_data[(messages_data['grid_number'] == grid_number) & (messages_data['name'] == submitter)]['matrix'].iloc[0]
+                        parser_message = self.process_image_with_dynamic_grid(path, submitter, image_date, grid_number, matrix) # OCR operation
             
             parser_data_entry = {
                 "path": path,
@@ -433,6 +439,11 @@ class ImageProcessor():
             ~((parser_metadata["submitter"] == submitter) & (parser_metadata["parser_message"].str.contains("grid number " + str(grid_number), na=False)))
         ]
 
+        # Remove the entry from the parser metadata
+        parser_metadata = parser_metadata[
+            ~((parser_metadata["submitter"] == submitter) & (parser_metadata["parser_message"].str.contains("#" + str(grid_number), na=False)))
+        ]
+
         # Check updated counts for debugging
         print(f"Updated images metadata count: {len(images_metadata)}")
         print(f"Updated parser metadata count: {len(parser_metadata)}")
@@ -469,46 +480,63 @@ class ImageProcessor():
         return enhanced
         
 
-
     def find_logo_position(self, main_image_path, threshold=0.5, scales=None):
         """
         Find the position of the logo in the main image using template matching with scaling.
-
-        Args:
-            main_image_path (str): Path to the main image.
-            threshold (float): Confidence threshold for template matching.
-            scales (list): List of scales to try for the logo image.
-
-        Returns:
-            tuple: (top_left, bottom_right) coordinates of the detected logo and the maximum confidence.
+        The detected logo position is returned relative to the original image.
         """
         if scales is None:
             scales = [0.05, 0.1, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2]
 
         # Load the main image
         main_image = self.safe_cv2_read(main_image_path)
+        if main_image is None:
+            print("Error: Unable to load the main image.")
+            return None
 
-        # crop the main_image to be the top half and left half
-        main_image = main_image[:main_image.shape[0]//2, :main_image.shape[1]//2]
+        original_height, original_width = main_image.shape[:2]  # Dimensions of the original image
+        vertical_offset = 0
+        horizontal_offset = 0
+
+        # Search for the word "Football" using pytesseract
+        main_gray = cv2.cvtColor(main_image, cv2.COLOR_BGR2GRAY)
+        ocr_text = pytesseract.image_to_data(main_gray, output_type=pytesseract.Output.DICT)
+
+        for i, text in enumerate(ocr_text["text"]):
+            if text.lower() == "football":
+                word_top = ocr_text["top"][i]
+                word_height = ocr_text["height"][i]
+                vertical_offset = word_top + word_height
+                main_image = main_image[vertical_offset:, :]  # Crop below the word "Football"
+                print(f"Word 'Football' found. Cropping below at y={vertical_offset}.")
+                break
+
+        # Crop to the top-left quadrant
+        cropped_height = main_image.shape[0] // 2
+        cropped_width = main_image.shape[1] // 2
+        main_image = main_image[:cropped_height, :cropped_width]
+        print(f"Cropped to top-left quadrant: height={cropped_height}, width={cropped_width}.")
+        
+        # Update offsets for quadrant cropping
+        horizontal_offset += 0
+        vertical_offset += 0
 
         logo_image_paths = [LOGO_LIGHT_PATH, LOGO_DARK_PATH]
-
         best_match = None
         best_val = 0
 
         for i, logo_image_path in enumerate(logo_image_paths):
             logo_image = self.safe_cv2_read(logo_image_path)
-
-            if main_image is None or logo_image is None:
-                print("Error: Unable to load one of the images.")
-                return None
+            if logo_image is None:
+                print(f"Error: Unable to load the logo image from {logo_image_path}.")
+                continue
 
             # Convert images to grayscale
-            main_gray = cv2.cvtColor(main_image, cv2.COLOR_BGR2GRAY)
+            cropped_gray = cv2.cvtColor(main_image, cv2.COLOR_BGR2GRAY)
             logo_gray = cv2.cvtColor(logo_image, cv2.COLOR_BGR2GRAY)
 
             # Preprocess the grayscale images
-            main_preprocessed = self.preprocess_image_for_logo_finder(main_gray)
+            cropped_preprocessed = self.preprocess_image_for_logo_finder(cropped_gray)
             logo_preprocessed = self.preprocess_image_for_logo_finder(logo_gray)
 
             # Iterate over scales
@@ -517,7 +545,7 @@ class ImageProcessor():
                     resized_logo = cv2.resize(logo_preprocessed, (0, 0), fx=scale, fy=scale)
 
                     # Template matching
-                    result = cv2.matchTemplate(main_preprocessed, resized_logo, cv2.TM_CCOEFF_NORMED)
+                    result = cv2.matchTemplate(cropped_preprocessed, resized_logo, cv2.TM_CCOEFF_NORMED)
                     _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
                     # Update the best match if the confidence is higher
@@ -531,24 +559,31 @@ class ImageProcessor():
                             "mode": "light" if i == 0 else "dark"
                         }
 
-                    # print(f"Scale {scale:.2f}, Max confidence: {max_val:.2f}")
                 except cv2.error as e:
-                    print(e)
+                    print(f"Error at scale {scale:.2f}: {e}")
                     continue
 
+
         if best_match and best_match["confidence"] >= threshold:
-            top_left = best_match["top_left"]
-            bottom_right = best_match["bottom_right"]
+            # Adjust coordinates to the original image
+            top_left = (best_match["top_left"][0] + horizontal_offset, best_match["top_left"][1] + vertical_offset)
+            bottom_right = (best_match["bottom_right"][0] + horizontal_offset, best_match["bottom_right"][1] + vertical_offset)
 
-            print(f"Success: Logo {i+1} found at scale {best_match['scale']:.2f}. Confidence: {best_match['confidence']:.2f}")
+            # Ensure logo is at least 20 pixels wide
+            logo_width = bottom_right[0] - top_left[0]
+            if logo_width < 20:
+                print("Logo found but too small...")
+                return None
 
-            return top_left, bottom_right, best_match["scale"], best_match["mode"]
+            print(f"Logo found. Adjusted position to original image: Top-left={top_left}, Bottom-right={bottom_right}.")
+            return top_left, bottom_right, best_match["mode"]
         else:
-            print("Error: Logo not found at any scale.")
+            print("Logo not found at any scale.")
             return None
 
 
-    def divide_image_into_grid(self, image_path, top_left, bottom_right, logo_scale, logo_type):
+
+    def divide_image_into_grid(self, image_path, top_left, bottom_right, cell_scalar=1.0, logo_type="light"):
         """
         Divide the main image into a 4x4 grid based on the size of the logo.
 
@@ -567,7 +602,9 @@ class ImageProcessor():
         img_width, img_height = img.size
 
         # Calculate the logo width for scaling purposes
-        logo_width = (bottom_right[0] - top_left[0]) #/ logo_scale
+        print(bottom_right)
+        print(top_left)
+        logo_width = (bottom_right[0] - top_left[0])
 
         # These scale factors are EXTREMELY sensitive
         if logo_type == "light": # assume mobile
@@ -576,7 +613,7 @@ class ImageProcessor():
                 DENOMINATOR = 410
             else:
                 DENOMINATOR = 382
-            cell_width = logo_width * (638 / DENOMINATOR)
+            cell_width = int(logo_width * (638 / DENOMINATOR) * cell_scalar)
             x_offset = logo_width * (436 / DENOMINATOR)
             y_offset = logo_width * (396 / DENOMINATOR)
         else:
@@ -591,8 +628,8 @@ class ImageProcessor():
                 DENOMINATOR = 190
             else:
                 DENOMINATOR = 180
-            cell_width = logo_width * (290 / DENOMINATOR)
-            x_offset = logo_width * (210 / DENOMINATOR) 
+            cell_width = int(logo_width * (290 / DENOMINATOR) * cell_scalar)
+            x_offset = logo_width * (210 / DENOMINATOR)
             y_offset = logo_width * (180 / DENOMINATOR)
 
         # Start grid using the offsets
@@ -629,16 +666,23 @@ class ImageProcessor():
                     "bottom_right": (int(x_end), int(y_end))
                 })
         
-        # # Display the image with green outlines around each cell
-        # img_with_grid = img.copy()
-        # draw = ImageDraw.Draw(img_with_grid)
-        # draw.rectangle([top_left, bottom_right], outline="red", width=3)
-        # for cell in grid_cells:
-        #     draw.rectangle([cell["top_left"], cell["bottom_right"]], outline="green", width=3)
-        # img_with_grid.show()
-        # quit()
         return grid_cells
 
+
+    def draw_image_with_outlined_logo_and_grid_cells(self, image_path, logo_position, grid_cells, cell_scalar):
+        img = self.read_image(image_path)
+        logo_position = self.find_logo_position(image_path)
+        top_left = logo_position[0]
+        bottom_right = logo_position[1]
+        logo_mode = logo_position[2]
+        grid_cells = self.divide_image_into_grid(image_path, top_left, bottom_right, cell_scalar, logo_mode)
+        img_with_grid = img.copy()
+        draw = ImageDraw.Draw(img_with_grid)
+        draw.rectangle([logo_position[0], logo_position[1]], outline="red", width=3)
+        for cell in grid_cells:
+            draw.rectangle([cell["top_left"], cell["bottom_right"]], outline="green", width=3)
+        img_with_grid.show()
+        return
 
 
     def preprocess_image(self, img, crop_function):
@@ -686,66 +730,98 @@ class ImageProcessor():
                 print("Cropped image has invalid dimensions.")
         else:
             print("Cropped image is None or empty.")
+            return None
 
         return img
 
 
     def dynamic_crop_function(self, image_cv2):
         """
-        Detect and crop the text box from the lower half of the image.
-        Top and bottom borders are determined based on rows of pixels 
-        that are dark for 90% of the row.
+        Detect and crop the text box from the lower portion of the image, ensuring:
+        - The top row of the text box is fully dark.
+        - The bottom row of the text box is fully dark.
+        - Rows between the borders do not have light colors touching the left or right edges.
+        - The text box height is less than 1/5 of the original image height.
+        - The resulting cropped text box is color-inverted (text is black, background is white).
 
         Args:
             image_cv2 (np.ndarray): The input image in OpenCV format.
 
         Returns:
-            np.ndarray: Cropped image as a numpy array, or None if no text box is detected.
+            np.ndarray: Cropped and inverted image containing the text box, or None if no valid text box is detected.
         """
-        # Get the dimensions of the image
+
+        # Get dimensions of the image
         height, width = image_cv2.shape[:2]
 
-        # Step 1: Crop the lower half of the image
-        lower_half = image_cv2[height // 2 :, :]
+        # Convert the image to grayscale for processing
+        gray = cv2.cvtColor(image_cv2, cv2.COLOR_BGR2GRAY)
 
-        # Convert the lower half to grayscale
-        gray = cv2.cvtColor(lower_half, cv2.COLOR_BGR2GRAY)
+        # Step 0: Trivially close out if the whole cell looks uniform
+        # Flatten the grayscale image to count pixel occurrences
+        unique, counts = np.unique(gray, return_counts=True)
 
-        # Step 2: Identify the top and bottom borders of the text box
-        threshold = 30  # Threshold for "dark" pixel
-        dark_ratio = 0.9  # 90% of the row should be dark
+        # Calculate the fraction of pixels for the most common color
+        max_fraction = np.max(counts) / gray.size
 
-        # Iterate through rows to find the top border
+        # Check if the fraction exceeds the threshold
+        if max_fraction >= .90:
+            print("Image is too uniform. Returning None.")
+            return None
+
+        # Define thresholds
+        dark_threshold = 30  # Dark pixel threshold (0-255)
+        pct_coverage = .9
+        height_adjustment = 5
+        PADDING = 0.02  # 2% padding
+
+        # Focus on the lower portion of the image (e.g., lower 1/5)
+        lower_portion = gray[-(height // height_adjustment):, :]
+
+        # Get the new height of the cropped lower portion
+        lower_height = lower_portion.shape[0]
+
+        # Step 1: Find the top border of the text box
         top_border = None
-        for i, row in enumerate(gray):
-            dark_pixels = np.sum(row < threshold)
-            if dark_pixels >= dark_ratio * width:
+        for i, row in enumerate(lower_portion):
+            dark_pixels = np.sum(row < dark_threshold)
+            if dark_pixels >= pct_coverage * width:  # At least pct_coverage% of the row is dark
                 top_border = i
                 break
 
-        # Iterate through rows (from bottom up) to find the bottom border
+        # If no top border is found, return None
+        if top_border is None:
+            return None
+
+        # Step 2: Find the bottom border of the text box
         bottom_border = None
-        for i in range(gray.shape[0] - 1, -1, -1):
-            dark_pixels = np.sum(gray[i] < threshold)
-            if dark_pixels >= dark_ratio * width:
+        for i in range(lower_height - 1, -1, -1):  # Start from the bottom and move upward
+            dark_pixels = np.sum(lower_portion[i] < dark_threshold)
+            if dark_pixels >= pct_coverage * width:  # At least pct_coverage% of the row is dark
                 bottom_border = i
                 break
 
-        # If borders are not detected, return None
-        if top_border is None or bottom_border is None:
+        # If no bottom border is found or if it is above the top border, return None
+        if bottom_border is None or bottom_border <= top_border:
             return None
 
-        # Step 3: Crop the image to the detected text box
-        cropped_img = lower_half[top_border:bottom_border, :]
 
-        # Step 4 chop off the left 2% and right 2%
-        PADDING = 0.03
-        left_crop = int(PADDING * cropped_img.shape[1])  # 2% of the width
-        right_crop = cropped_img.shape[1] - left_crop
+        # Ensure the text box height is less than 1/5 of the original image height
+        if (bottom_border - top_border) > height // height_adjustment:
+            return None
 
-        cropped_img = cropped_img[:, left_crop:right_crop]
+        # Step 3: Crop the detected text box
+        cropped_text_box = lower_portion[top_border:bottom_border + 1, :]
 
-        return cropped_img
+        # Step 4: Add optional padding (adjust based on your needs)
+        left_padding = int(PADDING * width)
+        right_padding = width - left_padding
+        cropped_with_padding = cropped_text_box[:, left_padding:right_padding]
+
+        # Step 5: Invert colors (text to black, background to white)
+        inverted_image = cv2.bitwise_not(cropped_with_padding)
+
+        return inverted_image
 
 
     def get_mime_type(self, filepath):
@@ -783,7 +859,7 @@ class ImageProcessor():
 
         try:
             img = self.read_image(image_path)
-            return pytesseract.image_to_string(img, config=OCR_CONFIG)
+            return pytesseract.image_to_string(img, config=r"--oem 3 --psm 6")
         except Exception as e:
             return f"Error extracting text: {e}"
         
@@ -846,6 +922,7 @@ class ImageProcessor():
 
         invalid_character_count = 0
 
+        i = 0
         # Process each cell
         for cell in grid_cells:
             row = cell["row"]
@@ -860,28 +937,37 @@ class ImageProcessor():
             cropped_pil = Image.fromarray(cv2.cvtColor(cropped_cell, cv2.COLOR_BGR2RGB))
             cropped_pil = self.preprocess_image(cropped_pil, self.dynamic_crop_function)  # Apply preprocessing
 
-            # Perform OCR on the cell
-            ocr_text = pytesseract.image_to_string(cropped_pil, config=OCR_CONFIG).strip()
-
-            # Deal with unwanted newline characters
-            ocr_text = self.split_and_get_valid_word(ocr_text)
-
-            # Remove all characters until first letter
-            ocr_text = re.sub(r'^[^A-Z]*', '', ocr_text).strip()
-
-            # Remove all characters at the end that are not letters
-            ocr_text = re.sub(r'[^A-Za-z]+$', '', ocr_text).strip() 
-
-            # If ocr_text is too short, then coerce to empty string
-            if len(ocr_text) > 0 and len(ocr_text) < 3:
-                print(f"Warning: Name string {ocr_text} is too short")
+            if cropped_pil is None:
                 ocr_text = ""
 
-            # If ocr_text is not a proper word, then return None
-            if len(ocr_text) > 0 and not bool(re.match(r"^[A-Z]", ocr_text)):
-                print(f"Warning: Improper name... {ocr_text}")
-                return None
+            else:
+                # cropped_pil.show()
+                # i+= 1
+                # if i > 6:
+                #     quit()
 
+                # Perform OCR on the cell
+                ocr_text = pytesseract.image_to_string(cropped_pil, config="--psm 7").strip()
+
+                # Deal with unwanted newline characters
+                # ocr_text = self.split_and_get_valid_word(ocr_text)
+
+                # Remove all characters until the first uppercase letter or accented uppercase letter
+                ocr_text = re.sub(r'^[^A-ZÀ-Ö]*', '', ocr_text).strip()
+
+                # Remove all characters at the end that are not letters or accented characters
+                ocr_text = re.sub(r'[^A-Za-zÀ-ÖØ-öø-ÿ]+$', '', ocr_text).strip()
+
+                # If ocr_text is too short, then coerce to empty string
+                if len(ocr_text) < 3:
+                    print(f"Warning: Name string {ocr_text} is too short")
+                    ocr_text = ""
+
+                # If ocr_text is not a proper word, then return None
+                if len(ocr_text) > 0 and not bool(re.match(r"^[A-Z]", ocr_text)):
+                    print(f"Warning: Improper name... {ocr_text}")
+                    return None
+                
             # Save the OCR text to the dictionary
             cell_texts[(row, col)] = ocr_text
 
@@ -963,7 +1049,7 @@ class ImageProcessor():
         print(f"Parser metadata saved: {IMAGES_PARSER_PATH}")
 
 
-    def process_image_with_dynamic_grid(self, image_path, submitter, image_date):
+    def process_image_with_dynamic_grid(self, image_path, submitter, image_date, grid_number, matrix):
         """
         Process an image with dynamic header/footer detection and grid cell OCR assignment.
 
@@ -978,62 +1064,78 @@ class ImageProcessor():
 
         # Step 1: Find the logo position
         print("Step 1: Finding logo...")
-        position = self.find_logo_position(image_path)
-        if position is None:
+        logo_position = self.find_logo_position(image_path)
+        if logo_position is None:
             parser_message = f"Warning: Failed to find logo position in {image_path}"
             return parser_message
 
-        # Step 2: Get grid cells based on logo position
-        print("Step 2: Dividing image into cells based on logo...")
-        grid_cells = self.divide_image_into_grid(image_path, position[0], position[1], position[2], position[3])
-        if not grid_cells:
-            parser_message = f"Warning: Failed to divide grid cells in {image_path}"
-            return parser_message
+        attempt = 0
+        cell_scalars = [1, 1.025, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 0.975, 0.95, 0.925, 0.9, 0.875, 0.85, 0.8]
+        while attempt < len(cell_scalars):
 
-        # Step 3: Extract OCR results from each cell
-        print("Step 3: Extracting text from image...")
-        players_by_cell = self.extract_text_from_cells(image_path, grid_cells)
+            # Step 2: Get grid cells based on logo position
+            print("Step 2: Dividing image into cells based on logo...")
+            cell_scalar = cell_scalars[attempt]
+            top_left = logo_position[0]
+            bottom_right = logo_position[1]
+            logo_mode = logo_position[2]
+            grid_cells = self.divide_image_into_grid(image_path, top_left, bottom_right, cell_scalar, logo_mode)
+            if not grid_cells:
+                parser_message = f"Warning: Failed to divide grid cells in {image_path}"
+                return parser_message
 
-        # If unable to extract players_by_cell
-        if players_by_cell is None:
-            img = self.read_image(image_path)
-            img_with_grid = img.copy()
-            draw = ImageDraw.Draw(img_with_grid)
-            draw.rectangle([position[0], position[1]], outline="red", width=3)
-            for cell in grid_cells:
-                draw.rectangle([cell["top_left"], cell["bottom_right"]], outline="green", width=3)
-            img_with_grid.show()
-            parser_message = f"Warning: Unable to extract player names from grid"
-            quit()
+            # Step 3: Extract OCR results from each cell
+            print("Step 3: Extracting text from image...")
+            players_by_cell = self.extract_text_from_cells(image_path, grid_cells)
+
+            # If unable to extract players_by_cell
+            if players_by_cell is None:
+                self.draw_image_with_outlined_logo_and_grid_cells(image_path, logo_position, grid_cells)
+                parser_message = f"Warning: Unable to extract player names from grid"
+                quit()
+                return parser_message
+            
+            # Convert players_by_cell into a dictionary indexed by position
+            responses = {}
+            position_mapping = {
+                (0, 0): "top_left",
+                (0, 1): "top_center",
+                (0, 2): "top_right",
+                (1, 0): "middle_left",
+                (1, 1): "middle_center",
+                (1, 2): "middle_right",
+                (2, 0): "bottom_left",
+                (2, 1): "bottom_center",
+                (2, 2): "bottom_right",
+            }
+
+            for (row, col), text in players_by_cell.items():
+                cell_position = position_mapping.get((row, col))
+                if cell_position:
+                    responses[cell_position] = text
+
+            # Step 4: Check that allocations match the text matrix
+            matrix_flat = matrix_string_to_flat_list(matrix)
+            responses_flat = list(responses.values())
+            are_responses_robust = compare_flat_matrix_with_flat_image_responses(matrix_flat, responses_flat)
+
+            if not are_responses_robust:
+                # Issues with answers
+                print(f"Issue with cell scalar {cell_scalar}!")
+                print(matrix_flat)
+                print(responses_flat)
+                # self.draw_image_with_outlined_logo_and_grid_cells(image_path, logo_position, grid_cells, cell_scalar)
+            else:
+                # Valid answers were found, so exit loop
+                break
+
+            attempt += 1
+
+        if not are_responses_robust:
+            print(f"Quitting on {grid_number} for {submitter}....")
+            parser_message = f"Warning: Grid image is invalid"
             return parser_message
         
-        # Convert players_by_cell into a dictionary indexed by position
-        responses = {}
-        position_mapping = {
-            (0, 0): "top_left",
-            (0, 1): "top_center",
-            (0, 2): "top_right",
-            (1, 0): "middle_left",
-            (1, 1): "middle_center",
-            (1, 2): "middle_right",
-            (2, 0): "bottom_left",
-            (2, 1): "bottom_center",
-            (2, 2): "bottom_right",
-        }
-
-        for (row, col), text in players_by_cell.items():
-            position = position_mapping.get((row, col))
-            if position:
-                responses[position] = text
-
-        # Step 4: Extract grid number from the image
-        print("Step 4: Extracting grid number from image...")
-        text = self.extract_text_from_image(image_path)
-        grid_number = self.grid_number_from_image_text(text)
-        if grid_number is None:
-            parser_message = f"Failed to extract grid number from {image_path}"
-            return parser_message
-    
         # Step 5: Save the processed image and metadata
         print("Step 5: Copying and saving image...")
         dest_filename = f"{submitter}_{image_date}_grid_{grid_number}.jpg"

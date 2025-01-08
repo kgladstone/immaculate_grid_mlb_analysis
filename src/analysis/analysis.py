@@ -824,6 +824,68 @@ def analyze_top_players_by_submitter(image_metadata, cutoff, grid_number_list=No
     return df
 
 
+def analyze_submitter_specific_players(image_metadata, top_n=50):
+    """
+    Analyze submitter-specific players and return a DataFrame with rank and players,
+    including specificity scores and usage counts.
+
+    Args:
+        image_metadata (pd.DataFrame): DataFrame containing image metadata.
+        top_n (int): Number of top players to analyze per submitter. Default is 50.
+
+    Returns:
+        pd.DataFrame: A DataFrame with columns for Rank and each submitter, where values
+                      are the player with specificity score and usage count in parentheses,
+                      ranked by a combination of specificity and usage.
+    """
+    # Initialize player frequency dictionaries
+    submitter_to_player_frequency = {}
+    total_player_frequency = {}
+
+    # Populate player frequency data for each submitter
+    for _, row in image_metadata.iterrows():
+        submitter_name = row['submitter']
+        responses = row['responses'].values()
+        if submitter_name not in submitter_to_player_frequency:
+            submitter_to_player_frequency[submitter_name] = {}
+        for response in responses:
+            if response != '':
+                submitter_to_player_frequency[submitter_name][response] = (
+                    submitter_to_player_frequency[submitter_name].get(response, 0) + 1
+                )
+                total_player_frequency[response] = total_player_frequency.get(response, 0) + 1
+
+    # Prepare the rank data
+    rank_data = []
+    for submitter, player_freq in submitter_to_player_frequency.items():
+        # Sort players by specificity score and usage count
+        sorted_players = sorted(
+            player_freq.items(),
+            key=lambda x: ((x[1] / total_player_frequency[x[0]]), x[1]),  # Specificity score and usage count
+            reverse=True
+        )[:top_n]
+
+        for rank, (player, freq) in enumerate(sorted_players, start=1):
+            total_freq = total_player_frequency[player]
+            specificity_score = round((freq / total_freq) * 100, 2)  # Specificity as percentage
+            if len(rank_data) < rank:
+                rank_data.append({"Rank": rank})
+            rank_data[rank - 1][submitter] = f"{player}\n({specificity_score}%, {freq})"
+
+    # Convert the rank data to a DataFrame
+    df = pd.DataFrame(rank_data)
+
+    # Ensure all submitters are represented as columns
+    for submitter in submitter_to_player_frequency.keys():
+        if submitter not in df.columns:
+            df[submitter] = None
+
+    # Sort columns so "Rank" is first
+    df = df[["Rank"] + [col for col in df.columns if col != "Rank"]]
+
+    return df
+
+
 def analyze_grid_cell_with_shared_guesses(image_metadata, prompts, player_list):
     """
     Analyze the grid cells and apply string analysis to each grouped response.

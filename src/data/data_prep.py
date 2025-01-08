@@ -4,6 +4,20 @@ import ast
 from utils.constants import TEAM_LIST
 from utils.utils import ImmaculateGridUtils
 
+
+def compare_flat_matrix_with_flat_image_responses(matrix_flat, responses_flat):
+    for i, _ in enumerate(matrix_flat):
+        if matrix_flat[i] and len(responses_flat[i]) == 0:
+            parser_message = f"Warning: Expected a parsed value and found nothing"
+            return False
+        elif not matrix_flat[i] and len(responses_flat[i]) != 0:
+            parser_message = f"Warning: Did not expect a parsed value and found something"
+            return False
+        else: # No issue
+            continue
+    return True
+
+
 def to_percent(y, position):
     """Convert a decimal to a percentage string."""
     return f"{100 * y:.0f}%"
@@ -343,6 +357,17 @@ def get_image_metadata_entry(image_metadata, person, grid_number):
     else:
         return None
 
+
+def matrix_string_to_flat_list(matrix_string):
+    # Replace JavaScript-style "true" with Python-style "True"
+    python_style_string_performance = matrix_string.replace('true', 'True').replace('false', 'False')
+
+    # Parse the string into a Python list
+    nested_performance = ast.literal_eval(python_style_string_performance)
+
+    return [item for sublist in nested_performance for item in sublist]
+
+
 # Validate that performance data matches image data
 def build_results_image_structure(texts, image_metadata):
     """
@@ -356,12 +381,7 @@ def build_results_image_structure(texts, image_metadata):
         grid_number = int(row['grid_number'])
 
         # Replace JavaScript-style "true" with Python-style "True"
-        python_style_string_performance = row['matrix'].replace('true', 'True').replace('false', 'False')
-
-        # Parse the string into a Python list
-        nested_performance = ast.literal_eval(python_style_string_performance)
-
-        performance = [item for sublist in nested_performance for item in sublist]
+        performance = matrix_string_to_flat_list(row['matrix'])
 
         image_metadata_row = get_image_metadata_entry(image_metadata, person, grid_number)
 
