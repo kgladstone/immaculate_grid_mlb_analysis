@@ -6,7 +6,7 @@ To generate the complete analysis, follow these steps in order:
 
 ### 1. User Setup
 - **File:** `config.json`
-- **Purpose:** Ensure that all users are properly set up in the `config.json` file for accurate analysis and reporting. Note that the repo includes a file called `config_SAMPLE.json` to help you get started with yours.
+- **Purpose:** Ensure that all users are properly set up in the `config.json` file for accurate analysis and reporting. Note that the repo includes a file called `config_SAMPLE.json` to help you get started with yours. This file needs to be set up correctly for the script to work.
 
 ### 2. Database Refresh and Report Generation
 - **Script:** `main.py`

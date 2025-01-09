@@ -3,11 +3,18 @@
     "GRID_PLAYERS": {
         "JohnDoe": {
             "phone_number": "+1234567890",
-            "color": "green"
+            "color": "green",
+            "restricted": "False"
         },
         "JaneDoe": {
             "phone_number": "+0987654321",
-            "color": "red"
+            "color": "red",
+            "restricted": "False"
+        },
+        "DerekJeter": {
+            "phone_number": "+0555555555",
+            "color": "blue",
+            "restricted": "True"
         },
     }
 }
