@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 from datetime import datetime, timedelta
 from collections import Counter, defaultdict
-from rapidfuzz import fuzz, process
 from PIL import Image
 from data.image_processor import ImageProcessor
 
@@ -824,19 +823,20 @@ def analyze_top_players_by_submitter(image_metadata, cutoff, grid_number_list=No
     return df
 
 
-def analyze_submitter_specific_players(image_metadata, top_n=50):
+def analyze_submitter_specific_players(image_metadata, top_n=50, specificity_weight=0.9, usage_weight=0.01):
     """
     Analyze submitter-specific players and return a DataFrame with rank and players,
-    including specificity scores and usage counts.
+    including specificity scores, usage counts, and a composite score for ranking.
 
     Args:
         image_metadata (pd.DataFrame): DataFrame containing image metadata.
         top_n (int): Number of top players to analyze per submitter. Default is 50.
+        specificity_weight (float): Weight for specificity in the composite score. Default is 0.9.
+        usage_weight (float): Weight for usage count in the composite score. Default is 0.3.
 
     Returns:
         pd.DataFrame: A DataFrame with columns for Rank and each submitter, where values
-                      are the player with specificity score and usage count in parentheses,
-                      ranked by a combination of specificity and usage.
+                      are the player with specificity score, usage count, and composite score.
     """
     # Initialize player frequency dictionaries
     submitter_to_player_frequency = {}
@@ -858,19 +858,28 @@ def analyze_submitter_specific_players(image_metadata, top_n=50):
     # Prepare the rank data
     rank_data = []
     for submitter, player_freq in submitter_to_player_frequency.items():
-        # Sort players by specificity score and usage count
+        # Calculate composite scores and sort players
         sorted_players = sorted(
             player_freq.items(),
-            key=lambda x: ((x[1] / total_player_frequency[x[0]]), x[1]),  # Specificity score and usage count
+            key=lambda x: (
+                specificity_weight * (x[1] / total_player_frequency[x[0]]) + 
+                usage_weight * x[1]
+            ),
             reverse=True
         )[:top_n]
 
         for rank, (player, freq) in enumerate(sorted_players, start=1):
             total_freq = total_player_frequency[player]
             specificity_score = round((freq / total_freq) * 100, 2)  # Specificity as percentage
+            composite_score = round(
+                specificity_weight * (freq / total_freq) + usage_weight * freq,
+                2
+            )  # Composite score
             if len(rank_data) < rank:
                 rank_data.append({"Rank": rank})
-            rank_data[rank - 1][submitter] = f"{player}\n({specificity_score}%, {freq})"
+            rank_data[rank - 1][submitter] = (
+                f"{player}\n(Spec: {specificity_score}%, Freq: {freq}, Score: {composite_score})"
+            )
 
     # Convert the rank data to a DataFrame
     df = pd.DataFrame(rank_data)
@@ -884,6 +893,7 @@ def analyze_submitter_specific_players(image_metadata, top_n=50):
     df = df[["Rank"] + [col for col in df.columns if col != "Rank"]]
 
     return df
+
 
 
 def analyze_grid_cell_with_shared_guesses(image_metadata, prompts, player_list):
@@ -999,6 +1009,8 @@ def analyze_grid_cell_with_shared_guesses(image_metadata, prompts, player_list):
         """
         result_data = []
 
+        image_processor = ImageProcessor(APPLE_TEXTS_DB_PATH, IMAGES_METADATA_PATH, IMAGES_PATH)
+
         for _, row in filtered_rows.iterrows():
             grid_number = row['grid_number']
             position = row['position']
@@ -1019,26 +1031,33 @@ def analyze_grid_cell_with_shared_guesses(image_metadata, prompts, player_list):
                         "prompt": prompt,
                         "player": player,
                         "verdict": "ban",
-                        "saved_by": None
+                        "saved_by": None,
+                        "reason": None
                     })
                 elif count == 3:
                     # Saved player
                     excluded_submitters = [x for x in player_list if x not in value['submitters']]
+                    remaining_submitter = excluded_submitters[0]
+                    reason = image_processor.get_save_reason(remaining_submitter, grid_number, position)
                     result_data.append({
                         "grid_number": grid_number,
                         "position": position,
                         "prompt": prompt,
                         "player": player,
                         "verdict": "save",
-                        "saved_by": ", ".join(excluded_submitters)  # Join the savers into a single string
+                        "saved_by": ", ".join(excluded_submitters),  # Join the savers into a single string
+                        "reason": reason
                     })
 
         # Create a DataFrame from the result data
         result_df = pd.DataFrame(result_data, columns=[
-            "grid_number", "prompt", "player", "verdict", "saved_by"
+            "grid_number", "prompt", "player", "verdict", "saved_by", "reason"
         ])
 
-        return result_df.sort_values(by=['verdict', 'grid_number'])
+        result_df = result_df.sort_values(by=['verdict', 'grid_number'])
+        result_df.rename(columns={'grid_number':'grid'}, inplace=True)
+
+        return result_df
     
     result_df = generate_analysis_dataframe(filtered_rows, player_list)
 

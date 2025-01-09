@@ -10,7 +10,13 @@ import numpy as np
 import pandas as pd
 import pillow_heif
 from collections import Counter
-from rapidfuzz import process, fuzz
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.cluster import DBSCAN
+from fuzzywuzzy import fuzz
+import numpy as np
+import pandas as pd
+from collections import Counter
+from sklearn.cluster import DBSCAN
 
 from utils.constants import (
     GRID_PLAYERS, 
@@ -352,7 +358,21 @@ class ImageProcessor():
         images_metadata = self.load_image_metadata()
 
         return images_metadata[images_metadata['submitter'] == submitter]
+    
 
+    def get_save_reason(self, submitter, grid_number, position):
+        images_metadata_submitter = self.get_metadata_from_submitter_grid_numbers(submitter, [grid_number])
+
+        if len(images_metadata_submitter) == 0:
+            return "<No Image Data>"
+        else:
+            responses = images_metadata_submitter['responses'].iloc[0]
+            target_response = responses[position]
+            if len(target_response) == 0:
+                return "<Empty Guess>"
+            else:
+                return target_response
+        
 
     def get_grid_numbers_from_guess(self, submitter, guess):
         """
@@ -1166,19 +1186,17 @@ class ImageProcessor():
 
         return parser_message
     
-
-    def correct_typos_with_fuzzy_matching(self, similarity_threshold=70):
+    def correct_typos_with_fuzzy_matching(self, similarity_threshold=0.6):
         """
-        Correct typos in names within a DataFrame using fuzzy matching, create a new DataFrame with corrections,
-        and log all changes.
+        Correct typos in names within a DataFrame using unsupervised clustering with fuzzy matching,
+        respecting "Jr" and "Sr" suffixes.
 
         Args:
-            similarity_threshold (int): Minimum similarity score to consider two names as matching.
+            similarity_threshold (float): Minimum similarity score (0 to 1) to consider two names as matching.
 
         Returns:
             tuple: A new corrected DataFrame and a log DataFrame of changes.
         """
-
         # Step 0: Load the original DataFrame
         df = self.load_image_metadata()
 
@@ -1187,52 +1205,115 @@ class ImageProcessor():
         for responses in df['responses']:
             all_names.extend([name for name in responses.values() if name])
 
-        # Step 2: Count name occurrences
-        name_counter = Counter(all_names)
-        unique_names = list(name_counter.keys())
+        # Step 2: Define name cleaning function
+        def clean_name(name):
+            """
+            Clean trailing standalone single letters from a name.
 
-        # Step 3: Build the canonical mapping using fuzzy matching
-        canonical_mapping = {}
-        for name in unique_names:
-            # Extract the closest match and its similarity score
-            match = process.extractOne(name, unique_names, scorer=fuzz.ratio)
-            if match:  # Ensure a match was found
-                best_match, score = match[0], match[1]
-                if score >= similarity_threshold:
-                    canonical_mapping[name] = best_match
-                else:
-                    canonical_mapping[name] = name  # If no close match, keep the original
+            Args:
+                name (str): The name to clean.
+
+            Returns:
+                str: Cleaned name.
+            """
+            return re.sub(r'\s+[A-Za-z]$', '', name.strip())
+
+        # Step 3: Define suffix extraction function
+        def get_suffix(name):
+            """
+            Extract suffixes from names, including explicit and inferred cases.
+
+            Args:
+                name (str): The name to check for a suffix.
+
+            Returns:
+                str: The extracted suffix ("Jr", "Sr", or None).
+            """
+            # Explicit "Jr" or "Sr"
+            match = re.search(r'\b(J[A-z]|S[A-z])\b', name, re.IGNORECASE)
+            if match:
+                return match.group(0)
+
+            # Check for standalone "J" or "S" as possible suffixes
+            standalone_match = re.search(r'\b(J|S)\b', name, re.IGNORECASE)
+            if standalone_match:
+                char = standalone_match.group(0).upper()
+                return "Jr" if char == "J" else "Sr"
+
+            # No suffix found
+            return None
+
+        # Step 4: Apply cleaning and suffix detection
+        suffix_groups = {"Jr": [], "Sr": [], "None": []}
+
+        for name in all_names:
+            cleaned_name = clean_name(name)  # Clean trailing single letters
+            suffix = get_suffix(cleaned_name)
+            if suffix:
+                if "J" in suffix.upper():
+                    suffix_clean = "Jr"
+                elif "S" in suffix.upper():
+                    suffix_clean = "Sr"
+                suffix_groups[suffix_clean].append(cleaned_name)
             else:
-                canonical_mapping[name] = name  # In case no match is found
-        
-        # Step 4: Create a new DataFrame with corrected names and log changes
+                suffix_groups["None"].append(cleaned_name)
+
+        # Step 5: Count occurrences and get unique names for each group
+        name_counter = Counter(all_names)
+        canonical_mapping = {}
+
+        for suffix, group_names in suffix_groups.items():
+            if not group_names:
+                continue
+
+            unique_names = list(set(group_names))
+
+            # Step 6: Vectorize names using TF-IDF
+            vectorizer = TfidfVectorizer(analyzer='char', ngram_range=(2, 3))
+            name_vectors = vectorizer.fit_transform(unique_names)
+
+            # Step 7: Cluster similar names using DBSCAN
+            dbscan = DBSCAN(eps=1 - similarity_threshold, min_samples=1, metric="cosine")
+            labels = dbscan.fit_predict(name_vectors)
+
+            # Step 8: Build canonical mapping for the group
+            for label in set(labels):
+                cluster_names = [unique_names[i] for i in range(len(labels)) if labels[i] == label]
+                canonical_name = max(cluster_names, key=lambda n: name_counter[n])  # Most frequent name
+                for name in cluster_names:
+                    canonical_mapping[name] = canonical_name
+
+        # Step 9: Create new DataFrame with corrected names and log changes
         corrected_rows = []
         changes_log = []
 
         for _, row in df.iterrows():
             corrected_responses = {}
             for key, name in row['responses'].items():
-                if name and name in canonical_mapping and name != canonical_mapping[name]:
-                    corrected_name = canonical_mapping[name]
-                    # Log the change
-                    changes_log.append({
-                        "grid_number": row['grid_number'],
-                        "submitter": row['submitter'],
-                        "original_name": name,
-                        "corrected_name": corrected_name,
-                        "response_location": key
-                    })
+                cleaned_name = clean_name(name)  # Clean trailing single letters
+                if cleaned_name and cleaned_name in canonical_mapping:
+                    corrected_name = canonical_mapping[cleaned_name]
+                    if cleaned_name != corrected_name:
+                        # Log the change
+                        changes_log.append({
+                            "grid_number": row['grid_number'],
+                            "submitter": row['submitter'],
+                            "original_name": name,
+                            "corrected_name": corrected_name,
+                            "response_location": key
+                        })
                     corrected_responses[key] = corrected_name
                 else:
                     corrected_responses[key] = name
 
-            # Add the corrected row to the new dataset
+            # Add corrected row
             corrected_row = row.copy()
             corrected_row['responses'] = corrected_responses
             corrected_rows.append(corrected_row)
 
-        # Step 5: Create the new DataFrame and the log DataFrame
+        # Create the new DataFrame and the log DataFrame
         new_df = pd.DataFrame(corrected_rows)
         log_df = pd.DataFrame(changes_log)
 
         return new_df, log_df
+

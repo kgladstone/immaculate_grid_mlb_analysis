@@ -49,7 +49,8 @@ class ReportGenerator:
         texts_df = MessagesLoader(APPLE_TEXTS_DB_PATH, MESSAGES_CSV_PATH).load().get_data()
         self.texts = preprocess_data_into_texts_structure(texts_df)
         self.prompts = PromptsLoader(PROMPTS_CSV_PATH)._fetch_prompts_from_cache()
-        self.image_metadata = ImageProcessor(APPLE_TEXTS_DB_PATH, IMAGES_METADATA_PATH, IMAGES_PATH).load_image_metadata()
+        image_processor = ImageProcessor(APPLE_TEXTS_DB_PATH, IMAGES_METADATA_PATH, IMAGES_PATH)
+        self.image_metadata, _ = image_processor.correct_typos_with_fuzzy_matching()
         self.color_map = make_color_map(GRID_PLAYERS)
 
     def _wrap_text(self, value, max_line_length=25):
@@ -294,7 +295,7 @@ class ReportGenerator:
             ("Hardest Teams for Team-Team Intersections", analyze_hardest_intersections, (self.texts, self.prompts, "team")),
             ("Hardest Teams for Team-Stat Intersections", analyze_hardest_intersections, (self.texts, self.prompts, "stat")),
             ("Top Players Used", analyze_top_players_by_submitter, (self.image_metadata, 25)),
-            ("Our Personal Favorites", analyze_submitter_specific_players, (self.image_metadata, 20)),
+            ("Our Personal Favorites", analyze_submitter_specific_players, (self.image_metadata, 15)),
             ("Bans and Saves", analyze_grid_cell_with_shared_guesses, (self.image_metadata, self.prompts, GRID_PLAYERS_RESTRICTED)),
             ("Popular Players by Month", analyze_top_players_by_month, (self.image_metadata, 5)),
         ]
