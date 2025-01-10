@@ -68,10 +68,37 @@ GRID_PLAYERS_RESTRICTED = {player: GRID_PLAYERS[player] for player in GRID_PLAYE
 # --------------------------------------------------------------------------------------------------
 # Immutables
 
-TEAM_LIST = [
-    "Cubs", "Cardinals", "Brewers", "Reds", "Pirates", "Nationals", "Mets", "Marlins", "Phillies", 
-    "Braves", "Dodgers", "Diamondbacks", "Rockies", "Giants", "Padres", "Royals", "White Sox", 
-    "Twins", "Guardians", "Tigers", "Red Sox", "Yankees", "Blue Jays", "Rays", "Orioles", "Angels", 
-    "Athletics", "Astros", "Mariners", "Rangers"
-]
+TEAM_LIST = {
+    "Cubs": "CHC",
+    "Cardinals": "STL",
+    "Brewers": "MIL",
+    "Reds": "CIN",
+    "Pirates": "PIT",
+    "Nationals": "WSH",
+    "Mets": "NYM",
+    "Marlins": "MIA",
+    "Phillies": "PHI",
+    "Braves": "ATL",
+    "Dodgers": "LAD",
+    "Diamondbacks": "ARI",
+    "Rockies": "COL",
+    "Giants": "SFG",
+    "Padres": "SDP",
+    "Royals": "KCR",
+    "White Sox": "CWS",
+    "Twins": "MIN",
+    "Guardians": "CLE",
+    "Tigers": "DET",
+    "Red Sox": "BOS",
+    "Yankees": "NYY",
+    "Blue Jays": "TOR",
+    "Rays": "TBR",
+    "Orioles": "BAL",
+    "Angels": "LAA",
+    "Athletics": "OAK",
+    "Astros": "HOU",
+    "Mariners": "SEA",
+    "Rangers": "TEX"
+}
+
 IMM_GRID_START_DATE = "2023-04-02"  # Start date of the immaculate grid

@@ -7,7 +7,7 @@ from io import StringIO
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 from datetime import datetime, timedelta
-from collections import Counter, defaultdict
+from collections import defaultdict
 from PIL import Image
 from data.image_processor import ImageProcessor
 
@@ -21,8 +21,10 @@ from data.data_prep import (
     get_categories_from_prompt,
     build_intersection_structure_for_person,
     build_results_image_structure,
+    build_person_category_structure,
     clean_image_parser_data,
     create_grid_cell_image_view,
+    get_team_name_without_city,
     )
 from utils.constants import (
     TEAM_LIST, 
@@ -203,7 +205,7 @@ def get_person_to_type(texts, prompts, person_to_category):
     return person_to_type
 
 
-def analyze_person_type_performance(person_to_type):
+def analyze_person_type_performance(texts, prompts, categories):
     """
     Convert the person-to-type performance dictionary into a crosstab DataFrame with a consensus row.
 
@@ -217,6 +219,9 @@ def analyze_person_type_performance(person_to_type):
                       - Values as "Accuracy% (Count)".
     """
     rows = []
+
+    person_to_category = build_person_category_structure(texts, prompts, categories)
+    person_to_type = get_person_to_type(texts, prompts, person_to_category)
 
     # Iterate through each person and their performance data
     for person, types in person_to_type.items():
@@ -260,7 +265,7 @@ def analyze_person_type_performance(person_to_type):
     return crosstab_df
 
 
-def analyze_team_performance(categories, person_to_category):
+def analyze_team_performance(texts, prompts, categories):
     """
     Analyze team performance by calculating consensus accuracy and standard deviation of accuracy.
 
@@ -272,6 +277,8 @@ def analyze_team_performance(categories, person_to_category):
         pd.DataFrame: A DataFrame with columns Team, Consensus Accuracy, and Std Deviation of Accuracy.
     """
     overall = []
+
+    person_to_category = build_person_category_structure(texts, prompts, categories)
 
     for category in categories:
         values = []
@@ -297,8 +304,7 @@ def analyze_team_performance(categories, person_to_category):
     return df
 
 
-def analyze_person_prompt_performance(
-    categories, person_to_category, categories_clearing_threshold=None, category_type="Team"
+def analyze_person_prompt_performance(texts, prompts, categories, category_type="Team"
 ):
     """
     Analyze the best and worst performing persons for teams or non-team categories and return as a DataFrame.
@@ -306,7 +312,6 @@ def analyze_person_prompt_performance(
     Args:
         categories (set): Set of all unique categories.
         person_to_category (dict): Performance data for each person and category.
-        categories_clearing_threshold (list, optional): List of categories meeting the threshold. Required for non-team categories.
         category_type (str): Type of category to analyze ("Team" or "Category"). Default is "Team".
 
     Returns:
@@ -314,6 +319,11 @@ def analyze_person_prompt_performance(
     """
     overall = []
     is_team = category_type == "Team"
+
+    person_to_category = build_person_category_structure(texts, prompts, categories)
+
+    categories_clearing_threshold = get_category_clearing_threshold(categories, person_to_category)
+
     threshold_filter = (
         category_is_team if is_team 
         else lambda x: x in (categories_clearing_threshold or []) and not category_is_team(x)
@@ -540,7 +550,7 @@ def analyze_empty_team_team_intersections(texts, prompts, name, categories):
     return result_string
 
 
-def analyze_person_to_category(person_to_category, threshold=25):
+def analyze_person_to_category(texts, prompts, categories, threshold=25):
     """
     Convert the person-to-category performance dictionary into a formatted string.
 
@@ -554,6 +564,8 @@ def analyze_person_to_category(person_to_category, threshold=25):
     # Create a dictionary to hold table data and consensus calculation data
     table_data = {}
     consensus_data = {}
+
+    person_to_category = build_person_category_structure(texts, prompts, categories)
 
     # Process each person's performance data
     for person, category_data in person_to_category.items():
@@ -594,6 +606,102 @@ def analyze_person_to_category(person_to_category, threshold=25):
     # Convert the DataFrame to a string with tabular formatting
     return df
 
+
+def get_teams_for_each_player_from_responses(image_metadata, prompts):
+    results = []
+
+    grid_cell_image_view = create_grid_cell_image_view(image_metadata)
+
+    for _, entry in grid_cell_image_view.iterrows():
+        submitter = entry['submitter']
+        position = entry['position']
+        player = entry['response']
+        grid_number = entry['grid_number']
+        prompt_data = prompts[prompts['grid_id'] == grid_number][position]
+        if prompt_data is not None and len(prompt_data) > 0:
+            categories = get_categories_from_prompt(prompt_data.iloc[0])
+            for category in categories:
+                if category_is_team(category):
+                    results.append(
+                        {
+                            "submitter": submitter,
+                            "player": player,
+                            "team": category,
+                            "grid_number": grid_number  # Keep the grid number in the results
+                        }
+                    )
+
+    # Convert to DataFrame
+    results_df = pd.DataFrame(results)
+
+    # Aggregate by submitter, player, and team
+    aggregated_results = (
+        results_df.groupby(['submitter', 'player', 'team'])
+        .agg(
+            count=('grid_number', 'size'),  # Count occurrences
+            list_of_grids=('grid_number', lambda x: list(x.unique()))  # Collect unique grid numbers
+        )
+        .reset_index()
+    )
+
+    return aggregated_results.sort_values(by='count', ascending=False)
+
+
+def get_favorite_player_by_team(image_metadata, prompts):
+    # Call the function to get aggregated results
+    aggregated_results = get_teams_for_each_player_from_responses(image_metadata, prompts)
+
+    # Determine the favorite player by team and submitter
+    favorite_players = (
+        aggregated_results
+        .sort_values(['team', 'submitter', 'count'], ascending=[True, True, False])
+        .drop_duplicates(['team', 'submitter'], keep='first')  # Keep the highest count for each team/submitter combo
+    )
+
+    # Add a column combining player name and count for display
+    favorite_players['player_with_count'] = favorite_players['player'] + " (" + favorite_players['count'].astype(str) + ")"
+
+    # Pivot to create the desired cross-tab
+    crosstab = favorite_players.pivot(index='team', columns='submitter', values='player_with_count')
+
+    # Reset index to make 'team' a column
+    crosstab = crosstab.reset_index()
+
+    return crosstab
+
+
+def get_players_used_for_most_teams(image_metadata, prompts, cutoff=25):
+    # Call the function to get aggregated results
+    aggregated_results = get_teams_for_each_player_from_responses(image_metadata, prompts)
+
+    # Group by player and team to get distinct team count per player
+    player_team_data = (
+        aggregated_results[['player', 'team']]
+        .drop_duplicates()  # Ensure each player-team pair is unique
+        .groupby('player')
+        .agg({
+            'team': ['count', lambda x: ', '.join(sorted(TEAM_LIST[get_team_name_without_city(team)] for team in x.unique()))]
+        })
+        .reset_index()
+    )
+    
+    # Rename columns for readability
+    player_team_data.columns = ['Player', 'TeamCount', 'Teams']
+
+    # Sort by the number of distinct teams in descending order
+    player_team_data = player_team_data.sort_values(by='TeamCount', ascending=False)
+
+    # Apply the cutoff
+    player_team_data = player_team_data.head(cutoff)
+
+    # # Generate the formatted text output
+    # output = "\n".join(
+    #     f"{row['Player']} {row['TeamCount']} {row['Teams']}"
+    #     for _, row in player_team_data.iterrows()
+    # )
+
+    return player_team_data
+               
 
 def grid_numbers_with_matrix_image_nonmatches(texts, image_metadata, person):
     """

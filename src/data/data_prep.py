@@ -112,10 +112,20 @@ def make_texts_melted(texts):
 
     return texts_melted
 
-
 #--------------------------------------------------------------------------------------------------
 # Prompt Data Processing Functions
 # -------------------------------------------------------------------------------------------------
+
+def get_team_name_without_city(full_name):
+    # Iterate through the dictionary keys
+    for team_name in TEAM_LIST:
+        # Check if the team name appears at the end of the full name
+        if full_name.endswith(team_name):
+            return team_name
+    
+    # If no match is found
+    return "Unknown Team"
+
 
 def category_is_team(category):
     """
@@ -159,8 +169,17 @@ def get_categories_from_prompt(prompt):
     Returns:
         tuple: A tuple containing the two categories (part_one, part_two).
     """
-    parts = prompt.split(" + ")
-    first, second = sorted(part.strip() for part in parts)
+    if isinstance(prompt, str):
+        if " + " in prompt:
+            parts = prompt.split(" + ")
+            first, second = sorted(part.strip() for part in parts)
+        elif isinstance(ast.literal_eval(prompt), tuple):
+            first, second = ast.literal_eval(prompt)
+        else:
+            first = None
+            second = None
+    else:
+        first, second = prompt
     return first, second
 
 

@@ -33,7 +33,9 @@ from analysis.analysis import (
     analyze_top_players_by_month,
     plot_top_n_grids,
     analyze_person_to_category,
-    analyze_submitter_specific_players
+    analyze_submitter_specific_players,
+    get_favorite_player_by_team,
+    get_players_used_for_most_teams
 )
 
 class ReportGenerator:
@@ -262,9 +264,6 @@ class ReportGenerator:
         """
         # Prepare necessary structures
         categories = build_category_structure(self.texts, self.prompts)
-        person_to_category = build_person_category_structure(self.texts, self.prompts, categories)
-        categories_clearing_threshold = get_category_clearing_threshold(categories, person_to_category)
-        person_to_type = get_person_to_type(self.texts, self.prompts, person_to_category)
 
         # Helper to create graph function tuples
         def make_graph_function(func, args, title):
@@ -287,15 +286,17 @@ class ReportGenerator:
 
         # Generic text page functions
         generic_pages = [
-            ("Type Performance Overview", analyze_person_type_performance, (person_to_type,)),
-            ("Category Performance Overview", analyze_person_to_category, (person_to_category,)),
-            ("Easiest Teams Overview (Consensus)", analyze_team_performance, (categories, person_to_category)),
-            ("Best/Worst Team Overview (Individual)", analyze_person_prompt_performance, (categories, person_to_category, categories_clearing_threshold, "Team")),
-            ("Best/Worst Category Overview (Individual)", analyze_person_prompt_performance, (categories, person_to_category, categories_clearing_threshold, "Category")),
+            ("Type Performance Overview", analyze_person_type_performance, (self.texts, self.prompts, categories,)),
+            ("Category Performance Overview", analyze_person_to_category, (self.texts, self.prompts, categories,)),
+            ("Easiest Teams Overview (Consensus)", analyze_team_performance, (self.texts, self.prompts, categories)),
+            ("Best/Worst Team Overview (Individual)", analyze_person_prompt_performance, (self.texts, self.prompts, categories, "Team")),
+            ("Best/Worst Category Overview (Individual)", analyze_person_prompt_performance, (self.texts, self.prompts, categories, "Category")),
             ("Hardest Teams for Team-Team Intersections", analyze_hardest_intersections, (self.texts, self.prompts, "team")),
             ("Hardest Teams for Team-Stat Intersections", analyze_hardest_intersections, (self.texts, self.prompts, "stat")),
-            ("Top Players Used", analyze_top_players_by_submitter, (self.image_metadata, 25)),
+            ("Top Players Used", analyze_top_players_by_submitter, (self.image_metadata, 40)),
             ("Our Personal Favorites", analyze_submitter_specific_players, (self.image_metadata, 15)),
+            ("Our Favorite Players by Team", get_favorite_player_by_team, (self.image_metadata, self.prompts)),
+            ("Players Used for Most Teams", get_players_used_for_most_teams, (self.image_metadata, self.prompts, 40)),
             ("Bans and Saves", analyze_grid_cell_with_shared_guesses, (self.image_metadata, self.prompts, GRID_PLAYERS_RESTRICTED)),
             ("Popular Players by Month", analyze_top_players_by_month, (self.image_metadata, 5)),
         ]

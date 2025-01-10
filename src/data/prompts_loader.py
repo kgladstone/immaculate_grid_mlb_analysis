@@ -86,19 +86,23 @@ class PromptsLoader(Loader):
         """
         Fetch multiple Immaculate Grids and return as a DataFrame.
         """
-        header = ['grid_id',
-            "top_left",
-            "top_center",
-            "top_right",
-            "middle_left",
-            "middle_center",
-            "middle_right",
-            "bottom_left",
-            "bottom_center",
-            "bottom_right"
-        ]
-        grids_data = [PromptsLoader._fetch_grid_online(i) for i in index_list]
-        return pd.DataFrame(grids_data, columns=header)
+        try:
+            header = ['grid_id',
+                "top_left",
+                "top_center",
+                "top_right",
+                "middle_left",
+                "middle_center",
+                "middle_right",
+                "bottom_left",
+                "bottom_center",
+                "bottom_right"
+            ]
+            grids_data = [PromptsLoader._fetch_grid_online(i) for i in index_list]
+            return pd.DataFrame(grids_data, columns=header)
+        except requests.exceptions.ConnectionError as e:
+            print(e)
+            return pd.DataFrame()
 
     def _fetch_new_prompts(self, _):
         """
@@ -126,7 +130,10 @@ class PromptsLoader(Loader):
 
         print("Pulling new grids from online...")
         data_incremental = PromptsLoader._fetch_grids_online(indices_remaining)
-        return pd.concat([data_previous, data_incremental], ignore_index=True)
+
+        combined_data = pd.concat([data_previous, data_incremental], ignore_index=True)
+
+        return combined_data
 
     def _validate_prompts(self, data):
         """
