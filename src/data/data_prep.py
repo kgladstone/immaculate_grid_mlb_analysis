@@ -1,7 +1,7 @@
 import pandas as pd
 import ast
 
-from utils.constants import TEAM_LIST
+from utils.constants import TEAM_LIST, CATEGORY_LIST
 from utils.utils import ImmaculateGridUtils
 
 
@@ -125,6 +125,13 @@ def get_team_name_without_city(full_name):
     
     # If no match is found
     return "Unknown Team"
+
+
+def get_supercategory(category):
+    for candidate in CATEGORY_LIST:
+        if candidate in category:
+            return CATEGORY_LIST[candidate]
+    return category
 
 
 def category_is_team(category):

@@ -181,7 +181,7 @@ class ImageProcessor():
                 # Keep any parser messages with "Invalid image" from the parser_existing_data
                 parser_existing_data = parser_existing_data[
                     parser_existing_data["parser_message"].str.contains(
-                        "Invalid image|already exists|Success",
+                        "Invalid image|already exists|Success|Warning: Grid image is invalid|Failed to|Issue with",
                         na=False
                     )
                 ]

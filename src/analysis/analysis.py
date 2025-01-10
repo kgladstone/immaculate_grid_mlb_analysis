@@ -25,6 +25,7 @@ from data.data_prep import (
     clean_image_parser_data,
     create_grid_cell_image_view,
     get_team_name_without_city,
+    get_supercategory
     )
 from utils.constants import (
     TEAM_LIST, 
@@ -607,26 +608,26 @@ def analyze_person_to_category(texts, prompts, categories, threshold=25):
     return df
 
 
-def get_teams_for_each_player_from_responses(image_metadata, prompts):
+def get_category_for_each_player_from_responses(image_metadata, prompts, grid_min=0, grid_max=99999):
     results = []
 
     grid_cell_image_view = create_grid_cell_image_view(image_metadata)
 
     for _, entry in grid_cell_image_view.iterrows():
-        submitter = entry['submitter']
-        position = entry['position']
-        player = entry['response']
-        grid_number = entry['grid_number']
-        prompt_data = prompts[prompts['grid_id'] == grid_number][position]
-        if prompt_data is not None and len(prompt_data) > 0:
-            categories = get_categories_from_prompt(prompt_data.iloc[0])
-            for category in categories:
-                if category_is_team(category):
+        grid_number = int(entry['grid_number'])
+        if grid_number >= grid_min and grid_number <= grid_max:
+            submitter = entry['submitter']
+            position = entry['position']
+            player = entry['response']
+            prompt_data = prompts[prompts['grid_id'] == grid_number][position]
+            if prompt_data is not None and len(prompt_data) > 0:
+                categories = get_categories_from_prompt(prompt_data.iloc[0])
+                for category in categories:
                     results.append(
                         {
                             "submitter": submitter,
                             "player": player,
-                            "team": category,
+                            "category": category,
                             "grid_number": grid_number  # Keep the grid number in the results
                         }
                     )
@@ -634,9 +635,9 @@ def get_teams_for_each_player_from_responses(image_metadata, prompts):
     # Convert to DataFrame
     results_df = pd.DataFrame(results)
 
-    # Aggregate by submitter, player, and team
+    # Aggregate by submitter, player, and category
     aggregated_results = (
-        results_df.groupby(['submitter', 'player', 'team'])
+        results_df.groupby(['submitter', 'player', 'category'])
         .agg(
             count=('grid_number', 'size'),  # Count occurrences
             list_of_grids=('grid_number', lambda x: list(x.unique()))  # Collect unique grid numbers
@@ -647,32 +648,113 @@ def get_teams_for_each_player_from_responses(image_metadata, prompts):
     return aggregated_results.sort_values(by='count', ascending=False)
 
 
-def get_favorite_player_by_team(image_metadata, prompts):
-    # Call the function to get aggregated results
-    aggregated_results = get_teams_for_each_player_from_responses(image_metadata, prompts)
+def get_teams_for_each_player_from_responses(image_metadata, prompts, grid_min=0, grid_max=99999):
 
-    # Determine the favorite player by team and submitter
-    favorite_players = (
-        aggregated_results
-        .sort_values(['team', 'submitter', 'count'], ascending=[True, True, False])
-        .drop_duplicates(['team', 'submitter'], keep='first')  # Keep the highest count for each team/submitter combo
+    df = get_category_for_each_player_from_responses(
+        image_metadata, 
+        prompts, 
+        grid_min, 
+        grid_max)
+    
+    filtered_df = df[df.apply(lambda row: category_is_team(row['category']), axis=1)]
+
+    filtered_df.rename(columns={'category':'team'}, inplace=True)
+
+    return filtered_df
+
+
+def get_supercategory_for_each_player_from_responses(image_metadata, prompts, grid_min=0, grid_max=99999):
+    df = get_category_for_each_player_from_responses(
+        image_metadata, 
+        prompts, 
+        grid_min, 
+        grid_max)
+    
+    filtered_df = df[df.apply(lambda row: not category_is_team(row['category']), axis=1)]
+
+    filtered_df['supercategory'] = filtered_df.apply(lambda row: get_supercategory(row['category']), axis=1)
+
+    # Aggregate by submitter, player, and category
+    aggregated_results = (
+        filtered_df.groupby(['submitter', 'player', 'supercategory'])
+        .agg(
+            count=('count', 'sum'),  # Count occurrences
+            list_of_grids=('list_of_grids', lambda x: list(set(item for sublist in x for item in sublist)))  # Collect unique grid numbers
+        )
+        .reset_index()
     )
 
-    # Add a column combining player name and count for display
-    favorite_players['player_with_count'] = favorite_players['player'] + " (" + favorite_players['count'].astype(str) + ")"
+    return aggregated_results.sort_values(by='count', ascending=False)
+
+
+def get_players_by_position_from_responses(image_metadata, prompts, grid_min=0, grid_max=99999):
+    df = get_category_for_each_player_from_responses(
+        image_metadata, 
+        prompts, 
+        grid_min, 
+        grid_max)
+    
+    filtered_df = df[df.apply(lambda row: not category_is_team(row['category']), axis=1)]
+
+    filtered_df = filtered_df[filtered_df.apply(lambda row: (get_supercategory(row['category']) == "Position") and (row['category'] != "Gold Glove"), axis=1)]
+
+    filtered_df.rename(columns={'category':'position'}, inplace=True)
+
+    filtered_df['position'] = filtered_df.apply(lambda row: row['position'].replace('Played', '').replace('min. 1 game', '').strip(), axis=1)
+
+    return filtered_df
+
+def get_favorite_player_by_attribute(image_metadata, prompts, attribute='team', grid_min=0, grid_max=99999):
+    # Call the function to get aggregated results
+    if attribute == 'team':
+        aggregated_results = get_teams_for_each_player_from_responses(image_metadata, prompts, grid_min, grid_max)
+    elif attribute == 'supercategory':
+        aggregated_results = get_supercategory_for_each_player_from_responses(image_metadata, prompts, grid_min, grid_max)
+    elif attribute == 'position': 
+        aggregated_results = get_players_by_position_from_responses(image_metadata, prompts, grid_min, grid_max)
+    else:
+        return pd.DataFrame()
+
+    # Calculate total counts by submitter and attribute
+    total_counts = (
+        aggregated_results.groupby(['submitter', attribute])['count']
+        .sum()
+        .reset_index()
+        .rename(columns={'count': 'total_count'})
+    )
+
+    # Merge total counts back into the aggregated results
+    aggregated_results = pd.merge(aggregated_results, total_counts, on=['submitter', attribute])
+
+    # Determine the favorite player by attribute and submitter
+    favorite_players = (
+        aggregated_results
+        .sort_values([attribute, 'submitter', 'count'], ascending=[True, True, False])
+        .drop_duplicates([attribute, 'submitter'], keep='first')  # Keep the highest count for each attribute/submitter combo
+    )
+
+    # Add a column combining player name and counts (X of Y) for display
+    favorite_players['player_with_count'] = (
+        favorite_players['player'] + 
+        "\n(" + 
+        favorite_players['count'].astype(str) + 
+        " of " + 
+        favorite_players['total_count'].astype(str) + 
+        ")"
+    )
 
     # Pivot to create the desired cross-tab
-    crosstab = favorite_players.pivot(index='team', columns='submitter', values='player_with_count')
+    crosstab = favorite_players.pivot(index=attribute, columns='submitter', values='player_with_count')
 
-    # Reset index to make 'team' a column
+    # Reset index to make 'attribute' a column
     crosstab = crosstab.reset_index()
 
     return crosstab
 
 
-def get_players_used_for_most_teams(image_metadata, prompts, cutoff=25):
+def get_players_used_for_most_teams(image_metadata, prompts, cutoff=25, grid_min=0, grid_max=99999):
     # Call the function to get aggregated results
-    aggregated_results = get_teams_for_each_player_from_responses(image_metadata, prompts)
+    aggregated_results = get_teams_for_each_player_from_responses(image_metadata, prompts, grid_min, grid_max)
 
     # Group by player and team to get distinct team count per player
     player_team_data = (

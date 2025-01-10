@@ -101,4 +101,50 @@ TEAM_LIST = {
     "Rangers": "TEX"
 }
 
+CATEGORY_LIST = {
+    # Overall
+    "WAR" : "Overall",
+    "All Star" : "Overall",
+    "Hall of Fame": "Overall",
+    "MVP" : "Overall",
+    "Rookie of the Year": "Overall",
+    "First Round Draft Pick" : "Overall",
+
+    # Demographic
+    "Born" : "Demographic",
+    "Major" : "Demographic",
+    "United States" : "Demographic",
+    "Canada" : "Demographic",
+
+    # One Team
+    "Only One Team" : "One Team",
+
+    # Fielding
+    "Gold Glove" : "Position",
+    "Field" : "Position", # specific outfield spots captured here
+    "Outfield" : "Position",
+    "Shortstop" : "Position",
+    "Base" : "Position", # specific infield spots captured here
+    "Catch" : "Position",
+
+    # Hitting
+    "AVG": "Hitting",
+    "HR" : "Hitting",
+    "Hits" : "Hitting",
+    "Silver Slugger" : "Hitting",
+    "Batting" : "Hitting",
+    "RBI" : "Hitting",
+    "Run" : "Hitting",
+
+    # Pitching
+    "Cy Young": "Pitching",
+    "Win" : "Pitching",
+    "Pitch" : "Pitching",
+    "Threw" : "Pitching",
+    "ERA" : "Pitching",
+
+    # Speed
+    "SB" : "Speed"
+}
+
 IMM_GRID_START_DATE = "2023-04-02"  # Start date of the immaculate grid

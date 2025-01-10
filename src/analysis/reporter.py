@@ -34,7 +34,7 @@ from analysis.analysis import (
     plot_top_n_grids,
     analyze_person_to_category,
     analyze_submitter_specific_players,
-    get_favorite_player_by_team,
+    get_favorite_player_by_attribute,
     get_players_used_for_most_teams
 )
 
@@ -100,12 +100,23 @@ class ReportGenerator:
 
         if isinstance(output, pd.DataFrame):  # Handle table (DataFrame) output
             MAX_ROWS_PER_PAGE = 45
-            total_pages = math.ceil(len(output) / MAX_ROWS_PER_PAGE)
+            total_rows = len(output)
+
+            overall_max_newlines = max(
+                output[column].astype(str).str.count('\n').max()
+                for column in output.columns
+            )
+
+            newlines_per_row = math.ceil(overall_max_newlines / total_rows)
+
+            max_rows_per_page_adjusted = math.floor(MAX_ROWS_PER_PAGE / (1 + newlines_per_row))
+
+            total_pages = math.ceil(total_rows / max_rows_per_page_adjusted)
 
             for page_num in range(total_pages):
                 # Get rows for the current page
-                start_row = page_num * MAX_ROWS_PER_PAGE
-                end_row = start_row + MAX_ROWS_PER_PAGE
+                start_row = page_num * max_rows_per_page_adjusted
+                end_row = start_row + max_rows_per_page_adjusted
                 page_df = output.iloc[start_row:end_row]
 
                 # Apply text wrapping
@@ -295,8 +306,10 @@ class ReportGenerator:
             ("Hardest Teams for Team-Stat Intersections", analyze_hardest_intersections, (self.texts, self.prompts, "stat")),
             ("Top Players Used", analyze_top_players_by_submitter, (self.image_metadata, 40)),
             ("Our Personal Favorites", analyze_submitter_specific_players, (self.image_metadata, 15)),
-            ("Our Favorite Players by Team", get_favorite_player_by_team, (self.image_metadata, self.prompts)),
-            ("Players Used for Most Teams", get_players_used_for_most_teams, (self.image_metadata, self.prompts, 40)),
+            ("Our Favorite Players by Team", get_favorite_player_by_attribute, (self.image_metadata, self.prompts, 'team', 0)),
+            ("Our Favorite Players by Supercategory", get_favorite_player_by_attribute, (self.image_metadata, self.prompts, 'supercategory', 0)),
+            ("Our Favorite Players by Position", get_favorite_player_by_attribute, (self.image_metadata, self.prompts, 'position', 0)),
+            ("Players Used for Most Teams", get_players_used_for_most_teams, (self.image_metadata, self.prompts, 40, 0)),
             ("Bans and Saves", analyze_grid_cell_with_shared_guesses, (self.image_metadata, self.prompts, GRID_PLAYERS_RESTRICTED)),
             ("Popular Players by Month", analyze_top_players_by_month, (self.image_metadata, 5)),
         ]
