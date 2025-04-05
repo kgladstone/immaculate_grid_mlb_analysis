@@ -174,7 +174,7 @@ class ImmaculateGridUtils:
         if is_from_me:
             return MY_NAME
         for name, details in GRID_PLAYERS.items():
-            if details["phone_number"] == phone_number:
+            if phone_number in details["phone_number"]:
                 return name
         return "Unknown"
 

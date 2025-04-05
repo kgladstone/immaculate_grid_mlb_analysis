@@ -46,7 +46,12 @@ class ImageProcessor():
         """
         
         # Map phone numbers to player names
-        phone_to_player = {details["phone_number"]: player for player, details in GRID_PLAYERS.items()}
+        phone_to_player = dict()
+        for player, details in GRID_PLAYERS.items():
+            if "phone_number" in details:
+                for phone_number in details["phone_number"]:
+                    if phone_number not in phone_to_player:
+                        phone_to_player[phone_number] = player
         phone_numbers = list(phone_to_player.keys())
 
         # Connect to the Messages database
@@ -217,26 +222,33 @@ class ImageProcessor():
                     text = self.extract_text_from_image(path) # OCR operation
                     grid_number = self.grid_number_from_image_text(text) # Text operation
 
-                    # Extract existing grid_number and submitter combos
-                    existing_metadata = self.load_image_metadata()
-                    existing_combinations = {(row.grid_number, row.submitter) for row in existing_metadata.itertuples()}
-
+                    # Check if the grid number is valid, if not, skip the image and log a message in the parser
                     if grid_number is None:
                         parser_message = f"Warning: Invalid image. Could not extract grid number from {path}"
+                        # if "Immaculate Grid Baseball." in path:
+                        #     print(path)
+                        #     print("Quitting since it should be pulling that one in ^^")
+                        #     input("Press Enter to continue...")
 
-                    # Check if this combination already exists in metadata
-                    elif (grid_number, submitter) in existing_combinations:
-                        parser_message = f"Warning: This grid already exists in metadata (#{grid_number} for {submitter})"
-
-                    # Process the image
                     else:
-                        try:
-                            matrix = messages_data[(messages_data['grid_number'] == grid_number) & (messages_data['name'] == submitter)]['matrix'].iloc[0]
-                            parser_message = self.process_image_with_dynamic_grid(path, submitter, image_date, grid_number, matrix) # OCR operation
-                        except IndexError as e:
-                            print(e)
-                            parser_message = f"Warning: Issue with the text matrixs"
-            
+                        # Extract existing grid_number and submitter combos
+                        existing_metadata = self.load_image_metadata()
+                        existing_combinations = {(row.grid_number, row.submitter) for row in existing_metadata.itertuples()}
+
+                        # Check if this combination already exists in metadata
+                        if (grid_number, submitter) in existing_combinations:
+                            parser_message = f"Warning: This grid already exists in metadata (#{grid_number} for {submitter})"
+                            print(parser_message)
+                            continue
+
+                        # Process the image
+                        else:
+                            try:
+                                matrix = messages_data[(messages_data['grid_number'] == grid_number) & (messages_data['name'] == submitter)]['matrix'].iloc[0]
+                                parser_message = self.process_image_with_dynamic_grid(path, submitter, image_date, grid_number, matrix) # OCR operation
+                            except IndexError as e:
+                                print(e)
+                                parser_message = f"Warning: Issue with the text matrix"
             parser_data_entry = {
                 "path": path,
                 "submitter": submitter,
@@ -693,7 +705,7 @@ class ImageProcessor():
         return grid_cells
 
 
-    def draw_image_with_outlined_logo_and_grid_cells(self, image_path, logo_position, grid_cells, cell_scalar):
+    def draw_image_with_outlined_logo_and_grid_cells(self, image_path, logo_position, grid_cells, cell_scalar=1):
         img = self.read_image(image_path)
         logo_position = self.find_logo_position(image_path)
         top_left = logo_position[0]
@@ -1007,7 +1019,7 @@ class ImageProcessor():
         """
         Extract the grid number from the OCR-extracted text.
         """
-        match = re.search(r"BASEBALL GRID #(\d+)", text)
+        match = re.search(r"GRID #(\d+)", text)
         return int(match.group(1)) if match else None
 
 
@@ -1089,10 +1101,13 @@ class ImageProcessor():
         # Step 1: Find the logo position
         print("Step 1: Finding logo...")
         logo_position = self.find_logo_position(image_path)
+
+        print(f"Logo position: {logo_position}, image_path: {image_path}, grid_number: {grid_number}, submitter: {submitter}")
+
         if logo_position is None:
             parser_message = f"Warning: Failed to find logo position in {image_path}"
             return parser_message
-
+        
         attempt = 0
         cell_scalars = [1, 1.025, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 0.975, 0.95, 0.925, 0.9, 0.875, 0.85, 0.8]
         while attempt < len(cell_scalars):
@@ -1114,9 +1129,9 @@ class ImageProcessor():
 
             # If unable to extract players_by_cell
             if players_by_cell is None:
-                self.draw_image_with_outlined_logo_and_grid_cells(image_path, logo_position, grid_cells)
+                #self.draw_image_with_outlined_logo_and_grid_cells(image_path, logo_position, grid_cells)
                 parser_message = f"Warning: Unable to extract player names from grid"
-                quit()
+                print(parser_message)
                 return parser_message
             
             # Convert players_by_cell into a dictionary indexed by position
