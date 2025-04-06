@@ -6,6 +6,9 @@ import pandas as pd
 from io import StringIO
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
+import matplotlib.dates as mdates
+from matplotlib.ticker import MaxNLocator
+
 from datetime import datetime, timedelta
 from collections import defaultdict
 from PIL import Image
@@ -917,7 +920,10 @@ def analyze_top_players_by_month(image_metadata, cutoff):
         str: A formatted string summarizing consensus top players for each month.
     """
     # Map grid numbers to months
-    grid_month_mapping = [(entry['grid_number'], entry['date'][:7]) for _, entry in image_metadata.iterrows()]
+    grid_month_mapping = [
+        (entry['grid_number'], entry['date'].strftime('%Y-%m')) 
+        for _, entry in image_metadata.iterrows()
+    ]
     grid_month_dict = {}
     for grid_number, month in grid_month_mapping:
         if month not in grid_month_dict:
@@ -1201,6 +1207,9 @@ def analyze_grid_cell_with_shared_guesses(image_metadata, prompts, player_list):
 
         image_processor = ImageProcessor(APPLE_TEXTS_DB_PATH, IMAGES_METADATA_PATH, IMAGES_PATH)
 
+        # Hardcoded value for ban_enactment_grid_number, when bans were enacted
+        ban_enactment_grid_number = 574
+
         for _, row in filtered_rows.iterrows():
             grid_number = row['grid_number']
             position = row['position']
@@ -1213,7 +1222,7 @@ def analyze_grid_cell_with_shared_guesses(image_metadata, prompts, player_list):
                 if count < 3:
                     continue  # Skip players with less than 3 mentions
                 
-                if count >= 4:
+                if count >= 4 and grid_number >= ban_enactment_grid_number:
                     # Banned player
                     result_data.append({
                         "grid_number": grid_number,
@@ -1221,6 +1230,17 @@ def analyze_grid_cell_with_shared_guesses(image_metadata, prompts, player_list):
                         "prompt": prompt,
                         "player": player,
                         "verdict": "ban",
+                        "saved_by": None,
+                        "reason": None
+                    })
+                elif count >= 4 and grid_number < ban_enactment_grid_number:
+                    # Banned player before bans were enacted
+                    result_data.append({
+                        "grid_number": grid_number,
+                        "position": position,
+                        "prompt": prompt,
+                        "player": player,
+                        "verdict": "---",
                         "saved_by": None,
                         "reason": None
                     })
@@ -1252,6 +1272,417 @@ def analyze_grid_cell_with_shared_guesses(image_metadata, prompts, player_list):
     result_df = generate_analysis_dataframe(filtered_rows, player_list)
 
     return result_df
+
+
+# - Longest immaculate day streaks 
+def analyze_immaculate_streaks(texts):
+    # Assume make_texts_melted(texts) returns a DataFrame with at least columns: 'name', 'date', 'correct'
+    df = make_texts_melted(texts)
+    df['date'] = pd.to_datetime(df['date'])
+    
+    # Only keep necessary columns and sort by name and date
+    df = df[['name', 'date', 'correct']].sort_values(['name', 'date'])
+    
+    # Flag immaculate entries
+    df['is_immaculate'] = df['correct'] == 9
+    
+    streaks = []
+    
+    # Process by each player
+    for name, group in df.groupby('name'):
+        # Only consider immaculate rows for streak calculation
+        immaculate_group = group[group['is_immaculate']].reset_index(drop=True)
+        if immaculate_group.empty:
+            continue
+        
+        # Calculate the gap in days between consecutive immaculate entries
+        immaculate_group['gap'] = immaculate_group['date'].diff().dt.days.fillna(0).astype(int)
+        # A new streak starts if the gap is not exactly 1 day
+        immaculate_group['new_streak'] = immaculate_group['gap'] != 1
+        # Cumulatively sum to get a unique streak id for each streak
+        immaculate_group['streak_id'] = immaculate_group['new_streak'].cumsum()
+        
+        # Process each streak
+        for _, streak_group in immaculate_group.groupby('streak_id'):
+            if len(streak_group) < 2:
+                continue  # Skip 1-day streaks
+            streaks.append({
+                'name': name,
+                'start_of_streak': streak_group['date'].iloc[0].strftime('%Y-%m-%d'),
+                'end_of_streak': streak_group['date'].iloc[-1].strftime('%Y-%m-%d'),
+                'length': len(streak_group)
+            })
+    
+    # Compile the results into a DataFrame and sort by streak length (descending)
+    streaks_df = pd.DataFrame(streaks)
+    if not streaks_df.empty:
+        streaks_df = streaks_df.sort_values(by=['length','start_of_streak'], ascending=False).head(25).reset_index(drop=True)
+    
+    return streaks_df
+
+
+
+def analyze_splits(image_metadata, prompts, submitters):
+    """
+    Given a DataFrame of image metadata, a DataFrame of prompts, and a list of submitters,
+    returns a table (as a DataFrame) with the grid number, response position, prompt text, 
+    answer_1, answer_2, submitters who gave answer_1, and submitters who gave answer_2.
+    
+    A split is defined as an even split of responses among the provided submitters 
+    (e.g., if there are 4 submitters, exactly 2 provided one answer and 2 provided the other).
+    
+    Assumes:
+        - image_metadata has columns: grid_number, submitter, date, responses, image_filename.
+          The 'responses' column contains a dict mapping positions (e.g., "top_left") to a string.
+        - prompts has a column 'grid_id' (matching grid_number) and columns for each response position
+          (e.g., "top_left", "bottom_right") containing prompt text.
+        - submitters is a list of names.
+    
+    Returns:
+        pd.DataFrame: with columns:
+            - grid_number
+            - position
+            - prompt
+            - answer_1
+            - answer_2
+            - submitters_answer_1 (list)
+            - submitters_answer_2 (list)
+    """
+    results = []
+    submitter_set = set(submitters)
+    n_submitters = len(submitter_set)
+    
+    # For an even split, assume n_submitters is even.
+    half_count = n_submitters // 2
+    
+    # Define the positions to check.
+    positions = [
+        "top_left", "top_center", "top_right",
+        "middle_left", "middle_center", "middle_right",
+        "bottom_left", "bottom_center", "bottom_right"
+    ]
+    
+    # Group the image metadata by grid_number.
+    for grid_number, group in image_metadata.groupby('grid_number'):
+        # Filter rows to only those with a submitter in our list.
+        group_filtered = group[group['submitter'].isin(submitter_set)]
+        
+        # Only consider if exactly all the desired submitters are present.
+        if set(group_filtered['submitter']) != submitter_set:
+            continue
+        
+        # For each response position:
+        for pos in positions:
+            responses = {}
+            # Build a dictionary: response -> list of submitters who gave that response.
+            for _, row in group_filtered.iterrows():
+                # Assume 'responses' is already a dict. If not, try to load it.
+                resp_val = row['responses']
+                if not isinstance(resp_val, dict):
+                    try:
+                        resp_val = json.loads(resp_val)
+                    except Exception:
+                        resp_val = {}
+                answer = resp_val.get(pos, '').strip()
+                # If any answer is blank, skip this position.
+                if answer == '':
+                    responses = {}
+                    break
+                responses.setdefault(answer, []).append(row['submitter'])
+            
+            # We require exactly 2 distinct answers and an even split.
+            if len(responses) == 2:
+                counts = [len(v) for v in responses.values()]
+                if all(c == half_count for c in counts):
+                    # Sort answers (arbitrarily, so answer_1 and answer_2 are consistent)
+                    sorted_answers = sorted(responses.items(), key=lambda x: x[0])
+                    answer_1, submitters_answer_1 = sorted_answers[0]
+                    answer_2, submitters_answer_2 = sorted_answers[1]
+                    
+                    # Look up the prompt text for this grid and position in the prompts DataFrame.
+                    prompt_text = None
+                    prompt_row = prompts[prompts['grid_id'] == grid_number]
+                    if not prompt_row.empty and pos in prompt_row.columns:
+                        prompt_text = prompt_row.iloc[0][pos].replace(" + ","\n")
+                    
+                    results.append({
+                        "grid_number": grid_number,
+                        "position": pos.replace("_", " ").title(),
+                        "prompt": prompt_text,
+                        "answers": answer_1 + "\n" + answer_2,
+                        "submitters_1": ",\n".join(submitters_answer_1),
+                        "submitters_2": ",\n".join(submitters_answer_2)
+                    })
+                    
+    return pd.DataFrame(results)
+
+def analyze_everyone_missed(texts, prompts, submitters):
+    """
+    Given texts (raw data that will be melted into a DataFrame), a DataFrame of prompts, and a list of submitters,
+    returns a list of dictionaries for each grid number and response position where every one of the provided submitters 
+    "missed" that position (i.e. the corresponding entry in the 'matrix' is False).
+    
+    The melted texts DataFrame (produced by make_texts_melted(texts)) should have these columns:
+        - grid_number
+        - name           (the submitter's name)
+        - correct, score, average_score_of_correct, date, matrix
+    where 'matrix' is a 3x3 list-of-lists of booleans.
+    
+    The prompts DataFrame should have a column 'grid_id' (which corresponds to grid_number) and additional columns 
+    named after the positions (e.g., "top_left", "bottom_right", etc.) containing the prompt text for that grid.
+    
+    Args:
+        texts: Raw texts data.
+        prompts (pd.DataFrame): DataFrame of prompts.
+        submitters (list): List of submitter names to check.
+    
+    Returns:
+        List[dict]: Each dict has keys:
+            - "grid_number": the grid number where all specified submitters missed a particular position.
+            - "position": the response position (e.g., "top_left") that was missed by all.
+            - "prompt": the prompt text for that grid and position (if available).
+    """
+    results = []
+    submitter_set = set(submitters)
+    
+    # Mapping from response position to indices in the 3x3 matrix.
+    position_to_indices = {
+        "top_left": (0, 0),
+        "top_center": (0, 1),
+        "top_right": (0, 2),
+        "middle_left": (1, 0),
+        "middle_center": (1, 1),
+        "middle_right": (1, 2),
+        "bottom_left": (2, 0),
+        "bottom_center": (2, 1),
+        "bottom_right": (2, 2)
+    }
+    
+    # Convert texts into a melted DataFrame.
+    df = make_texts_melted(texts)
+    
+    # Group by grid_number.
+    for grid_number, group in df.groupby('grid_number'):
+        # Filter rows to only those with a submitter in our list (using column "name").
+        group_filtered = group[group['name'].isin(submitter_set)]
+        
+        # Only proceed if all desired submitters are present in this grid.
+        if set(group_filtered['name']) >= submitter_set:
+            for pos, (i, j) in position_to_indices.items():
+                all_missed = True
+                for _, row in group_filtered.iterrows():
+                    matrix_val = row['matrix']
+                    # Check if the value at (i, j) is False (i.e. missed).
+                    if matrix_val[i][j] != False:
+                        all_missed = False
+                        break
+                if all_missed:
+                    # Look up the corresponding prompt for this grid and position.
+                    prompt_text = None
+                    prompt_row = prompts[prompts['grid_id'] == grid_number]
+                    if not prompt_row.empty and pos in prompt_row.columns:
+                        prompt_text = prompt_row.iloc[0][pos]
+                    
+                    results.append({
+                        "grid_number": grid_number,
+                        "position": pos.replace("_", " ").title(),
+                        "prompt": prompt_text
+                    })
+                    
+    return pd.DataFrame(results)
+
+
+def analyze_all_used_on_same_day(image_metadata, prompts, submitters):
+    """
+    Finds grids (days) where the same player was used by all specified submitters (though not necessarily in the same position).
+    
+    Returns a DataFrame with 4 columns:
+      1. grid_number
+      2. player_used (the common player)
+      3. submitter_positions: a newline-separated string with "submitter: pos1, pos2" for each submitter.
+      4. position_prompts: a newline-separated string with "position: prompt" for each combined position.
+    
+    Args:
+        image_metadata (pd.DataFrame): DataFrame with columns:
+            - grid_number
+            - submitter
+            - date
+            - responses: a dict (or JSON string) mapping positions (e.g., "top_left") to a string (player name)
+            - image_filename
+        prompts (pd.DataFrame): DataFrame with a column 'grid_id' (matching grid_number) and columns for each position
+            containing the prompt text.
+        submitters (list): List of submitter names to check.
+    
+    Returns:
+        pd.DataFrame: A table with columns: grid_number, player_used, submitter_positions, position_prompts.
+    """
+    results = []
+    submitter_set = set(submitters)
+    
+    # Group by grid_number.
+    for grid_number, group in image_metadata.groupby('grid_number'):
+        # Filter rows to only those with a submitter in our list.
+        group_filtered = group[group['submitter'].isin(submitter_set)]
+        # Only proceed if exactly all the desired submitters are present.
+        if set(group_filtered['submitter']) != submitter_set:
+            continue
+        
+        # Build a mapping for each submitter: {submitter: {player: [position, ...]}}
+        submitter_map = {}
+        for _, row in group_filtered.iterrows():
+            sub = row['submitter']
+            responses = row['responses']
+            # For this submitter, record positions for each non-empty player.
+            for pos, player in responses.items():
+                player = player.strip()
+                if player:
+                    submitter_map.setdefault(sub, {}).setdefault(player, []).append(pos)
+        
+        # Find common players across all submitters.
+        common_players = None
+        for sub in submitters:
+            players = set(submitter_map.get(sub, {}).keys())
+            if common_players is None:
+                common_players = players
+            else:
+                common_players = common_players.intersection(players)
+        if not common_players:
+            continue
+        
+        # For each common player, gather the output.
+        for player in common_players:
+            # Build a string for each submitter: "submitter: pos1, pos2"
+            sub_pos_lines = []
+            combined_positions = set()
+            for sub in submitters:
+                pos_list = submitter_map[sub].get(player, [])
+                if pos_list:
+                    combined_positions.update(pos_list)
+                    sub_pos_lines.append(f"{sub}: {', '.join(sorted([pos.replace("_", " ").title() for pos in pos_list]))}")
+            submitter_positions_str = "\n".join(sub_pos_lines)
+            
+            # For each combined position, look up the prompt.
+            prompt_dict = {}
+            prompt_row = prompts[prompts['grid_id'] == grid_number]
+            if not prompt_row.empty:
+                for pos in sorted(combined_positions):
+                    if pos in prompt_row.columns:
+                        prompt_dict[pos] = str(prompt_row.iloc[0][pos])
+            # Format prompt_dict as "position: prompt" lines.
+            position_prompts_str = "\n".join([f"{pos.replace("_", " ").title()}: {prompt_dict[pos]}" for pos in sorted(prompt_dict)])
+
+            same = True if len(prompt_dict.keys()) == 1 else False
+            
+            results.append({
+                "grid": grid_number,
+                "player": player.replace(" ", "\n"),
+                "positions": submitter_positions_str,
+                "prompts": position_prompts_str,
+                "same": same
+            })
+    
+    return pd.DataFrame(results)
+
+
+def analyze_illegal_uses(image_metadata, prompts, submitters):
+    """
+    Analyzes image_metadata for illegal uses of banned players.
+    
+    First, it calls analyze_grid_cell_with_shared_guesses (assumed to exist) to obtain a ban_df,
+    which has a column 'verdict' (only rows with verdict=='ban' are used) and columns 'grid' and 'player',
+    indicating that the player is banned starting at that grid.
+    
+    Then, for each banned player, this function scans image_metadata for any grid (i.e. day)
+    with grid_number greater than the ban grid in which the banned player appears in the responses.
+    
+    Only rows where the submitter is in the provided submitters list are considered.
+    
+    The output is grouped by grid and banned player and returned as a DataFrame with 4 columns:
+      1. grid_number
+      2. player_used
+      3. submitter_positions – a newline-separated string with entries like "submitter: pos1, pos2"
+      4. position_prompts – a newline-separated string with entries like "position: prompt"
+    
+    Args:
+        image_metadata (pd.DataFrame): DataFrame with columns including:
+            - grid_number
+            - submitter
+            - responses (a dict or JSON string mapping positions to player names)
+            - image_filename (and possibly other columns)
+        prompts (pd.DataFrame): DataFrame with a column 'grid_id' (matching grid_number) and columns for positions.
+        submitters (list): List of submitter names to consider.
+    
+    Returns:
+        pd.DataFrame: A table with columns as described.
+    """
+    # Get banned players and grids using your existing function.
+    ban_df = analyze_grid_cell_with_shared_guesses(image_metadata, prompts, submitters)
+    # Filter to banned verdict rows; assume ban_df has columns "grid", "player", and "verdict".
+    ban_df = ban_df[ban_df['verdict'] == 'ban'][['grid','player']].reset_index(drop=True)
+    print("Ban DataFrame:")
+    print(ban_df)
+    
+    illegal_dict = {}
+    submitter_set = set(submitters)
+    
+    # Iterate over each banned player record.
+    for idx, ban_row in ban_df.iterrows():
+        ban_grid = ban_row['grid']
+        banned_player = ban_row['player'].strip().lower()  # normalized for comparison
+        
+        # Look in image_metadata for any grid with grid_number > ban_grid and only include rows where submitter is in our list.
+        subset = image_metadata[
+            (image_metadata['grid_number'] > ban_grid) &
+            (image_metadata['submitter'].isin(submitter_set))
+        ]
+        
+        for _, row in subset.iterrows():
+            responses = row['responses']
+            matching_positions = []
+            for pos, value in responses.items():
+                if value.strip().lower() == banned_player:
+                    matching_positions.append(pos)
+            if matching_positions:
+                key = (row['grid_number'], banned_player)
+                if key not in illegal_dict:
+                    illegal_dict[key] = {}
+                sub = row['submitter']
+                if sub not in illegal_dict[key]:
+                    illegal_dict[key][sub] = set()
+                illegal_dict[key][sub].update(matching_positions)
+    
+    # Now, compile the results into the desired output format.
+    results = []
+    for (grid_number, banned_player), sub_pos in illegal_dict.items():
+        # Build newline-separated string: "submitter: pos1, pos2"
+        submitter_positions_str = "\n".join(
+            f"{sub}: {', '.join(sorted(list(positions)))}" for sub, positions in sub_pos.items()
+        )
+        # Get the union of all positions used.
+        all_positions = set()
+        for positions in sub_pos.values():
+            all_positions.update(positions)
+        all_positions = sorted(list(all_positions))
+        
+        # Look up the corresponding prompt from the prompts DataFrame.
+        position_prompt_lines = []
+        prompt_row = prompts[prompts['grid_id'] == grid_number]
+        if not prompt_row.empty:
+            for pos in all_positions:
+                if pos in prompt_row.columns:
+                    prompt_text = str(prompt_row.iloc[0][pos])
+                    position_prompt_lines.append(f"{pos}: {prompt_text}")
+        position_prompts_str = "\n".join(position_prompt_lines)
+        
+        results.append({
+            "grid_number": grid_number,
+            "player_used": banned_player.title(),
+            "submitter_positions": submitter_positions_str,
+            "position_prompts": position_prompts_str
+        })
+    
+    return pd.DataFrame(results)
+
 
 
 #--------------------------------------------------------------------------------------------------
@@ -1556,3 +1987,98 @@ def plot_best_worst_scores_30(texts):
     fig_title = 'Best and Worst Scores (Last 30 Days)'
     plot_best_worst_scores(filtered_texts, fig_title)
 
+
+
+def analyze_new_players_per_month(image_metadata, color_map=None):
+    """
+    Tracks and plots the number of new players used per month per submitter.
+    
+    The image_metadata DataFrame is assumed to have the following columns:
+      - 'grid_number': numeric identifier of the grid/day.
+      - 'submitter': the submitter's name.
+      - 'date': the date (as a datetime or a string in YYYY-MM-DD format).
+      - 'responses': a dictionary (or a JSON string) mapping positions (e.g., "top_left")
+                     to a player's name.
+    
+    For each submitter, the function records the first time they use each player.
+    Then, it groups these "first uses" by month (derived from the date) and counts the number
+    of new players per submitter per month.
+    
+    Args:
+        image_metadata (pd.DataFrame): DataFrame as described.
+        color_map (dict, optional): Mapping from submitter name to a matplotlib color.
+        
+    The function then plots the result as a time series with one line per submitter.
+    """
+    # Ensure the date column is datetime.
+    image_metadata['date'] = pd.to_datetime(image_metadata['date'])
+    
+    # Sort by date (earliest first).
+    df_sorted = image_metadata.sort_values('date')
+    
+    # Dictionary to record the first use for each (submitter, player) pair.
+    # Key: (submitter, player.lower()), Value: (date, grid_number, position, original_player)
+    first_use = {}
+    
+    for _, row in df_sorted.iterrows():
+        submitter = row['submitter']
+        grid_number = row['grid_number']
+        date = row['date']
+        responses = row['responses']
+        
+        for pos, player in responses.items():
+            player = player.strip()
+            if not player:
+                continue  # Skip empty answers.
+            key = (submitter, player.lower())
+            if key not in first_use:
+                first_use[key] = (date, grid_number, pos, player)
+    
+    # Convert the first use records into a DataFrame.
+    rows = []
+    for (submitter, _), (date, grid_number, pos, original_player) in first_use.items():
+        rows.append({
+            "submitter": submitter,
+            "player": original_player,
+            "date": date,
+            "grid_number": grid_number,
+            "position": pos
+        })
+    first_use_df = pd.DataFrame(rows)
+    
+    # Create a 'month' column formatted as "YYYY-MM".
+    first_use_df['month'] = first_use_df['date'].dt.strftime("%Y-%m")
+    
+    # Group by submitter and month to count new players.
+    agg_df = first_use_df.groupby(['submitter', 'month']).agg(new_players_count=('player', 'count')).reset_index()
+    agg_df = agg_df.sort_values(['submitter', 'month']).reset_index(drop=True)
+    
+    # Convert the month string to a datetime object (using the first day of the month) for plotting.
+    agg_df['month_dt'] = pd.to_datetime(agg_df['month'] + "-01")
+    
+    # Plotting.
+    plt.figure(figsize=(12, 6))
+    
+    # Plot a line for each submitter.
+    for name in agg_df['submitter'].unique():
+        person_data = agg_df[agg_df['submitter'] == name]
+        if color_map and name in color_map:
+            color = color_map[name]
+        else:
+            color = None  # Default color.
+        plt.plot(person_data['month_dt'], person_data['new_players_count'],
+                 marker='o', label=name, color=color)
+    
+    # Format the plot.
+    plt.legend()
+    plt.title("[NEW] New Players Used Per Month by Submitter", fontsize=16, fontweight='bold')
+    plt.xlabel("Month")
+    plt.ylabel("New Players Count")
+    plt.xticks(rotation=45)
+    
+    # Use month-year formatting on the x-axis.
+    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
+    plt.gca().xaxis.set_major_locator(MaxNLocator(nbins=10))
+    
+    plt.tight_layout()
+    plt.show()

@@ -19,10 +19,9 @@ from data.messages_loader import MessagesLoader
 from data.image_processor import ImageProcessor
 from data.data_prep import (
     preprocess_data_into_texts_structure, make_color_map,
-    build_category_structure, build_person_category_structure,
+    build_category_structure
 )
 from analysis.analysis import (
-    get_category_clearing_threshold, get_person_to_type, 
     analyze_person_type_performance, analyze_team_performance, 
     analyze_person_prompt_performance, analyze_hardest_intersections, 
     analyze_most_successful_exact_intersections, analyze_empty_team_team_intersections, 
@@ -35,7 +34,13 @@ from analysis.analysis import (
     analyze_person_to_category,
     analyze_submitter_specific_players,
     get_favorite_player_by_attribute,
-    get_players_used_for_most_teams
+    get_players_used_for_most_teams,
+    analyze_immaculate_streaks,
+    analyze_splits,
+    analyze_everyone_missed,
+    analyze_all_used_on_same_day,
+    analyze_illegal_uses,
+    analyze_new_players_per_month
 )
 
 class ReportGenerator:
@@ -93,6 +98,7 @@ class ReportGenerator:
         This function prepares a generic page that includes the output from the function being executed.
         Handles large outputs by creating multiple pages if necessary, with tighter margins.
         """
+
         output = func(*args)
         if output is None:
             print(f"Warning: {func.__name__} returned None")
@@ -100,60 +106,53 @@ class ReportGenerator:
 
         if isinstance(output, pd.DataFrame):  # Handle table (DataFrame) output
             MAX_ROWS_PER_PAGE = 45
-            total_rows = len(output)
-
+            # Compute the maximum number of lines in any cell.
             overall_max_newlines = max(
-                output[column].astype(str).str.count('\n').max()
-                for column in output.columns
+                output[column].astype(str).str.count('\n').max() for column in output.columns
             )
+            max_lines = overall_max_newlines + 1  # convert newline count to total number of lines
 
-            newlines_per_row = math.ceil(overall_max_newlines / total_rows)
-
-            max_rows_per_page_adjusted = math.floor(MAX_ROWS_PER_PAGE / (1 + newlines_per_row))
-
+            # Subtract header height (assume header takes ~max_lines lines) from MAX_ROWS_PER_PAGE.
+            max_rows_per_page_adjusted = math.floor((MAX_ROWS_PER_PAGE - max_lines) / max_lines)
+            total_rows = len(output)
             total_pages = math.ceil(total_rows / max_rows_per_page_adjusted)
 
             for page_num in range(total_pages):
-                # Get rows for the current page
                 start_row = page_num * max_rows_per_page_adjusted
                 end_row = start_row + max_rows_per_page_adjusted
                 page_df = output.iloc[start_row:end_row]
 
-                # Apply text wrapping
                 max_line_length = self._calculate_dynamic_max_line_length(page_df)
                 page_df = page_df.applymap(lambda value: self._wrap_text(value, max_line_length=max_line_length))
 
-                # Create a new figure for the page
-                fig, ax = plt.subplots(figsize=(8.5, 11))  # Standard letter size
+                fig, ax = plt.subplots(figsize=(8.5, 11))
                 ax.axis('off')
-
-                # Add title
+                # Place title at the top.
                 ax.text(
-                    0.5, 1,
+                    0.5, 0.98,
                     f"{page_title} (Page {page_num + 1}/{total_pages})" if total_pages > 1 else page_title,
                     fontsize=14, ha='center', va='top', fontweight='bold'
                 )
 
-                # Render table with wrapped text
+                # Use a bounding box to place the table at the top (below the title).
+                # bbox = [left, bottom, width, height] in axes coordinates.
+                # Here, we set bottom=0.15 and height=0.75 so that the table spans from y=0.15 to y=0.90.
                 table = ax.table(
                     cellText=page_df.values,
                     colLabels=page_df.columns,
                     cellLoc='center',
-                    loc='center'
+                    bbox=[0, 0.15, 1, 0.75]
                 )
                 table.auto_set_font_size(False)
                 table.set_fontsize(8)
 
-                # Calculate column widths dynamically based on wrapped text
                 col_widths = [max(len(str(val)) for val in page_df[col]) for col in page_df.columns]
                 total_width = sum(col_widths)
-
                 for i, col in enumerate(page_df.columns):
-                    table.auto_set_column_width([i])  # Auto-size column width
+                    table.auto_set_column_width([i])
                     width_ratio = col_widths[i] / total_width
-                    table[0, i].set_width(min(width_ratio, 0.2))  # Limit column width to 20% of page width
+                    table[0, i].set_width(min(width_ratio, 0.2))
 
-                # Adjust cell heights dynamically based on the maximum lines in each row
                 row_line_counts = []
                 for row in range(len(page_df) + 1):  # +1 to account for header
                     line_counts = [
@@ -161,28 +160,29 @@ class ReportGenerator:
                         for (cell_row, cell_col), cell in table.get_celld().items()
                         if cell_row == row
                     ]
-                    row_line_counts.append(max(line_counts, default=1))  # Default to 1 line if no content
+                    row_line_counts.append(max(line_counts, default=1))
 
-                scaling_factor = 0.018  # Adjust height proportionally to line counts
+                scaling_factor = 0.015
                 for (row, col), cell in table.get_celld().items():
-                    if row == 0:  # Header row
+                    if row == 0:
                         cell_text = cell.get_text().get_text()
                         formatted_text = cell_text.replace("_", " ").title()
                         cell.get_text().set_text(formatted_text)
-                        cell.set_facecolor("#32CD32")  # Lime Green color
-                        cell.set_text_props(weight='bold', color='white')  # White text, bold font
-                        cell.set_height(scaling_factor)  # Fixed height for header
+                        cell.set_facecolor("#32CD32")
+                        cell.set_text_props(weight='bold', color='white')
+                        cell.set_height(scaling_factor)
                     else:
                         cell.set_height(scaling_factor * row_line_counts[row])
-
-                    # Bold "Consensus" row
                     if row > 0 and "Consensus" in str(page_df.iloc[row - 1, 0]):
                         cell.set_text_props(weight='bold')
+                    if row > 0 and "true" in cell.get_text().get_text().lower():
+                        cell.set_facecolor("#69ffb4")
+                        cell.set_text_props(weight='bold')
+                    if row > 0 and "false" in cell.get_text().get_text().lower():
+                        cell.set_facecolor("#ff6969")
+                        cell.set_text_props(weight='bold')
 
-                # Adjust layout
                 plt.tight_layout()
-
-                # Save the page to the PDF
                 pdf.savefig(fig)
                 plt.close(fig)
 
@@ -194,21 +194,17 @@ class ReportGenerator:
             total_pages = math.ceil(len(lines) / MAX_LINES_PER_NORMAL_PAGE)
 
             for page_num in range(total_pages):
-                # Get the lines for the current page
                 start_line = page_num * MAX_LINES_PER_NORMAL_PAGE
                 end_line = start_line + MAX_LINES_PER_NORMAL_PAGE
                 page_content = '\n'.join(lines[start_line:end_line])
 
-                # Create a new figure for the page
-                fig, ax = plt.subplots(figsize=(8, 11))  # Standard letter size
+                fig, ax = plt.subplots(figsize=(8, 11))
                 ax.axis('off')
 
-                # Adjust margins and spacing
-                title_y_pos = 0.98  # Slightly below the top edge
-                content_y_start = 0.92  # Start content closer to the title
-                line_spacing = 0.02  # Decrease line spacing for tighter content placement
+                title_y_pos = 0.98
+                content_y_start = 0.92
+                line_spacing = 0.02
 
-                # Add title
                 if total_pages > 1:
                     ax.text(0.5, title_y_pos, f"{page_title} (Page {page_num + 1}/{total_pages})",
                             fontsize=14, ha='center', va='top', fontweight='bold')
@@ -216,12 +212,10 @@ class ReportGenerator:
                     ax.text(0.5, title_y_pos, page_title,
                             fontsize=14, ha='center', va='top', fontweight='bold')
 
-                # Add content
                 for i, line in enumerate(page_content.split('\n')):
                     line_y_pos = content_y_start - i * line_spacing
                     ax.text(-0.05, line_y_pos, line, fontsize=8, ha='left', va='top')
 
-                # Save the page to the PDF
                 pdf.savefig(fig)
                 plt.close(fig)
 
@@ -290,7 +284,8 @@ class ReportGenerator:
             ("Win Rates", plot_win_rates, (self.texts, self.color_map)),
             ("Best and Worst Scores (All Time)", plot_best_worst_scores, (self.texts,)),
             ("Best and Worst Scores (Last 30 Days)", plot_best_worst_scores_30, (self.texts,)),
-            ("Top Grids of All Time", plot_top_n_grids, (self.image_metadata, self.texts, 10))
+            ("Top Grids of All Time", plot_top_n_grids, (self.image_metadata, self.texts, 10)),
+            ("[NEW] First Time Uses Over Time", analyze_new_players_per_month, (self.image_metadata, self.color_map,)),
         ]
 
         graph_functions = [make_graph_function(func, args, title) for title, func, args in core_graphs]
@@ -311,6 +306,11 @@ class ReportGenerator:
             ("Our Favorite Players by Position", get_favorite_player_by_attribute, (self.image_metadata, self.prompts, 'position', 0)),
             ("Players Used for Most Teams", get_players_used_for_most_teams, (self.image_metadata, self.prompts, 40, 0)),
             ("Bans and Saves", analyze_grid_cell_with_shared_guesses, (self.image_metadata, self.prompts, GRID_PLAYERS_RESTRICTED)),
+            ("[NEW] Immaculate Streaks", analyze_immaculate_streaks, (self.texts,)),
+            ("[NEW] Splits", analyze_splits, (self.image_metadata, self.prompts, GRID_PLAYERS_RESTRICTED)),
+            ("[NEW] Everyone Missed", analyze_everyone_missed, (self.texts, self.prompts, GRID_PLAYERS_RESTRICTED)),
+            ("[NEW] All Used on Same Day", analyze_all_used_on_same_day, (self.image_metadata, self.prompts, GRID_PLAYERS_RESTRICTED)),
+            ("[NEW] Illegal Uses", analyze_illegal_uses, (self.image_metadata, self.prompts, GRID_PLAYERS_RESTRICTED)),
             ("Popular Players by Month", analyze_top_players_by_month, (self.image_metadata, 5)),
         ]
 
