@@ -1201,7 +1201,7 @@ class ImageProcessor():
 
         return parser_message
     
-    def correct_typos_with_fuzzy_matching(self, similarity_threshold=0.9):
+    def correct_typos_with_fuzzy_matching(self, similarity_threshold=0.85):
         """
         Correct typos in names within a DataFrame using unsupervised clustering with fuzzy matching,
         respecting "Jr" and "Sr" suffixes.
