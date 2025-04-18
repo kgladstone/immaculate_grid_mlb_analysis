@@ -1,5 +1,13 @@
 import pandas as pd
 import ast
+import re
+import unicodedata
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.cluster import DBSCAN
+from collections import Counter
+from sklearn.cluster import DBSCAN
+import difflib
 
 from utils.constants import TEAM_LIST, CATEGORY_LIST
 from utils.utils import ImmaculateGridUtils
@@ -479,3 +487,72 @@ def create_grid_cell_image_view(image_metadata):
                 ,ignore_index=True)
     df = df.sort_values(by='grid_number')
     return df
+
+
+def create_disaggregated_results_df(image_metadata, prompts, texts_melted):
+
+    # Create fresh copy of image_metadata so source is not modified
+    image_metadata = image_metadata.copy()
+
+    # In this dataframe, the column "responses" is a dictionary
+    # Make each response a column by unpacking the dict in each row into 9 columns
+    image_metadata_responses = pd.json_normalize(image_metadata["responses"])
+
+    # Now, concatenate the original dataframe with the new dataframe
+    image_metadata = pd.concat([image_metadata, image_metadata_responses], axis=1)
+    image_metadata = image_metadata.drop(columns=["responses"])
+
+    # Now unpivot so that the only columns are grid_number, submitter, date, image_filename, position and response
+    image_metadata_melted = image_metadata.melt(
+        id_vars=["grid_number", "submitter", "date", "image_filename"],
+        value_vars=image_metadata.columns[4:],
+        var_name="position",
+        value_name="response"
+    )
+
+    # Now unpivot the prompts dataframe so that the only columns are grid_id, position and prompt
+    prompts_melted = prompts.melt(
+        id_vars=["grid_id"],
+        value_vars=prompts.columns[1:],
+        var_name="position",
+        value_name="prompt"
+    ).rename(columns={"grid_id": "grid_number"})
+
+    # Now separate out the prompt tuples into two columns: prompt_1 and prompt_2
+    prompts_melted['prompt'] = prompts_melted['prompt'].apply(lambda x: eval(x))
+    prompts_melted['prompt_1'] = prompts_melted['prompt'].apply(lambda x: x[0])
+    prompts_melted['prompt_2'] = prompts_melted['prompt'].apply(lambda x: x[1])
+    prompts_melted = prompts_melted.drop(columns=["prompt"])
+    # Now melt the data so that each row is a grid_number, position and prompt
+    prompts_melted = prompts_melted.melt(
+        id_vars=["grid_number", "position"],
+        value_vars=["prompt_1", "prompt_2"],
+        var_name="prompt_number",
+        value_name="prompt"
+    )
+    # Now drop the prompt_number column
+    prompts_melted = prompts_melted.drop(columns=["prompt_number"])
+
+
+    # Now join the prompts dataframe with the image_metadata dataframe using the grid_number
+    combined = image_metadata_melted.merge(
+        prompts_melted,
+        on=["grid_number", "position"],
+        how="left"
+    )
+
+    # Sort by grid_number and player and position
+    combined = combined.sort_values(by=["grid_number", "submitter", "position"]).reset_index(drop=True)
+
+    # Add in the score and rarity from texts
+    texts_melted = texts_melted[["grid_number", "name", "score", "correct"]]
+    texts_melted = texts_melted.rename(columns={"name": "submitter"})
+
+    combined = combined.merge(
+        texts_melted,
+        on=["grid_number", "submitter"],
+        how="left"
+    )
+    
+
+    return combined

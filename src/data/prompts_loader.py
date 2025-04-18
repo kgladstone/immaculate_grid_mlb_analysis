@@ -8,6 +8,9 @@ from utils.utils import ImmaculateGridUtils
 
 class PromptsLoader(Loader):
     def __init__(self, grid_storage_path):
+        print("*"*20)
+        print("Loading prompts...")
+        print("*"*20)
         super().__init__(
             source=None,  # No primary source since grid IDs are dynamic
             cache_path=grid_storage_path,

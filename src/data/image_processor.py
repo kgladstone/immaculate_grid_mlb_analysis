@@ -9,14 +9,9 @@ import cv2
 import numpy as np
 import pandas as pd
 import pillow_heif
-from collections import Counter
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.cluster import DBSCAN
-from fuzzywuzzy import fuzz
 import numpy as np
 import pandas as pd
-from collections import Counter
-from sklearn.cluster import DBSCAN
+
 
 from utils.constants import (
     GRID_PLAYERS, 
@@ -25,7 +20,7 @@ from utils.constants import (
     LOGO_LIGHT_PATH, 
     APPLE_TEXTS_DB_PATH,
     IMAGES_PARSER_PATH,
-    MESSAGES_CSV_PATH
+    MESSAGES_CSV_PATH,
 )
 from utils.utils import ImmaculateGridUtils
 from data.messages_loader import MessagesLoader
@@ -39,6 +34,10 @@ class ImageProcessor():
         self.db_path = db_path
         self.cache_path = cache_path
         self.image_directory = image_directory
+
+        print("*"*20)
+        print("Loading images...")
+        print("*"*20)
 
     def _fetch_images(self):
         """
@@ -165,7 +164,7 @@ class ImageProcessor():
             return pd.DataFrame()
         
 
-    def process_images(self):
+    def process_images(self, image_dates_to_parse=None):
         """
         Refresh the image folder by copying screenshots from Messages to a specified folder.
         Only process messages from a person/date combination not already in the metadata file.
@@ -186,7 +185,7 @@ class ImageProcessor():
                 # Keep any parser messages with "Invalid image" from the parser_existing_data
                 parser_existing_data = parser_existing_data[
                     parser_existing_data["parser_message"].str.contains(
-                        "Invalid image|already exists|Success|Warning: Grid image is invalid|Failed to|Issue with",
+                        "Invalid image|already exists|Success|Warning: Grid image is invalid|Failed to",
                         na=False
                     )
                 ]
@@ -200,6 +199,8 @@ class ImageProcessor():
         # Preload messages
         messages_data = MessagesLoader(APPLE_TEXTS_DB_PATH, MESSAGES_CSV_PATH).load().get_data()
 
+        print(image_dates_to_parse)
+
         # Process each attachment
         for _, result in results.iterrows():
             path = os.path.expanduser(result['path'])
@@ -208,12 +209,21 @@ class ImageProcessor():
             mime_type = result['mime_type']
             parser_message = None
 
+            # Short circuit by providing image dates to parse
+            if image_dates_to_parse == False:
+                continue
+            elif isinstance(image_dates_to_parse, list):
+                if image_date not in image_dates_to_parse:
+                    continue
+            else:
+                pass
+
             if path:
                 if os.path.exists(path):
 
                     if path in existing_paths:
-                        # print(f"Warning: Skipping existing path {path}")
-                        continue
+                        print(f"Warning: Skipping existing path {path}")
+                        # continue
 
                     print("*" * 50)
                     print(f"Processing: {path} from {submitter} on {image_date}")
@@ -246,6 +256,8 @@ class ImageProcessor():
                             try:
                                 matrix = messages_data[(messages_data['grid_number'] == grid_number) & (messages_data['name'] == submitter)]['matrix'].iloc[0]
                                 parser_message = self.process_image_with_dynamic_grid(path, submitter, image_date, grid_number, matrix) # OCR operation
+                            
+                            # There is no corresponding text matrix for this image
                             except IndexError as e:
                                 print(e)
                                 parser_message = f"Warning: Issue with the text matrix"
@@ -1170,6 +1182,9 @@ class ImageProcessor():
 
             attempt += 1
 
+        # self.draw_image_with_outlined_logo_and_grid_cells(image_path, logo_position, grid_cells, 1)
+        # input("Press Enter to continue...")
+
         if not are_responses_robust:
             print(f"Quitting on {grid_number} for {submitter}....")
             parser_message = f"Warning: Grid image is invalid"
@@ -1201,134 +1216,3 @@ class ImageProcessor():
 
         return parser_message
     
-    def correct_typos_with_fuzzy_matching(self, similarity_threshold=0.85):
-        """
-        Correct typos in names within a DataFrame using unsupervised clustering with fuzzy matching,
-        respecting "Jr" and "Sr" suffixes.
-
-        Args:
-            similarity_threshold (float): Minimum similarity score (0 to 1) to consider two names as matching.
-
-        Returns:
-            tuple: A new corrected DataFrame and a log DataFrame of changes.
-        """
-        # Step 0: Load the original DataFrame
-        df = self.load_image_metadata()
-
-        # Step 1: Flatten all names into a single list
-        all_names = []
-        for responses in df['responses']:
-            all_names.extend([name for name in responses.values() if name])
-
-        # Step 2: Define name cleaning function
-        def clean_name(name):
-            """
-            Clean trailing standalone single letters from a name.
-
-            Args:
-                name (str): The name to clean.
-
-            Returns:
-                str: Cleaned name.
-            """
-            return re.sub(r'\s+[A-Za-z]$', '', name.strip())
-
-        # Step 3: Define suffix extraction function
-        def get_suffix(name):
-            """
-            Extract suffixes from names, including explicit and inferred cases.
-
-            Args:
-                name (str): The name to check for a suffix.
-
-            Returns:
-                str: The extracted suffix ("Jr", "Sr", or None).
-            """
-            # Explicit "Jr" or "Sr"
-            match = re.search(r'\b(J[A-z]|S[A-z])\b', name, re.IGNORECASE)
-            if match:
-                return match.group(0)
-
-            # Check for standalone "J" or "S" as possible suffixes
-            standalone_match = re.search(r'\b(J|S)\b', name, re.IGNORECASE)
-            if standalone_match:
-                char = standalone_match.group(0).upper()
-                return "Jr" if char == "J" else "Sr"
-
-            # No suffix found
-            return None
-
-        # Step 4: Apply cleaning and suffix detection
-        suffix_groups = {"Jr": [], "Sr": [], "None": []}
-
-        for name in all_names:
-            cleaned_name = clean_name(name)  # Clean trailing single letters
-            suffix = get_suffix(cleaned_name)
-            if suffix:
-                if "J" in suffix.upper():
-                    suffix_clean = "Jr"
-                elif "S" in suffix.upper():
-                    suffix_clean = "Sr"
-                suffix_groups[suffix_clean].append(cleaned_name)
-            else:
-                suffix_groups["None"].append(cleaned_name)
-
-        # Step 5: Count occurrences and get unique names for each group
-        name_counter = Counter(all_names)
-        canonical_mapping = {}
-
-        for suffix, group_names in suffix_groups.items():
-            if not group_names:
-                continue
-
-            unique_names = list(set(group_names))
-
-            # Step 6: Vectorize names using TF-IDF
-            vectorizer = TfidfVectorizer(analyzer='char', ngram_range=(2, 3))
-            name_vectors = vectorizer.fit_transform(unique_names)
-
-            # Step 7: Cluster similar names using DBSCAN
-            dbscan = DBSCAN(eps=1 - similarity_threshold, min_samples=1, metric="cosine")
-            labels = dbscan.fit_predict(name_vectors)
-
-            # Step 8: Build canonical mapping for the group
-            for label in set(labels):
-                cluster_names = [unique_names[i] for i in range(len(labels)) if labels[i] == label]
-                canonical_name = max(cluster_names, key=lambda n: name_counter[n])  # Most frequent name
-                for name in cluster_names:
-                    canonical_mapping[name] = canonical_name
-
-        # Step 9: Create new DataFrame with corrected names and log changes
-        corrected_rows = []
-        changes_log = []
-
-        for _, row in df.iterrows():
-            corrected_responses = {}
-            for key, name in row['responses'].items():
-                cleaned_name = clean_name(name)  # Clean trailing single letters
-                if cleaned_name and cleaned_name in canonical_mapping:
-                    corrected_name = canonical_mapping[cleaned_name]
-                    if cleaned_name != corrected_name:
-                        # Log the change
-                        changes_log.append({
-                            "grid_number": row['grid_number'],
-                            "submitter": row['submitter'],
-                            "original_name": name,
-                            "corrected_name": corrected_name,
-                            "response_location": key
-                        })
-                    corrected_responses[key] = corrected_name
-                else:
-                    corrected_responses[key] = name
-
-            # Add corrected row
-            corrected_row = row.copy()
-            corrected_row['responses'] = corrected_responses
-            corrected_rows.append(corrected_row)
-
-        # Create the new DataFrame and the log DataFrame
-        new_df = pd.DataFrame(corrected_rows)
-        log_df = pd.DataFrame(changes_log)
-
-        return new_df, log_df
-
