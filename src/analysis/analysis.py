@@ -1320,8 +1320,6 @@ def analyze_immaculate_streaks(texts):
     
     return streaks_df
 
-
-
 def analyze_splits(image_metadata, prompts, submitters):
     """
     Given a DataFrame of image metadata, a DataFrame of prompts, and a list of submitters,

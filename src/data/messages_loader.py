@@ -7,6 +7,9 @@ from utils.utils import ImmaculateGridUtils
 
 class MessagesLoader(Loader):
     def __init__(self, db_path, cache_path):
+        print("*"*20)
+        print("Loading messages from Apple Messages database...")
+        print("*"*20)
         super().__init__(
             source=db_path,
             cache_path=cache_path,

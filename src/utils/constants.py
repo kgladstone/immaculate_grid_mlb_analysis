@@ -49,6 +49,8 @@ MESSAGES_CSV_PATH = csv_dir / "results.csv"
 PROMPTS_CSV_PATH = csv_dir / "prompts.csv"
 IMAGES_PATH = root_dir / "images/"  # Path to the images folder
 IMAGES_METADATA_PATH = root_dir / "images_metadata.json"  # Path to the images metadata file
+IMAGES_METADATA_CSV_PATH = root_dir / "images_metadata.csv"  # Path to the images metadata CSV file
+IMAGES_METADATA_FUZZY_LOG_PATH = root_dir / "images_metadata_fuzzy_log.csv"  # Path to the fuzzy matching log file
 IMAGES_PARSER_PATH = root_dir / "images_parser.json"  # Path to the images parser output file
 PDF_FILENAME = root_dir / "immaculate_grid_report.pdf"  # Path for the PDF output file
 LOGO_DARK_PATH = root_dir / "logo_dark.png"  # Path to the dark logo image
@@ -126,6 +128,7 @@ CATEGORY_LIST = {
     "Shortstop" : "Position",
     "Base" : "Position", # specific infield spots captured here
     "Catch" : "Position",
+    "Designated Hitter": "Position",
 
     # Hitting
     "AVG": "Hitting",

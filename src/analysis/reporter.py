@@ -18,8 +18,11 @@ from data.prompts_loader import PromptsLoader
 from data.messages_loader import MessagesLoader
 from data.image_processor import ImageProcessor
 from data.data_prep import (
-    preprocess_data_into_texts_structure, make_color_map,
-    build_category_structure
+    preprocess_data_into_texts_structure, 
+    make_color_map,
+    build_category_structure)
+from data.mlb_reference import (
+    correct_typos_with_fuzzy_matching
 )
 from analysis.analysis import (
     analyze_person_type_performance, analyze_team_performance, 
@@ -57,7 +60,7 @@ class ReportGenerator:
         self.texts = preprocess_data_into_texts_structure(texts_df)
         self.prompts = PromptsLoader(PROMPTS_CSV_PATH)._fetch_prompts_from_cache()
         image_processor = ImageProcessor(APPLE_TEXTS_DB_PATH, IMAGES_METADATA_PATH, IMAGES_PATH)
-        self.image_metadata, _ = image_processor.correct_typos_with_fuzzy_matching()
+        self.image_metadata, _ = correct_typos_with_fuzzy_matching(image_processor.load_image_metadata(), "responses")
         self.color_map = make_color_map(GRID_PLAYERS)
 
     def _wrap_text(self, value, max_line_length=25):

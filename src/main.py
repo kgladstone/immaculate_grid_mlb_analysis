@@ -1,6 +1,9 @@
+import datetime
 from data.messages_loader import MessagesLoader
 from data.prompts_loader import PromptsLoader
 from data.image_processor import ImageProcessor
+from data.data_prep import create_disaggregated_results_df
+from data.mlb_reference import correct_typos_with_fuzzy_matching
 from analysis.reporter import ReportGenerator
 from utils.constants import (
     APPLE_TEXTS_DB_PATH, 
@@ -8,10 +11,12 @@ from utils.constants import (
     PROMPTS_CSV_PATH, 
     PDF_FILENAME,
     IMAGES_METADATA_PATH, 
-    IMAGES_PATH
+    IMAGES_PATH,
+    IMAGES_METADATA_CSV_PATH,
+    IMAGES_METADATA_FUZZY_LOG_PATH
 )
 
-def refresh_data(do_image_process=False):
+def refresh_data(image_dates_to_parse=None):
     print("Starting the data refresh process...")
 
     # Refresh Messages
@@ -31,10 +36,14 @@ def refresh_data(do_image_process=False):
     # Refresh Images
     print("Refreshing images...")
     image_processor = ImageProcessor(APPLE_TEXTS_DB_PATH, IMAGES_METADATA_PATH, IMAGES_PATH)
-    if do_image_process:
-        image_processor.process_images()
+    image_processor.process_images(image_dates_to_parse)
     image_metadata = image_processor.load_image_metadata()
     image_parser_data = image_processor.load_parser_metadata()
+
+    disaggregated_results_df = create_disaggregated_results_df(image_metadata, prompts_data, messages_data)
+    disaggregated_results_df, typo_log = correct_typos_with_fuzzy_matching(disaggregated_results_df, "response")
+    disaggregated_results_df.to_csv(IMAGES_METADATA_CSV_PATH, index=False)
+    typo_log.to_csv(IMAGES_METADATA_FUZZY_LOG_PATH, index=False)
 
     print("Data refresh process completed successfully.")
     return messages_data, prompts_data, image_metadata, image_parser_data
@@ -46,15 +55,34 @@ def main(*args):
     Args:
         *args: Optional flag for whether to process images (True/False).
     """
-    # Handle optional image processing flag
-    do_image_process = args[0] if args else False
-    if isinstance(do_image_process, str):
-        do_image_process = do_image_process.lower() in ("true", "1", "yes")
 
-    print(f"Image processing flag: {do_image_process}")
+    image_dates_to_parse = None
+
+    if args and args[0].strip():
+        val = args[0].strip().lower()
+        if val == "false":
+            image_dates_to_parse = False
+        else:
+            # Split, strip, and filter out empty segments
+            candidate_dates = [d.strip() for d in args[0].split(",") if d.strip()]
+            valid_dates = []
+            for d in candidate_dates:
+                try:
+                    # Validate format; will raise ValueError if wrong
+                    datetime.datetime.strptime(d, "%Y-%m-%d")
+                    valid_dates.append(d)
+                except ValueError:
+                    print(f"Invalid date format '{d}'. Please use YYYY-MM-DD.")
+                    sys.exit(1)
+
+            # If after filtering we have at least one date, keep it; otherwise None
+            image_dates_to_parse = valid_dates if valid_dates else None
+
+    # If args is empty or blank, image_dates_to_parse stays None
+    print(f"Image dates to parse: {image_dates_to_parse}")
 
     # Step 1: Refresh data
-    messages_data, prompts_data, image_metadata, image_parser_data = refresh_data(do_image_process)
+    messages_data, prompts_data, image_metadata, image_parser_data = refresh_data(image_dates_to_parse)
 
     # Step 2: Generate report
     generator = ReportGenerator(PDF_FILENAME)
