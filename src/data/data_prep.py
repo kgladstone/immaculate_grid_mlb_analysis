@@ -489,70 +489,79 @@ def create_grid_cell_image_view(image_metadata):
     return df
 
 
-def create_disaggregated_results_df(image_metadata, prompts, texts_melted):
+def create_disaggregated_results_df(
+    image_metadata: pd.DataFrame,
+    prompts: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Build one tidy row per (submitter, grid_number, position) with:
+    submitter | grid_number | image_filename | position | prompt | response | correct
+    """
 
-    # Create fresh copy of image_metadata so source is not modified
-    image_metadata = image_metadata.copy()
+    # ------------------------------------------------------------------ #
+    # 1. unify dtypes on join keys
+    # ------------------------------------------------------------------ #
+    def _coerce_keys(df: pd.DataFrame) -> pd.DataFrame:
+        if "grid_number" in df.columns:
+            df["grid_number"] = df["grid_number"].astype(str)
+        if "position" in df.columns:
+            df["position"] = df["position"].astype(str)
+        return df
 
-    # In this dataframe, the column "responses" is a dictionary
-    # Make each response a column by unpacking the dict in each row into 9 columns
-    image_metadata_responses = pd.json_normalize(image_metadata["responses"])
+    image_metadata = _coerce_keys(image_metadata)
+    prompts = _coerce_keys(prompts.rename(columns={"grid_id": "grid_number"}))
 
-    # Now, concatenate the original dataframe with the new dataframe
-    image_metadata = pd.concat([image_metadata, image_metadata_responses], axis=1)
-    image_metadata = image_metadata.drop(columns=["responses"])
+    # ------------------------------------------------------------------ #
+    # 2. explode responses and melt to long
+    # ------------------------------------------------------------------ #
+    imd = image_metadata.copy()
+    responses_expanded = (
+        imd.pop("responses")                       # take the column out
+        .map(lambda r: ast.literal_eval(r)      # parse if it's a str
+                        if isinstance(r, str) else r)
+        .apply(pd.Series)                       # one column per key
+    )
 
-    # Now unpivot so that the only columns are grid_number, submitter, date, image_filename, position and response
-    image_metadata_melted = image_metadata.melt(
-        id_vars=["grid_number", "submitter", "date", "image_filename"],
-        value_vars=image_metadata.columns[4:],
+    imd = pd.concat([imd, responses_expanded], axis=1)
+
+    imd_long = imd.melt(
+        id_vars=["grid_number", "date", "submitter", "image_filename"],
         var_name="position",
         value_name="response"
     )
 
-    # Now unpivot the prompts dataframe so that the only columns are grid_id, position and prompt
-    prompts_melted = prompts.melt(
-        id_vars=["grid_id"],
-        value_vars=prompts.columns[1:],
-        var_name="position",
-        value_name="prompt"
-    ).rename(columns={"grid_id": "grid_number"})
-
-    # Now separate out the prompt tuples into two columns: prompt_1 and prompt_2
-    prompts_melted['prompt'] = prompts_melted['prompt'].apply(lambda x: eval(x))
-    prompts_melted['prompt_1'] = prompts_melted['prompt'].apply(lambda x: x[0])
-    prompts_melted['prompt_2'] = prompts_melted['prompt'].apply(lambda x: x[1])
-    prompts_melted = prompts_melted.drop(columns=["prompt"])
-    # Now melt the data so that each row is a grid_number, position and prompt
-    prompts_melted = prompts_melted.melt(
-        id_vars=["grid_number", "position"],
-        value_vars=["prompt_1", "prompt_2"],
-        var_name="prompt_number",
-        value_name="prompt"
+    # ------------------------------------------------------------------ #
+    # 3. tidy prompts (tuple kept intact)
+    # ------------------------------------------------------------------ #
+    prm_long = (
+        prompts
+        .melt(id_vars=["grid_number"], var_name="position", value_name="prompt")
     )
-    # Now drop the prompt_number column
-    prompts_melted = prompts_melted.drop(columns=["prompt_number"])
+    prm_long["prompt"] = prm_long["prompt"].apply(ast.literal_eval)
 
-
-    # Now join the prompts dataframe with the image_metadata dataframe using the grid_number
-    combined = image_metadata_melted.merge(
-        prompts_melted,
+    # ------------------------------------------------------------------ #
+    # 4. merge image data with prompts
+    # ------------------------------------------------------------------ #
+    combined = imd_long.merge(
+        prm_long,
         on=["grid_number", "position"],
         how="left"
     )
 
-    # Sort by grid_number and player and position
-    combined = combined.sort_values(by=["grid_number", "submitter", "position"]).reset_index(drop=True)
-
-    # Add in the score and rarity from texts
-    texts_melted = texts_melted[["grid_number", "name", "score", "correct"]]
-    texts_melted = texts_melted.rename(columns={"name": "submitter"})
-
-    combined = combined.merge(
-        texts_melted,
-        on=["grid_number", "submitter"],
-        how="left"
+    # ------------------------------------------------------------------ #
+    # 5. final ordering and types
+    # ------------------------------------------------------------------ #
+    final_cols = [
+        "submitter",
+        "date",
+        "grid_number",
+        "image_filename",
+        "position",
+        "prompt",
+        "response",
+    ]
+    return (
+        combined[final_cols]
+        .sort_values(["grid_number", "submitter", "position"])
+        .reset_index(drop=True)
     )
-    
-
-    return combined
