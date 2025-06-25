@@ -199,7 +199,7 @@ class ImageProcessor():
         # Preload messages
         messages_data = MessagesLoader(APPLE_TEXTS_DB_PATH, MESSAGES_CSV_PATH).load().get_data()
 
-        print(image_dates_to_parse)
+        print(f"Image dates to parse: {image_dates_to_parse}")
 
         # Process each attachment
         for _, result in results.iterrows():

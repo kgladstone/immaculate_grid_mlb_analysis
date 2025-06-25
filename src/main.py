@@ -39,8 +39,8 @@ def refresh_data(image_dates_to_parse=None):
     image_processor.process_images(image_dates_to_parse)
     image_metadata = image_processor.load_image_metadata()
     image_parser_data = image_processor.load_parser_metadata()
-
-    disaggregated_results_df = create_disaggregated_results_df(image_metadata, prompts_data, messages_data)
+ 
+    disaggregated_results_df = create_disaggregated_results_df(image_metadata, prompts_data)
     disaggregated_results_df, typo_log = correct_typos_with_fuzzy_matching(disaggregated_results_df, "response")
     disaggregated_results_df.to_csv(IMAGES_METADATA_CSV_PATH, index=False)
     typo_log.to_csv(IMAGES_METADATA_FUZZY_LOG_PATH, index=False)
