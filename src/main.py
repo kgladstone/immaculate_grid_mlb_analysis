@@ -33,10 +33,14 @@ def refresh_data(image_dates_to_parse=None):
     prompts_data = prompts_loader.get_data()
     print(f"Prompts refresh complete. Total rows: {len(prompts_data)}")
 
+    # quit("Debug exit")
+
     # Refresh Images
     print("Refreshing images...")
     image_processor = ImageProcessor(APPLE_TEXTS_DB_PATH, IMAGES_METADATA_PATH, IMAGES_PATH)
     image_processor.process_images(image_dates_to_parse)
+    print("Image processing complete...")
+    print("*" * 20)
     image_metadata = image_processor.load_image_metadata()
     image_parser_data = image_processor.load_parser_metadata()
  

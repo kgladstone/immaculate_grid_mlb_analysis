@@ -199,7 +199,10 @@ class ImageProcessor():
         # Preload messages
         messages_data = MessagesLoader(APPLE_TEXTS_DB_PATH, MESSAGES_CSV_PATH).load().get_data()
 
+        print("**" * 50)
+        print("Starting Image Processing...")
         print(f"Image dates to parse: {image_dates_to_parse}")
+        print("**" * 50)
 
         # Process each attachment
         for _, result in results.iterrows():
@@ -209,14 +212,14 @@ class ImageProcessor():
             mime_type = result['mime_type']
             parser_message = None
 
-            # Short circuit by providing image dates to parse
-            if image_dates_to_parse == False:
-                continue
-            elif isinstance(image_dates_to_parse, list):
-                if image_date not in image_dates_to_parse:
-                    continue
-            else:
-                pass
+            # # Short circuit by providing image dates to parse
+            # if image_dates_to_parse == False:
+            #     continue
+            # elif isinstance(image_dates_to_parse, list):
+            #     if image_date not in image_dates_to_parse:
+            #         continue
+            # else:
+            #     pass
 
             if path:
                 if os.path.exists(path):
