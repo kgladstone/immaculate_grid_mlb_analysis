@@ -1,6 +1,7 @@
 import sqlite3
 import pandas as pd
 import os
+import datetime
 
 from data.loader import Loader
 from utils.utils import ImmaculateGridUtils
@@ -150,7 +151,13 @@ class MessagesLoader(Loader):
         # Replace NaT for completely missing grids
         incomplete_grids_df['date'] = incomplete_grids_df['date'].fillna('Missing')
 
-        # Display the final table
-        print(incomplete_grids_df)
-
+        # Display results from the last 90 days
+        print("\nValidation of grid text message results from the last 90 days:")
+        ninety_days_ago = (pd.Timestamp.now() - pd.Timedelta(days=90)).strftime('%Y-%m-%d')
+        recent_incomplete_grids = incomplete_grids_df[
+            (incomplete_grids_df['date'] != 'Missing') & 
+            (incomplete_grids_df['date'] >= ninety_days_ago)
+        ]
+        print(recent_incomplete_grids)
+        
         return
