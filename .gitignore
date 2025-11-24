@@ -28,3 +28,6 @@ images/
 
 # Testers
 *_tester.py
+
+# Ignore chat db
+*chat_snapshot/*

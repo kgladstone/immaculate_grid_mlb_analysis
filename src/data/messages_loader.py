@@ -5,6 +5,7 @@ import datetime
 
 from data.loader import Loader
 from utils.utils import ImmaculateGridUtils
+from utils.constants import GRID_PLAYERS
 
 class MessagesLoader(Loader):
     def __init__(self, db_path, cache_path):
@@ -38,7 +39,16 @@ class MessagesLoader(Loader):
             message.text LIKE '%Immaculate%'
         '''
 
-        conn = sqlite3.connect(os.path.expanduser(db_path))
+        expanded_path = os.path.expanduser(db_path)
+        if not os.path.exists(expanded_path):
+            raise FileNotFoundError(f"Messages database not found at {expanded_path}")
+        if not os.access(expanded_path, os.R_OK):
+            raise PermissionError(
+                f"Messages database not readable at {expanded_path}. "
+                "On macOS grant Full Disk Access to the terminal/IDE process or provide a readable copy."
+            )
+
+        conn = sqlite3.connect(expanded_path)
         df = pd.read_sql_query(query, conn)
         conn.close()
 
@@ -53,6 +63,44 @@ class MessagesLoader(Loader):
         df = df[df['valid'] == True]
         num_valid_messages = len(df)
         print("{} of {} messages were valid...".format(num_valid_messages, num_messages))
+        self.diagnostics = {}
+        def _date_as_ymd(val):
+            sval = str(val)
+            if len(sval) > 10 and sval.isdigit():
+                sval = ImmaculateGridUtils._convert_timestamp(int(val))
+            return sval
+
+        df['date_str'] = df['date'].apply(_date_as_ymd)
+        counts = df.groupby(['date_str', 'name']).size().reset_index(name='count')
+        counts = counts.sort_values(by="date_str", ascending=False)
+        cutoff_dt = pd.Timestamp.now().normalize() - pd.Timedelta(days=90)
+        cutoff = cutoff_dt.strftime('%Y-%m-%d')
+        counts_recent = counts[counts['date_str'] >= cutoff]
+
+        # Add missing dates with zero counts
+        all_days = pd.date_range(start=cutoff_dt, end=pd.Timestamp.now().normalize(), freq="D").strftime('%Y-%m-%d')
+        idx = pd.MultiIndex.from_product([all_days, GRID_PLAYERS.keys()], names=["date_str", "name"])
+        counts_recent = counts_recent.set_index(["date_str", "name"]).reindex(idx, fill_value=0).reset_index()
+
+        print(f"Valid message counts by sender/date (last 90 days since {cutoff}):")
+        for _, row in counts_recent.iterrows():
+            print(f"  {row['date_str']}: {row['name']} -> {row['count']}")
+
+        # Missing senders per day (last 90 days)
+        expected_senders = set(GRID_PLAYERS.keys())
+        missing_by_day = []
+        all_days = pd.date_range(start=cutoff_dt, end=pd.Timestamp.now().normalize(), freq="D").strftime('%Y-%m-%d')
+        counts_recent_indexed = counts_recent.set_index('date_str')
+        for day in all_days:
+            group = counts_recent_indexed.loc[[day]] if day in counts_recent_indexed.index else pd.DataFrame(columns=['name', 'count'])
+            present = set(group['name']) if not group.empty else set()
+            missing = expected_senders - present
+            if missing:
+                missing_by_day.append((day, sorted(missing)))
+        self.diagnostics = {
+            "counts_recent": counts_recent.to_dict(orient="records"),
+            "cutoff": cutoff,
+        }
         
         # Apply the _convert_timestamp function to clean the date field
         print("Formatting the date...")

@@ -43,8 +43,13 @@ root_dir = current_file.parent.parent.parent  # Move up to the root directory
 csv_dir = root_dir / "csv/"  # Target the 'csv' folder in the root directory
 
 CONFIG_PATH = root_dir / 'config.json'  # Path to the configuration file
-APPLE_TEXTS_DB_PATH = '~/Library/Messages/chat.db'  # Path to the Apple Messages database
-APPLE_IMAGES_PATH = "~/Library/Messages/Attachments/"
+# Load configuration from a separate JSON file
+with open(CONFIG_PATH, 'r') as config_file:
+    config = json.load(config_file)
+
+USER_HOME = Path(config.get("USER_HOME", str(Path.home())))
+APPLE_TEXTS_DB_PATH = str(USER_HOME / "Library/Messages/chat.db")  # Path to the Apple Messages database
+APPLE_IMAGES_PATH = str(USER_HOME / "Library/Messages/Attachments/")
 MESSAGES_CSV_PATH = csv_dir / "results.csv"
 PROMPTS_CSV_PATH = csv_dir / "prompts.csv"
 IMAGES_PATH = root_dir / "images/"  # Path to the images folder
@@ -58,10 +63,6 @@ LOGO_LIGHT_PATH = root_dir / "logo_light.png"  # Path to the light logo image
 
 # --------------------------------------------------------------------------------------------------
 # Global Variables
-
-# Load configuration from a separate JSON file
-with open(CONFIG_PATH, 'r') as config_file:
-    config = json.load(config_file)
 
 MY_NAME = config['MY_NAME']
 GRID_PLAYERS = config['GRID_PLAYERS']

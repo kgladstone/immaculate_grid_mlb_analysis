@@ -10,3 +10,4 @@ regex
 pillow-heif
 fuzzywuzzy
 scikit-learn
+streamlit

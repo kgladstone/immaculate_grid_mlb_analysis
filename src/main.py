@@ -33,7 +33,7 @@ def refresh_data(image_dates_to_parse=None):
     prompts_data = prompts_loader.get_data()
     print(f"Prompts refresh complete. Total rows: {len(prompts_data)}")
 
-    # quit("Debug exit")
+    quit("Debug exit")
 
     # Refresh Images
     print("Refreshing images...")
