@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import shutil
+from pathlib import Path
 import pytesseract
 import regex as re
 import json
@@ -19,6 +20,7 @@ from utils.constants import (
     LOGO_DARK_PATH, 
     LOGO_LIGHT_PATH, 
     APPLE_TEXTS_DB_PATH,
+    APPLE_IMAGES_PATH,
     IMAGES_PARSER_PATH,
     MESSAGES_CSV_PATH,
 )
@@ -31,9 +33,16 @@ from data.data_prep import (
 
 class ImageProcessor():
     def __init__(self, db_path, cache_path, image_directory):
-        self.db_path = db_path
+        self.db_path = os.path.expanduser(db_path)
         self.cache_path = cache_path
         self.image_directory = image_directory
+        self.attachments_source_root = Path(APPLE_IMAGES_PATH).expanduser()
+        snapshot_cache = Path.cwd() / "chat_snapshot" / "Attachments"
+        # Keep attachments alongside the DB snapshot if possible so the app can read them without FDA
+        if snapshot_cache.parent.exists():
+            self.attachments_cache_root = snapshot_cache
+        else:
+            self.attachments_cache_root = Path(self.db_path).parent / "Attachments"
 
         print("*"*20)
         print("Loading images...")
@@ -54,7 +63,16 @@ class ImageProcessor():
         phone_numbers = list(phone_to_player.keys())
 
         # Connect to the Messages database
-        conn = sqlite3.connect(os.path.expanduser(APPLE_TEXTS_DB_PATH))
+        expanded_path = os.path.expanduser(self.db_path)
+        if not os.path.exists(expanded_path):
+            raise FileNotFoundError(f"Messages database not found at {expanded_path}")
+        if not os.access(expanded_path, os.R_OK):
+            raise PermissionError(
+                f"Messages database not readable at {expanded_path}. "
+                "Grant Full Disk Access to your terminal/IDE or provide a readable copy (e.g., chat_snapshot/chat_backup.db)."
+            )
+
+        conn = sqlite3.connect(expanded_path)
         cursor = conn.cursor()
 
         # Query to find attachments with metadata
@@ -93,7 +111,7 @@ class ImageProcessor():
 
         for filename, mime_type, message_date, sender_phone in results:
             if filename:
-                path = filename.replace(APPLE_TEXTS_DB_PATH, "")
+                path = os.path.expanduser(filename)
                 submitter = MY_NAME if sender_phone == MY_NAME else phone_to_player.get(sender_phone, "Unknown")
                 image_date = ImmaculateGridUtils._convert_timestamp(message_date)
                 cleaned_results.append({
@@ -105,6 +123,42 @@ class ImageProcessor():
 
         return pd.DataFrame(cleaned_results)
     
+
+    def _resolve_attachment_path(self, raw_path: str) -> str:
+        """
+        Resolve an attachment path to something readable, falling back to a local cache.
+        If the source is unreadable (macOS FDA), encourage syncing Attachments to chat_snapshot.
+        """
+        expanded = Path(os.path.expanduser(raw_path))
+
+        # Already readable
+        if expanded.exists() and os.access(expanded, os.R_OK):
+            return str(expanded)
+
+        rel = None
+        try:
+            rel = expanded.relative_to(self.attachments_source_root)
+        except Exception:
+            # If the path isn't under the source root, at least preserve the filename
+            rel = expanded.name if expanded.name else Path(raw_path).name
+
+        cache_root = self.attachments_cache_root
+        if cache_root and rel:
+            candidate = cache_root / rel
+            if candidate.exists() and os.access(candidate, os.R_OK):
+                return str(candidate)
+
+            source_candidate = self.attachments_source_root / rel
+            if source_candidate.exists() and os.access(source_candidate, os.R_OK):
+                candidate.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_candidate, candidate)
+                return str(candidate)
+
+        raise FileNotFoundError(
+            f"Attachment not accessible: {expanded}. "
+            f"Tried cache at {cache_root}. "
+            "Run copy_chat_db.py to sync Attachments or grant Full Disk Access."
+        )
 
     def _validate_images(self, data):
         """
@@ -164,7 +218,7 @@ class ImageProcessor():
             return pd.DataFrame()
         
 
-    def process_images(self, image_dates_to_parse=None):
+    def process_images(self, image_dates_to_parse=None, date_range=None, progress_callback=None):
         """
         Refresh the image folder by copying screenshots from Messages to a specified folder.
         Only process messages from a person/date combination not already in the metadata file.
@@ -175,6 +229,20 @@ class ImageProcessor():
 
         # Query the attachments database
         results = self._fetch_images()
+
+        # Normalize dates and optionally filter the attachments set by date
+        results["image_date"] = pd.to_datetime(results["image_date"]).dt.date
+        if date_range:
+            start_date, end_date = date_range
+            if start_date:
+                start_date = pd.to_datetime(start_date).date()
+                results = results[results["image_date"] >= start_date]
+            if end_date:
+                end_date = pd.to_datetime(end_date).date()
+                results = results[results["image_date"] <= end_date]
+            print(f"Filtered images by date. Remaining: {len(results)}")
+        # Convert back to string for serialization/logging downstream
+        results["image_date"] = results["image_date"].astype(str)
 
         # Collect parser data if parser data file is not empty
         if os.path.exists(IMAGES_PARSER_PATH):
@@ -197,16 +265,19 @@ class ImageProcessor():
                 existing_paths = set()
 
         # Preload messages
-        messages_data = MessagesLoader(APPLE_TEXTS_DB_PATH, MESSAGES_CSV_PATH).load().get_data()
+        messages_data = MessagesLoader(self.db_path, MESSAGES_CSV_PATH).load().get_data()
 
         print("**" * 50)
         print("Starting Image Processing...")
         print(f"Image dates to parse: {image_dates_to_parse}")
         print("**" * 50)
 
+        # Sort by date descending to process newest first
+        results = results.sort_values(by="image_date", ascending=False)
+        total = len(results)
         # Process each attachment
-        for _, result in results.iterrows():
-            path = os.path.expanduser(result['path'])
+        for idx, (_, result) in enumerate(results.iterrows(), start=1):
+            path = self._resolve_attachment_path(result['path'])
             submitter = result['submitter']
             image_date = result['image_date']
             mime_type = result['mime_type']
@@ -274,6 +345,13 @@ class ImageProcessor():
             # Append the parser data entry
             print(parser_message)
             self.save_parser_metadata(parser_data_entry)
+
+            if progress_callback:
+                try:
+                    progress_callback(idx, total, current_date=image_date, current_submitter=submitter)
+                except Exception:
+                    # Best-effort progress updates; don't crash processing
+                    pass
 
         print(f"Screenshots saved to {self.image_directory}")
 
@@ -1063,6 +1141,8 @@ class ImageProcessor():
             [consolidated_metadata, pd.DataFrame([metadata_new_entry])],
             ignore_index=True
         )
+        if "date" in consolidated_metadata.columns:
+            consolidated_metadata["date"] = consolidated_metadata["date"].astype(str)
         
         # Convert DataFrame to a list of dictionaries
         data_as_dicts = consolidated_metadata.to_dict(orient="records")
@@ -1086,6 +1166,8 @@ class ImageProcessor():
             [parser_metadata, pd.DataFrame([parser_data_new_entry])],
             ignore_index=True
         )
+        if "image_date" in parser_metadata.columns:
+            parser_metadata["image_date"] = parser_metadata["image_date"].astype(str)
 
         # drop duplicates
         parser_metadata = parser_metadata.drop_duplicates(subset=["path"], keep="last")
@@ -1216,6 +1298,8 @@ class ImageProcessor():
         self.save_consolidated_metadata(metadata)
 
         parser_message = f"Success: Processed image with grid number {grid_number}"
+        print(f"Parsed metadata for {submitter} on {image_date}: grid {grid_number}")
+        print(json.dumps(metadata, indent=2, ensure_ascii=False))
 
         return parser_message
     

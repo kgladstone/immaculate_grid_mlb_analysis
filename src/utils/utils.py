@@ -123,7 +123,7 @@ class ImmaculateGridUtils:
     @staticmethod
     def _fixed_date_from_grid_number(n):
         start_date = datetime(2023, 4, 2) # hardcoded start day of immaculate grid universe
-        result_date = start_date + timedelta(days=n)
+        result_date = start_date + timedelta(days=int(n))
         return result_date.strftime('%Y-%m-%d')
 
     @staticmethod

@@ -2,15 +2,21 @@ from __future__ import annotations
 
 import ast
 import json
-from pathlib import Path
 from typing import List
 
 import pandas as pd
 import streamlit as st
 from PIL import Image
 
-from utils.constants import GRID_PLAYERS, IMAGES_PATH, MESSAGES_CSV_PATH, PROMPTS_CSV_PATH
-from .data_loaders import resolve_path
+from utils.constants import (
+    GRID_PLAYERS,
+    GRID_PLAYERS_RESTRICTED,
+    IMAGES_PATH,
+    MESSAGES_CSV_PATH,
+    PROMPTS_CSV_PATH,
+)
+from utils.utils import ImmaculateGridUtils
+from app.operations.data_loaders import resolve_path
 
 
 def format_prompt_cell(value: str) -> str:
@@ -393,12 +399,19 @@ def render_data_availability(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, i
 
     table_rows = []
     for gid in grid_ids:
+        grid_date = ImmaculateGridUtils._fixed_date_from_grid_number(gid)
         cells = "".join(
             f"<td style='padding:6px;text-align:center;'><div title='Grid {gid} · {player}' "
             f"style='width:18px;height:18px;margin:auto;border:1px solid #ccc;background:{status_color(gid, player)};'></div></td>"
             for player in players
         )
-        table_rows.append(f"<tr><td style='padding:6px;font-weight:600;'>{gid}</td>{cells}</tr>")
+        table_rows.append(
+            f"<tr>"
+            f"<td style='padding:6px;font-weight:600;'>{gid}</td>"
+            f"<td style='padding:6px;color:#555;'>{grid_date}</td>"
+            f"{cells}"
+            f"</tr>"
+        )
 
     legend_html = (
         "<div style='margin-bottom:8px; font-size:13px;'>"
@@ -415,9 +428,14 @@ def render_data_availability(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, i
     table_html = legend_html + (
         "<div style='max-height:600px;overflow-y:auto;border:1px solid #ddd;border-radius:6px;'>"
         "<table style='border-collapse:collapse;width:100%;'>"
-        f"<thead><tr><th style='padding:6px;background:#f4f6fa;color:#111;position:sticky;top:0;z-index:3;'>Grid</th>{header_cells}</tr></thead>"
+        f"<thead><tr>"
+        f"<th style='padding:6px;background:#f4f6fa;color:#111;position:sticky;top:0;z-index:3;'>Grid</th>"
+        f"<th style='padding:6px;background:#f4f6fa;color:#111;position:sticky;top:0;z-index:3;'>Date</th>"
+        f"{header_cells}</tr></thead>"
         "<tbody>"
         + "".join(table_rows)
         + "</tbody></table></div>"
     )
     st.markdown(table_html, unsafe_allow_html=True)
+
+
