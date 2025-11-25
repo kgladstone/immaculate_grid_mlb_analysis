@@ -30,7 +30,6 @@ images/
 .cache/
 
 # Local bin assets (moved metadata/logos/pdfs)
-bin/
 
 # Testers
 *_tester.py
