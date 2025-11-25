@@ -9,7 +9,7 @@ To generate the complete analysis, follow these steps in order:
 - **Purpose:** Ensure that all users are properly set up in the `config.json` file for accurate analysis and reporting. Note that the repo includes a file called `config_SAMPLE.json` to help you get started with yours. This file needs to be set up correctly for the script to work.
 
 ### 2. Database Refresh and Report Generation
-- **Script:** `main.py`
+- **Script:** `streamlit_app.py`
 - **Purpose:** Processes the Immaculate Grid results that are sent through text messages, storing them locally in a chat database. Compiles a dataset of all daily grid prompts by scraping and updating the existing prompt records. Analyzes the latest grid results and prompts, generating a detailed weekly report for performance insights.
 - **Requirement:** You need a Mac that stores iMessages locally in the `chat.db` file.
 

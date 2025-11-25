@@ -1,6 +1,8 @@
 # analysis.py
 import re
 import os
+import ast
+import json
 import numpy as np
 import pandas as pd
 from io import StringIO
@@ -11,6 +13,7 @@ from matplotlib.ticker import MaxNLocator
 
 from datetime import datetime, timedelta
 from collections import defaultdict
+from typing import Optional, Any
 from PIL import Image
 from data.image_processor import ImageProcessor
 
@@ -28,15 +31,29 @@ from data.data_prep import (
     clean_image_parser_data,
     create_grid_cell_image_view,
     get_team_name_without_city,
-    get_supercategory
-    )
-from utils.constants import (
-    TEAM_LIST, 
-    GRID_PLAYERS_RESTRICTED, 
-    IMAGES_PATH, 
-    APPLE_TEXTS_DB_PATH, 
-    IMAGES_METADATA_PATH
+    get_supercategory,
 )
+from utils.constants import (
+    TEAM_LIST,
+    GRID_PLAYERS,
+    GRID_PLAYERS_RESTRICTED,
+    IMM_GRID_START_DATE,
+    IMAGES_PATH,
+    APPLE_TEXTS_DB_PATH,
+    IMAGES_METADATA_PATH,
+)
+
+# Helpers for grid/date mapping and week buckets
+_IMM_START_DT = datetime.strptime(IMM_GRID_START_DATE, "%Y-%m-%d")
+
+
+def grid_to_date(grid_number: int) -> datetime:
+    return _IMM_START_DT + timedelta(days=int(grid_number))
+
+
+def week_start_from_grid(grid_number: int) -> datetime:
+    grid_date = grid_to_date(grid_number)
+    return grid_date - timedelta(days=grid_date.weekday())
 
 # Function to calculate smoothed metrics (score, correct, average_score_of_correct) from texts_melted
 def calculate_smoothed_metrics(texts, smoothness=28):
@@ -2080,3 +2097,239 @@ def analyze_new_players_per_month(image_metadata, color_map=None):
     
     plt.tight_layout()
     plt.show()
+
+
+# ---------------- New metrics ----------------
+def analyze_full_week_usage(texts_df: pd.DataFrame, images_df: pd.DataFrame, person: Optional[str] = None) -> pd.DataFrame:
+    """For each submitter/week (Mon-Sun by grid id), list unique players with grid ids."""
+    if images_df.empty or "grid_number" not in images_df.columns:
+        return pd.DataFrame()
+    df = images_df.copy()
+    df["grid_number"] = pd.to_numeric(df["grid_number"], errors="coerce")
+    df = df.dropna(subset=["grid_number"])
+    if person:
+        df = df[df["submitter"] == person]
+    df["week_start"] = df["grid_number"].apply(week_start_from_grid).dt.strftime("%Y-%m-%d")
+
+    def _players(resp):
+        if isinstance(resp, dict):
+            return [v for v in resp.values() if isinstance(v, str) and v.strip()]
+        return []
+
+    df["players"] = df["responses"].apply(_players)
+    df = df.explode("players").dropna(subset=["players"])
+    def _summarize(group):
+        mapping = {}
+        for _, row in group.iterrows():
+            player = row["players"]
+            gid = int(row["grid_number"])
+            mapping.setdefault(player, set()).add(gid)
+        players_formatted = [
+            f"{player} ({', '.join(str(g) for g in sorted(gids))})"
+            for player, gids in sorted(mapping.items(), key=lambda x: x[0])
+        ]
+        return pd.Series(
+            {
+                "players_used": ", ".join(players_formatted),
+                "unique_players": len(mapping),
+            }
+        )
+
+    grouped = df.groupby(["submitter", "week_start"]).apply(_summarize).reset_index()
+    return grouped.sort_values(by=["week_start", "submitter"], ascending=False)
+
+
+def analyze_shame_index(images_df: pd.DataFrame, person: Optional[str] = None) -> pd.DataFrame:
+    """Shame index: repeated use of players within a Mon-Sun week per submitter (by grid date)."""
+    if images_df.empty or "grid_number" not in images_df.columns:
+        return pd.DataFrame()
+    df = images_df.copy()
+    df["grid_number"] = pd.to_numeric(df["grid_number"], errors="coerce")
+    if person:
+        df = df[df["submitter"] == person]
+    df = df.dropna(subset=["grid_number"])
+    df["week_start"] = df["grid_number"].apply(week_start_from_grid).dt.strftime("%Y-%m-%d")
+
+    def _players(resp):
+        if isinstance(resp, dict):
+            return [v for v in resp.values() if isinstance(v, str) and v.strip()]
+        return []
+
+    df["players"] = df["responses"].apply(_players)
+    df = df.explode("players").dropna(subset=["players"])
+
+    rows = []
+    for (sub, wk), group in df.groupby(["submitter", "week_start"]):
+        counts = group["players"].value_counts()
+        shame = int(sum(max(c - 1, 0) for c in counts))
+        repeated = counts[counts > 1].index.tolist()
+        repeated_fmt = []
+        for player in repeated:
+            grids = group.loc[group["players"] == player, "grid_number"].astype(int).unique().tolist()
+            repeated_fmt.append(f"{player} ({', '.join(str(g) for g in sorted(grids))})")
+        rows.append(
+            {
+                "submitter": sub,
+                "week_start": wk,
+                "shame_index": shame,
+                "repeated_players": ", ".join(repeated_fmt),
+                "repeated_count": len(repeated_fmt),
+                "total_uses": int(counts.sum()),
+            }
+        )
+    return pd.DataFrame(rows).sort_values(by=["week_start", "submitter"], ascending=False)
+
+
+def analyze_adjusted_rarity(texts_df: pd.DataFrame, images_df: pd.DataFrame) -> pd.DataFrame:
+    """Adjusted rarity = avg score * (1 + shame_index / max(total_uses,1)) per submitter/week."""
+    if texts_df.empty or "date" not in texts_df.columns:
+        return pd.DataFrame()
+    texts = texts_df.copy()
+    texts["date_dt"] = pd.to_datetime(texts["date"])
+    texts["week_start"] = texts["date_dt"].apply(lambda d: d - timedelta(days=d.weekday())).dt.strftime("%Y-%m-%d")
+    score_stats = (
+        texts.groupby(["name", "week_start"])["score"]
+        .agg(avg_score="mean", grids="count")
+        .reset_index()
+        .rename(columns={"name": "submitter"})
+    )
+    shame = analyze_shame_index(images_df)
+    merged = score_stats.merge(shame, on=["submitter", "week_start"], how="left").fillna({"shame_index": 0, "total_uses": 0})
+    merged["shame_factor"] = 1 + (merged["shame_index"] / merged["total_uses"].replace(0, 1))
+    merged["adjusted_rarity"] = merged["avg_score"] * merged["shame_factor"]
+    return merged.sort_values(by=["week_start", "submitter"], ascending=False)
+
+
+def analyze_low_bit_high_reward(images_df: pd.DataFrame, prompts_df: pd.DataFrame) -> pd.DataFrame:
+    """Low bit high reward: favor players with many applicable sub-prompts (parsed) and many uses."""
+    if images_df.empty or prompts_df.empty:
+        return pd.DataFrame()
+    prompts_lookup = prompts_df.set_index("grid_id")
+    try:
+        prompts_lookup.index = prompts_lookup.index.astype(int)
+    except Exception:
+        pass
+    records = []
+
+    def _flatten_parts(val):
+        """Extract individual categories from a prompt value (string/tuple/list)."""
+        parts = set()
+        if val is None:
+            return []
+        candidate = val
+        if isinstance(candidate, str):
+            candidate = candidate.strip()
+            if " + " in candidate:
+                for piece in candidate.split(" + "):
+                    if piece.strip():
+                        parts.add(piece.strip())
+            else:
+                try:
+                    candidate = ast.literal_eval(candidate)
+                except Exception:
+                    candidate = candidate
+        if isinstance(candidate, (list, tuple)):
+            for item in candidate:
+                if isinstance(item, (list, tuple)):
+                    for sub in item:
+                        if isinstance(sub, str) and sub.strip():
+                            parts.add(sub.strip())
+                elif isinstance(item, str) and item.strip():
+                    parts.add(item.strip())
+        elif isinstance(candidate, str) and candidate.strip():
+            parts.add(candidate.strip())
+
+        # Fallback to the canonical parser to catch any tuple strings
+        first, second = get_categories_from_prompt(val)
+        for p in (first, second):
+            if isinstance(p, str) and p.strip():
+                parts.add(p.strip())
+        return sorted(parts)
+
+    for _, row in images_df.iterrows():
+        try:
+            grid = int(row.get("grid_number"))
+        except Exception:
+            continue
+        responses = row.get("responses", {})
+        if grid not in prompts_lookup.index:
+            continue
+        prompt_row = prompts_lookup.loc[grid]
+        for pos, player in (responses or {}).items():
+            if not isinstance(player, str) or not player.strip():
+                continue
+            prompt_val = prompt_row.get(pos)
+            for part in _flatten_parts(prompt_val):
+                records.append({"player": player.strip(), "prompt": part})
+    df = pd.DataFrame(records)
+    if df.empty:
+        return df
+    df["prompt"] = df["prompt"].fillna("<unknown>")
+    grouped = df.groupby("player").agg(
+        appearances=("prompt", "count"),
+        unique_prompts=("prompt", "nunique"),
+        prompts_list=("prompt", lambda x: sorted(set(x))),
+    )
+    grouped["ratio"] = grouped["appearances"] / grouped["unique_prompts"].replace(0, 1)
+    grouped["combined_score"] = grouped["appearances"] * grouped["unique_prompts"]
+    grouped["unique_prompts_list"] = grouped["prompts_list"].apply(lambda lst: ", ".join(lst))
+    grouped = grouped.drop(columns=["prompts_list"])
+    return grouped.reset_index().sort_values(
+        by=["unique_prompts", "combined_score", "appearances"], ascending=False
+    )
+
+
+def analyze_novelties(images_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Novelties: per-player first usage dates by submitter, sorted by global first usage (recent first).
+    """
+    if images_df.empty or "grid_number" not in images_df.columns:
+        return pd.DataFrame()
+
+    submitters = sorted(GRID_PLAYERS.keys())
+    records = {}
+
+    def _iter_players(row):
+        grid_num = row.get("grid_number")
+        try:
+            grid_num = int(grid_num)
+        except Exception:
+            return []
+        usage_date = grid_to_date(grid_num).strftime("%Y-%m-%d")
+        responses = row.get("responses") or {}
+        out = []
+        for val in responses.values():
+            if isinstance(val, str) and val.strip():
+                out.append((val.strip(), usage_date, row.get("submitter")))
+        return out
+
+    for _, row in images_df.iterrows():
+        for player, date_str, sub in _iter_players(row):
+            if player not in records:
+                records[player] = {"first_global_date": date_str}
+            # global first date
+            if date_str < records[player].get("first_global_date", date_str):
+                records[player]["first_global_date"] = date_str
+            # per submitter first date
+            key = f"{sub}"
+            prev = records[player].get(key)
+            if prev is None or date_str < prev:
+                records[player][key] = date_str
+
+    rows = []
+    for player, data in records.items():
+        row = {"player": player, "first_global_date": data["first_global_date"]}
+        for sub in submitters:
+            row[sub] = data.get(sub, "")
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    df = df.sort_values(by="first_global_date", ascending=False)
+    return df.reset_index(drop=True)
+
+
+def analyze_prompts_most_wrong(prompts_df: pd.DataFrame, texts_df: pd.DataFrame) -> pd.DataFrame:
+    """Deprecated: kept for compatibility; returns empty."""
+    return pd.DataFrame()

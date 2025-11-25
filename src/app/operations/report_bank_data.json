@@ -1,0 +1,430 @@
+[
+  {
+    "title": "High Level Summary Metrics",
+    "func": "plot_summary_metrics",
+    "needs_person": false,
+    "type": "chart",
+    "args": [
+      "texts",
+      "color_map"
+    ],
+    "category": "Overview"
+  },
+  {
+    "title": "Correctness Distribution",
+    "func": "plot_correctness",
+    "needs_person": false,
+    "type": "chart",
+    "args": [
+      "texts",
+      "color_map"
+    ],
+    "category": "Overview"
+  },
+  {
+    "title": "Smoothed Scores Over Time",
+    "func": "plot_smoothed_metrics",
+    "needs_person": false,
+    "type": "chart",
+    "args": [
+      "texts",
+      "smoothed_score",
+      "Smoothed Scores Over Time",
+      "Smoothed Score",
+      "color_map"
+    ],
+    "category": "Overview"
+  },
+  {
+    "title": "Smoothed Correct Over Time",
+    "func": "plot_smoothed_metrics",
+    "needs_person": false,
+    "type": "chart",
+    "args": [
+      "texts",
+      "smoothed_correct",
+      "Smoothed Correct Over Time",
+      "Smoothed Correct",
+      "color_map"
+    ],
+    "category": "Overview"
+  },
+  {
+    "title": "Smoothed Avg Score of Correct Over Time",
+    "func": "plot_smoothed_metrics",
+    "needs_person": false,
+    "type": "chart",
+    "args": [
+      "texts",
+      "smoothed_avg_score",
+      "Smoothed Avg Score of Correct Over Time",
+      "Smoothed Avg Score of Correct",
+      "color_map"
+    ],
+    "category": "Overview"
+  },
+  {
+    "title": "Win Rates",
+    "func": "plot_win_rates",
+    "needs_person": false,
+    "type": "chart",
+    "args": [
+      "texts",
+      "color_map"
+    ],
+    "category": "Overview"
+  },
+  {
+    "title": "Best and Worst Scores (All Time)",
+    "func": "plot_best_worst_scores",
+    "needs_person": false,
+    "type": "chart",
+    "args": [
+      "texts"
+    ],
+    "category": "Overview"
+  },
+  {
+    "title": "Best and Worst Scores (Last 30 Days)",
+    "func": "plot_best_worst_scores_30",
+    "needs_person": false,
+    "type": "chart",
+    "args": [
+      "texts"
+    ],
+    "category": "Overview"
+  },
+  {
+    "title": "Top Grids of All Time",
+    "func": "plot_top_n_grids",
+    "needs_person": false,
+    "type": "chart",
+    "args": [
+      "images",
+      "texts",
+      10
+    ],
+    "category": "Overview"
+  },
+  {
+    "title": "First Time Uses Over Time",
+    "func": "analyze_new_players_per_month",
+    "needs_person": false,
+    "type": "chart",
+    "args": [
+      "images",
+      "color_map"
+    ],
+    "category": "Overview"
+  },
+  {
+    "title": "Type Performance Overview",
+    "func": "analyze_person_type_performance",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "texts",
+      "prompts",
+      "categories"
+    ],
+    "category": "Performance by Role/Category"
+  },
+  {
+    "title": "Category Performance Overview",
+    "func": "analyze_person_to_category",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "texts",
+      "prompts",
+      "categories"
+    ],
+    "category": "Performance by Role/Category"
+  },
+  {
+    "title": "Easiest Teams Overview (Consensus)",
+    "func": "analyze_team_performance",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "texts",
+      "prompts",
+      "categories"
+    ],
+    "category": "Performance by Role/Category"
+  },
+  {
+    "title": "Best/Worst Team Overview (Individual)",
+    "func": "analyze_person_prompt_performance",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "texts",
+      "prompts",
+      "categories",
+      "Team"
+    ],
+    "category": "Performance by Role/Category"
+  },
+  {
+    "title": "Best/Worst Category Overview (Individual)",
+    "func": "analyze_person_prompt_performance",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "texts",
+      "prompts",
+      "categories",
+      "Category"
+    ],
+    "category": "Performance by Role/Category"
+  },
+  {
+    "title": "Hardest Teams for Team-Team Intersections",
+    "func": "analyze_hardest_intersections",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "texts",
+      "prompts",
+      "team"
+    ],
+    "category": "Intersections & Difficulty"
+  },
+  {
+    "title": "Hardest Teams for Team-Stat Intersections",
+    "func": "analyze_hardest_intersections",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "texts",
+      "prompts",
+      "stat"
+    ],
+    "category": "Intersections & Difficulty"
+  },
+  {
+    "title": "Top Players Used",
+    "func": "analyze_top_players_by_submitter",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images",
+      40
+    ],
+    "category": "Players & Favorites"
+  },
+  {
+    "title": "Our Personal Favorites",
+    "func": "analyze_submitter_specific_players",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images",
+      15
+    ],
+    "category": "Players & Favorites"
+  },
+  {
+    "title": "Our Favorite Players by Team",
+    "func": "get_favorite_player_by_attribute",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images",
+      "prompts",
+      "team",
+      0
+    ],
+    "category": "Players & Favorites"
+  },
+  {
+    "title": "Our Favorite Players by Supercategory",
+    "func": "get_favorite_player_by_attribute",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images",
+      "prompts",
+      "supercategory",
+      0
+    ],
+    "category": "Players & Favorites"
+  },
+  {
+    "title": "Our Favorite Players by Position",
+    "func": "get_favorite_player_by_attribute",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images",
+      "prompts",
+      "position",
+      0
+    ],
+    "category": "Players & Favorites"
+  },
+  {
+    "title": "Players Used for Most Teams",
+    "func": "get_players_used_for_most_teams",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images",
+      "prompts",
+      40,
+      0
+    ],
+    "category": "Players & Favorites"
+  },
+  {
+    "title": "Bans and Saves",
+    "func": "analyze_grid_cell_with_shared_guesses",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images",
+      "prompts",
+      "restricted"
+    ],
+    "category": "Controls & Restrictions"
+  },
+  {
+    "title": "Immaculate Streaks",
+    "func": "analyze_immaculate_streaks",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "texts"
+    ],
+    "category": "Usage Patterns"
+  },
+  {
+    "title": "Splits",
+    "func": "analyze_splits",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images",
+      "prompts",
+      "restricted"
+    ],
+    "category": "Controls & Restrictions"
+  },
+  {
+    "title": "Everyone Missed",
+    "func": "analyze_everyone_missed",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "texts",
+      "prompts",
+      "restricted"
+    ],
+    "category": "Intersections & Difficulty"
+  },
+  {
+    "title": "All Used on Same Day",
+    "func": "analyze_all_used_on_same_day",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images",
+      "prompts",
+      "restricted"
+    ],
+    "category": "Intersections & Difficulty"
+  },
+  {
+    "title": "Illegal Uses",
+    "func": "analyze_illegal_uses",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images",
+      "prompts",
+      "restricted"
+    ],
+    "category": "Intersections & Difficulty"
+  },
+  {
+    "title": "Popular Players by Month",
+    "func": "analyze_top_players_by_month",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images",
+      5
+    ],
+    "category": "Players & Favorites"
+  },
+  {
+    "title": "Most Successful Intersections",
+    "func": "analyze_most_successful_exact_intersections",
+    "needs_person": true,
+    "type": "table",
+    "args": [
+      "texts",
+      "prompts",
+      "person"
+    ],
+    "category": "Intersections & Difficulty"
+  },
+  {
+    "title": "Never Shown Intersections",
+    "func": "analyze_empty_team_team_intersections",
+    "needs_person": true,
+    "type": "table",
+    "args": [
+      "texts",
+      "prompts",
+      "person",
+      "categories"
+    ],
+    "category": "Intersections & Difficulty"
+  },
+  {
+    "title": "Full Week Usage",
+    "func": "analyze_full_week_usage",
+    "needs_person": true,
+    "type": "table",
+    "args": [
+      "texts",
+      "images",
+      "person"
+    ],
+    "category": "Usage Patterns"
+  },
+  {
+    "title": "Shame Index",
+    "func": "analyze_shame_index",
+    "needs_person": true,
+    "type": "table",
+    "args": [
+      "images",
+      "person"
+    ],
+    "category": "Usage Patterns"
+  },
+  {
+    "title": "Low Bit High Reward",
+    "func": "analyze_low_bit_high_reward",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images",
+      "prompts"
+    ],
+    "category": "Players & Favorites"
+  },
+  {
+    "title": "Novelties",
+    "func": "analyze_novelties",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images"
+    ],
+    "category": "Players & Favorites"
+  }
+]

@@ -90,8 +90,9 @@ def clean_name(name):
 
 
 
-def correct_typos_with_fuzzy_matching(df, response_column, similarity_threshold=0.85):
-    print(f"Correcting typos in column '{response_column}'...")
+def correct_typos_with_fuzzy_matching(df, response_column, similarity_threshold=0.85, progress_callback=None, verbose=True):
+    if verbose:
+        print(f"Correcting typos in column '{response_column}'...")
     mlb_names = load_mlb_player_names()
     canonical_mapping = {}
 
@@ -115,8 +116,9 @@ def correct_typos_with_fuzzy_matching(df, response_column, similarity_threshold=
         return match
 
     corrected_rows, changes_log = [], []
+    total = len(df)
 
-    for _, row in df.iterrows():
+    for idx, (_, row) in enumerate(df.iterrows(), start=1):
         original = row[response_column]
         corrected = original
 
@@ -151,5 +153,11 @@ def correct_typos_with_fuzzy_matching(df, response_column, similarity_threshold=
         row_copy = row.copy()
         row_copy[response_column] = corrected
         corrected_rows.append(row_copy)
+
+        if progress_callback:
+            try:
+                progress_callback(idx, total)
+            except Exception:
+                pass
 
     return pd.DataFrame(corrected_rows), pd.DataFrame(changes_log)

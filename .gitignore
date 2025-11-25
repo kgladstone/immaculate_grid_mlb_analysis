@@ -26,6 +26,12 @@ images_parser.json
 images/
 *.jpg
 
+# Local analytics cache
+.cache/
+
+# Local bin assets (moved metadata/logos/pdfs)
+bin/
+
 # Testers
 *_tester.py
 

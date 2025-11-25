@@ -41,8 +41,9 @@ Example config.json:
 current_file = Path(__file__).resolve()  # Get the absolute path of the current script
 root_dir = current_file.parent.parent.parent  # Move up to the root directory
 csv_dir = root_dir / "csv/"  # Target the 'csv' folder in the root directory
+bin_dir = root_dir / "bin/"
 
-CONFIG_PATH = root_dir / 'config.json'  # Path to the configuration file
+CONFIG_PATH = bin_dir / 'config.json'  # Path to the configuration file
 # Load configuration from a separate JSON file
 with open(CONFIG_PATH, 'r') as config_file:
     config = json.load(config_file)
@@ -53,13 +54,13 @@ APPLE_IMAGES_PATH = str(USER_HOME / "Library/Messages/Attachments/")
 MESSAGES_CSV_PATH = csv_dir / "results.csv"
 PROMPTS_CSV_PATH = csv_dir / "prompts.csv"
 IMAGES_PATH = root_dir / "images/"  # Path to the images folder
-IMAGES_METADATA_PATH = root_dir / "images_metadata.json"  # Path to the images metadata file
-IMAGES_METADATA_CSV_PATH = root_dir / "images_metadata.csv"  # Path to the images metadata CSV file
-IMAGES_METADATA_FUZZY_LOG_PATH = root_dir / "images_metadata_fuzzy_log.csv"  # Path to the fuzzy matching log file
-IMAGES_PARSER_PATH = root_dir / "images_parser.json"  # Path to the images parser output file
-PDF_FILENAME = root_dir / "immaculate_grid_report.pdf"  # Path for the PDF output file
-LOGO_DARK_PATH = root_dir / "logo_dark.png"  # Path to the dark logo image
-LOGO_LIGHT_PATH = root_dir / "logo_light.png"  # Path to the light logo image
+IMAGES_METADATA_PATH = bin_dir / "images_metadata.json"  # Path to the images metadata file
+IMAGES_METADATA_CSV_PATH = bin_dir / "images_metadata.csv"  # Path to the images metadata CSV file
+IMAGES_METADATA_FUZZY_LOG_PATH = bin_dir / "images_metadata_fuzzy_log.csv"  # Path to the fuzzy matching log file
+IMAGES_PARSER_PATH = bin_dir / "images_parser.json"  # Path to the images parser output file
+PDF_FILENAME = bin_dir / "immaculate_grid_report.pdf"  # Path for the PDF output file
+LOGO_DARK_PATH = bin_dir / "logo_dark.png"  # Path to the dark logo image
+LOGO_LIGHT_PATH = bin_dir / "logo_light.png"  # Path to the light logo image
 
 # --------------------------------------------------------------------------------------------------
 # Global Variables
@@ -98,7 +99,7 @@ TEAM_LIST = {
     "Rays": "TBR",
     "Orioles": "BAL",
     "Angels": "LAA",
-    "Athletics": "OAK",
+    "Athletics": "ATH",
     "Astros": "HOU",
     "Mariners": "SEA",
     "Rangers": "TEX"
