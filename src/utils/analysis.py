@@ -13,7 +13,7 @@ from matplotlib.ticker import MaxNLocator
 
 from datetime import datetime, timedelta
 from collections import defaultdict
-from typing import Optional, Any
+from typing import Optional, Any, Dict, Tuple
 from PIL import Image
 from data.image_processor import ImageProcessor
 
@@ -2333,3 +2333,160 @@ def analyze_novelties(images_df: pd.DataFrame) -> pd.DataFrame:
 def analyze_prompts_most_wrong(prompts_df: pd.DataFrame, texts_df: pd.DataFrame) -> pd.DataFrame:
     """Deprecated: kept for compatibility; returns empty."""
     return pd.DataFrame()
+
+
+def analyze_prediction_future_grid(prompts_df: pd.DataFrame, texts_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Predict how each submitter will perform on the most recent grid based on past performance and prompt components.
+    Uses weighted blend of overall success, component success, and prompt-type success.
+    """
+    if prompts_df is None or texts_df is None:
+        return pd.DataFrame()
+    if prompts_df.empty or texts_df.empty:
+        return pd.DataFrame()
+
+    prompts_df = prompts_df.copy()
+    if "grid_id" not in prompts_df.columns:
+        return pd.DataFrame()
+    prompts_df["grid_id"] = pd.to_numeric(prompts_df["grid_id"], errors="coerce")
+    prompts_df = prompts_df.dropna(subset=["grid_id"])
+    if prompts_df.empty:
+        return pd.DataFrame()
+    prompts_df["grid_id"] = prompts_df["grid_id"].astype(int)
+    prompts_lookup = prompts_df.set_index("grid_id")
+
+    positions = [
+        "top_left", "top_center", "top_right",
+        "middle_left", "middle_center", "middle_right",
+        "bottom_left", "bottom_center", "bottom_right",
+    ]
+
+    def _cell_prompt_list(row: pd.Series) -> list:
+        return [row.get(pos) for pos in positions]
+
+    # Build training records from historical attempts
+    records = []
+
+    def _prompt_components(val) -> Tuple[str, str]:
+        first, second = get_categories_from_prompt(val)
+        return first or "", second or ""
+
+    def _prompt_type(first: str, second: str) -> str:
+        a_is_team = category_is_team(first)
+        b_is_team = category_is_team(second)
+        if a_is_team and b_is_team:
+            return "team-team"
+        if a_is_team or b_is_team:
+            return "team-stat"
+        return "stat-stat"
+
+    for _, row in texts_df.iterrows():
+        try:
+            gid = int(row.get("grid_number"))
+        except Exception:
+            continue
+        if gid not in prompts_lookup.index:
+            continue
+        matrix_raw = row.get("matrix")
+        try:
+            if isinstance(matrix_raw, str):
+                matrix_flat = sum(json.loads(matrix_raw), [])
+            else:
+                matrix_flat = sum(matrix_raw, [])
+        except Exception:
+            try:
+                matrix_flat = [v for sub in ast.literal_eval(str(matrix_raw)) for v in sub]
+            except Exception:
+                continue
+        cell_prompts = _cell_prompt_list(prompts_lookup.loc[gid])
+        if len(matrix_flat) != len(cell_prompts):
+            continue
+        for correct_flag, prompt_val in zip(matrix_flat, cell_prompts):
+            f, s = _prompt_components(prompt_val)
+            records.append(
+                {
+                    "submitter": row.get("name"),
+                    "correct": bool(correct_flag),
+                    "first": f,
+                    "second": s,
+                    "ptype": _prompt_type(f, s),
+                }
+            )
+
+    hist = pd.DataFrame(records)
+    if hist.empty:
+        return pd.DataFrame()
+
+    overall = hist.groupby("submitter")["correct"].mean().to_dict()
+    comp_success: Dict[str, Dict[str, float]] = {}
+    for submitter, grp in hist.groupby("submitter"):
+        comp_rates = {}
+        for c in pd.concat([grp["first"], grp["second"]]):
+            if not c:
+                continue
+            sub_grp = grp[(grp["first"] == c) | (grp["second"] == c)]
+            if not sub_grp.empty:
+                comp_rates[c] = sub_grp["correct"].mean()
+        comp_success[submitter] = comp_rates
+
+    type_success: Dict[str, Dict[str, float]] = {}
+    for submitter, grp in hist.groupby("submitter"):
+        type_success[submitter] = grp.groupby("ptype")["correct"].mean().to_dict()
+
+    if len(prompts_lookup.index) == 0:
+        return pd.DataFrame()
+    target_grid = int(prompts_lookup.index.max())
+    target_row = prompts_lookup.loc[target_grid]
+    target_prompts = _cell_prompt_list(target_row)
+
+    pred_rows = []
+    submitters = sorted(overall.keys())
+    for submitter in submitters:
+        base = overall.get(submitter, hist["correct"].mean())
+        for pos_label, prompt_val in zip(positions, target_prompts):
+            f, s = _prompt_components(prompt_val)
+            ptype = _prompt_type(f, s)
+            comp_rates = []
+            for comp in (f, s):
+                if comp:
+                    val = comp_success.get(submitter, {}).get(comp)
+                    if val is not None:
+                        comp_rates.append(val)
+            type_rate = type_success.get(submitter, {}).get(ptype)
+
+            weights = []
+            values = []
+            # overall
+            weights.append(0.4)
+            values.append(base)
+            # components
+            if comp_rates:
+                weights.append(0.4)
+                values.append(sum(comp_rates) / len(comp_rates))
+            # type
+            if type_rate is not None:
+                weights.append(0.2)
+                values.append(type_rate)
+            pred = sum(w * v for w, v in zip(weights, values)) / sum(weights)
+            comp_str = ",".join(f"{c:.2f}" for c in comp_rates) if comp_rates else ""
+            type_str = f"{type_rate:.2f}" if type_rate is not None else "n/a"
+            pred_rows.append(
+                {
+                    "grid_id": target_grid,
+                    "cell": pos_label,
+                    "prompt": f"{f} | {s}",
+                    "submitter": submitter,
+                    "predicted_success_pct": round(pred * 100, 1),
+                    "basis": f"overall={base:.2f}, comps={comp_str}, type={type_str}",
+                }
+            )
+
+    pred_df = pd.DataFrame(pred_rows)
+    if pred_df.empty:
+        return pred_df
+    # Wide view: cells x submitters
+    wide = pred_df.pivot_table(index=["grid_id", "cell", "prompt"], columns="submitter", values="predicted_success_pct")
+    wide = wide.reset_index()
+    wide.columns.name = None
+    wide = wide.sort_values(by=["grid_id", "cell"])
+    return wide.reset_index(drop=True)

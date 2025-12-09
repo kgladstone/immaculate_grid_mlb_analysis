@@ -6,6 +6,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
+import textwrap
 from matplotlib.backends.backend_pdf import PdfPages
 
 import tempfile
@@ -234,24 +235,36 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
                             continue
                         if isinstance(result, pd.DataFrame):
                             df = result.reset_index(drop=True)
-                            chunk = 40
+                            # Wrap long cell contents to keep tables readable in the PDF
+                            wrap_width = 28
+                            df_wrapped = df.applymap(lambda v: "\n".join(textwrap.wrap(str(v), width=wrap_width)) if pd.notna(v) else "")
+                            # Adjust chunk and page orientation based on width
+                            cols = df_wrapped.shape[1]
+                            chunk = 30 if cols > 8 else 40
                             pages = max(1, (len(df) + chunk - 1) // chunk)
                             for page in range(pages):
-                                slice_df = df.iloc[page * chunk : (page + 1) * chunk]
-                                fig, ax = plt.subplots(figsize=(8.5, 11))
+                                slice_df = df_wrapped.iloc[page * chunk : (page + 1) * chunk]
+                                wide = cols > 8
+                                fig_size = (11, 8.5) if wide else (8.5, 11)
+                                fig, ax = plt.subplots(figsize=fig_size)
                                 ax.axis("off")
                                 ax.text(0.5, 0.97, f"{report['title']} (Page {page+1}/{pages})", ha="center", va="top", fontsize=12, fontweight="bold")
+                                col_width = min(0.95, max(0.08, 0.9 / max(cols, 1)))
                                 table = ax.table(
                                     cellText=slice_df.values,
                                     colLabels=slice_df.columns,
                                     cellLoc="center",
+                                    colWidths=[col_width] * cols,
                                     bbox=[0, 0, 1, 0.9],
                                 )
                                 table.auto_set_font_size(False)
-                                table.set_fontsize(8)
-                                # Enforce minimum column width; give more room for wide tables (e.g., novelties)
-                                min_width = 0.15 if slice_df.shape[1] > 6 else 0.11
-                                for key, cell in table.get_celld().items():
+                                table.set_fontsize(7 if wide else 8)
+                                # Header styling and minimum width enforcement
+                                min_width = 0.12 if cols > 6 else 0.1
+                                for (r, c), cell in table.get_celld().items():
+                                    if r == 0:
+                                        cell.set_facecolor("#f0f0f0")
+                                        cell.set_fontsize(8 if wide else 9)
                                     cell.set_width(max(cell.get_width(), min_width))
                                 pdf.savefig(fig)
                                 plt.close(fig)

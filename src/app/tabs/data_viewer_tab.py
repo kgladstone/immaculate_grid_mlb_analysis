@@ -5,6 +5,7 @@ import json
 from typing import List
 
 import pandas as pd
+from pathlib import Path
 import streamlit as st
 from PIL import Image
 
@@ -312,6 +313,18 @@ def render_image_metadata(df: pd.DataFrame, source_path: Path, texts_df: pd.Data
         return best.get("correct"), best.get("score")
 
     filtered = filtered.copy()
+    # Normalize date column; prefer image_date if present, else date, else derive from grid_number
+    def _normalize_date(row):
+        if pd.notna(row.get("image_date")) and str(row.get("image_date")).strip().lower() != "nan":
+            return str(row.get("image_date"))
+        if pd.notna(row.get("date")) and str(row.get("date")).strip().lower() != "nan":
+            return str(row.get("date"))
+        try:
+            return ImmaculateGridUtils._fixed_date_from_grid_number(int(row.get("grid_number"))).strftime("%Y-%m-%d")
+        except Exception:
+            return ""
+
+    filtered["date_display"] = filtered.apply(_normalize_date, axis=1)
     filtered[["correct", "score"]] = filtered.apply(
         lambda row: pd.Series(_lookup_stats(row.get("submitter"))), axis=1
     )
@@ -340,18 +353,26 @@ def render_image_metadata(df: pd.DataFrame, source_path: Path, texts_df: pd.Data
             with col:
                 st.markdown(
                     f"**{entry.get('submitter', 'Unknown')}**  \n"
-                    f"Grid: {entry.get('grid_number', '')} · Date: {entry.get('date', '')}  \n"
+                    f"Grid: {entry.get('grid_number', '')} · Date: {entry.get('date_display', entry.get('date', ''))}  \n"
                     f"Correct: {entry.get('correct', '')} · Score: {entry.get('score', '')}"
                 )
-                img_path = images_dir / entry.get("image_filename", "")
-                if img_path.exists():
+                filename = entry.get("image_filename")
+                # Fall back to basename from stored path if filename missing
+                if not filename and entry.get("path"):
+                    filename = Path(entry["path"]).name
+                if filename:
+                    img_path = images_dir / filename
+                else:
+                    img_path = None
+
+                if img_path and img_path.exists():
                     display_img = load_image_for_display(img_path)
                     if display_img is not None:
-                        st.image(display_img, caption=entry.get("image_filename", ""), use_container_width=True)
+                        st.image(display_img, caption=filename, use_container_width=True)
                     else:
-                        st.image(str(img_path), caption=entry.get("image_filename", ""), use_container_width=True)
+                        st.image(str(img_path), caption=filename, use_container_width=True)
                 else:
-                    st.warning(f"Image not found: {entry.get('image_filename', '')}")
+                    st.warning(f"Image not found for entry (filename={filename}).")
 
                 st.caption("Parsed players (by position):")
                 render_responses_grid(entry.get("responses"))
@@ -437,5 +458,3 @@ def render_data_availability(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, i
         + "</tbody></table></div>"
     )
     st.markdown(table_html, unsafe_allow_html=True)
-
-

@@ -426,5 +426,16 @@
       "images"
     ],
     "category": "Players & Favorites"
+  },
+  {
+    "title": "Predict Future Grid Performance",
+    "func": "analyze_prediction_future_grid",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "prompts",
+      "texts_raw"
+    ],
+    "category": "Predictions"
   }
 ]
