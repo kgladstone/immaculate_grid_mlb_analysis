@@ -38,6 +38,7 @@ from utils.analysis import (
     analyze_shame_index,
     analyze_low_bit_high_reward,
     analyze_novelties,
+    analyze_prediction_future_grid,
 )
 
 REPORT_BANK_PATH = Path(__file__).resolve().parent / "report_bank_data.json"
@@ -74,6 +75,7 @@ FUNCTIONS: Dict[str, Callable] = {
     "analyze_shame_index": analyze_shame_index,
     "analyze_low_bit_high_reward": analyze_low_bit_high_reward,
     "analyze_novelties": analyze_novelties,
+    "analyze_prediction_future_grid": analyze_prediction_future_grid,
 }
 
 

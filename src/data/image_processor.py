@@ -1182,7 +1182,7 @@ class ImageProcessor():
         print(f"Parser metadata saved: {IMAGES_PARSER_PATH}")
 
 
-    def process_image_with_dynamic_grid(self, image_path, submitter, image_date, grid_number, matrix):
+    def process_image_with_dynamic_grid(self, image_path, submitter, image_date, grid_number, matrix, skip_validation=False):
         """
         Process an image with dynamic header/footer detection and grid cell OCR assignment.
 
@@ -1270,10 +1270,12 @@ class ImageProcessor():
         # self.draw_image_with_outlined_logo_and_grid_cells(image_path, logo_position, grid_cells, 1)
         # input("Press Enter to continue...")
 
-        if not are_responses_robust:
+        if not are_responses_robust and not skip_validation:
             print(f"Quitting on {grid_number} for {submitter}....")
             parser_message = f"Warning: Grid image is invalid"
             return parser_message
+        elif not are_responses_robust and skip_validation:
+            parser_message = "Warning: Grid validation skipped; proceeding with parsed responses."
         
         # Step 5: Save the processed image and metadata
         print("Step 5: Copying and saving image...")
