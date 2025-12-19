@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+from numbers import Number
 from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -237,35 +238,116 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
                             df = result.reset_index(drop=True)
                             # Wrap long cell contents to keep tables readable in the PDF
                             wrap_width = 28
-                            df_wrapped = df.applymap(lambda v: "\n".join(textwrap.wrap(str(v), width=wrap_width)) if pd.notna(v) else "")
+                            def _format_cell_value(value: object) -> str:
+                                if isinstance(value, Number) and not isinstance(value, bool):
+                                    if float(value).is_integer():
+                                        return str(int(value))
+                                    rounded = round(float(value), 3)
+                                    text = f"{rounded:.3f}".rstrip("0").rstrip(".")
+                                    return text
+                                return str(value)
+
+                            def _wrap_cell(value: object) -> str:
+                                if pd.isna(value):
+                                    return ""
+                                text = _format_cell_value(value)
+                                lines = text.splitlines()
+                                if not lines:
+                                    return ""
+                                wrapped_lines = []
+                                for line in lines:
+                                    if line == "":
+                                        wrapped_lines.append("")
+                                    else:
+                                        wrapped_lines.extend(textwrap.wrap(line, width=wrap_width))
+                                return "\n".join(wrapped_lines)
+
+                            df_wrapped = df.applymap(_wrap_cell)
+
+                            def _max_line_len(value: str) -> int:
+                                lines = str(value).splitlines() or [""]
+                                return max(len(line) for line in lines)
+
+                            def _line_count(value: str) -> int:
+                                return len(str(value).splitlines() or [""])
+
+                            def _column_widths(frame: pd.DataFrame, max_total_width: float = 0.98) -> list[float]:
+                                col_lens = []
+                                for col in frame.columns:
+                                    max_cell = max((_max_line_len(v) for v in frame[col].astype(str)), default=0)
+                                    col_lens.append(max(len(str(col)), max_cell, 1))
+                                total = sum(col_lens) or 1
+                                widths = [max_total_width * (length / total) for length in col_lens]
+                                min_col = 0.06
+                                max_col = 0.24
+                                widths = [min(max(w, min_col), max_col) for w in widths]
+                                scale = (max_total_width / sum(widths)) if sum(widths) > 0 else 1.0
+                                return [w * scale for w in widths]
+
+                            def _row_heights(frame: pd.DataFrame, max_total_height: float = 0.9) -> list[float]:
+                                header_lines = max((_line_count(c) for c in frame.columns), default=1)
+                                row_weights = [header_lines]
+                                for _, row in frame.iterrows():
+                                    max_lines = 1
+                                    for value in row.astype(str):
+                                        max_lines = max(max_lines, _line_count(value))
+                                    row_weights.append(max_lines)
+                                total = sum(row_weights) or 1
+                                base = max_total_height / total
+                                return [base * w for w in row_weights]
+
+                            def _paginate_by_lines(frame: pd.DataFrame, max_lines_per_page: int) -> list[pd.DataFrame]:
+                                header_lines = max((_line_count(c) for c in frame.columns), default=1)
+                                pages: list[pd.DataFrame] = []
+                                start_idx = 0
+                                current_lines = header_lines
+                                for i, (_, row) in enumerate(frame.iterrows()):
+                                    row_lines = 1
+                                    for value in row.astype(str):
+                                        row_lines = max(row_lines, _line_count(value))
+                                    if current_lines + row_lines > max_lines_per_page and i > start_idx:
+                                        pages.append(frame.iloc[start_idx:i])
+                                        start_idx = i
+                                        current_lines = header_lines + row_lines
+                                    else:
+                                        current_lines += row_lines
+                                if start_idx < len(frame):
+                                    pages.append(frame.iloc[start_idx:])
+                                return pages
+
                             # Adjust chunk and page orientation based on width
                             cols = df_wrapped.shape[1]
-                            chunk = 30 if cols > 8 else 40
-                            pages = max(1, (len(df) + chunk - 1) // chunk)
-                            for page in range(pages):
-                                slice_df = df_wrapped.iloc[page * chunk : (page + 1) * chunk]
-                                wide = cols > 8
+                            wide = cols > 8
+                            max_lines = 28 if wide else 36
+                            page_slices = _paginate_by_lines(df_wrapped, max_lines)
+                            pages = len(page_slices)
+                            for page, slice_df in enumerate(page_slices, start=1):
                                 fig_size = (11, 8.5) if wide else (8.5, 11)
                                 fig, ax = plt.subplots(figsize=fig_size)
                                 ax.axis("off")
-                                ax.text(0.5, 0.97, f"{report['title']} (Page {page+1}/{pages})", ha="center", va="top", fontsize=12, fontweight="bold")
-                                col_width = min(0.95, max(0.08, 0.9 / max(cols, 1)))
+                                ax.text(0.5, 0.97, f"{report['title']} (Page {page}/{pages})", ha="center", va="top", fontsize=12, fontweight="bold")
+                                col_widths = _column_widths(slice_df)
                                 table = ax.table(
                                     cellText=slice_df.values,
                                     colLabels=slice_df.columns,
-                                    cellLoc="center",
-                                    colWidths=[col_width] * cols,
+                                    cellLoc="left",
+                                    colWidths=col_widths,
                                     bbox=[0, 0, 1, 0.9],
                                 )
                                 table.auto_set_font_size(False)
                                 table.set_fontsize(7 if wide else 8)
-                                # Header styling and minimum width enforcement
-                                min_width = 0.12 if cols > 6 else 0.1
+                                numeric_cols = {idx for idx, col in enumerate(slice_df.columns) if pd.api.types.is_numeric_dtype(df[col])}
+                                row_heights = _row_heights(slice_df)
                                 for (r, c), cell in table.get_celld().items():
+                                    cell.get_text().set_fontfamily("DejaVu Sans Mono")
                                     if r == 0:
                                         cell.set_facecolor("#f0f0f0")
                                         cell.set_fontsize(8 if wide else 9)
-                                    cell.set_width(max(cell.get_width(), min_width))
+                                        cell.get_text().set_ha("center")
+                                    else:
+                                        cell.get_text().set_ha("right" if c in numeric_cols else "left")
+                                    if r < len(row_heights):
+                                        cell.set_height(row_heights[r])
                                 pdf.savefig(fig)
                                 plt.close(fig)
                         else:
