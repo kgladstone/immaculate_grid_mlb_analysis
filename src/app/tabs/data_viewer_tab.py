@@ -212,7 +212,20 @@ def render_prompts_and_texts(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, s
         default_index = 0
         if selected_grid in grid_ids:
             default_index = grid_ids.index(selected_grid)
-        selected_grid = st.selectbox("Grid ID", grid_ids, index=default_index, key="masked_grid_select")
+        def _format_grid_label(grid_id):
+            try:
+                grid_date = ImmaculateGridUtils._fixed_date_from_grid_number(int(grid_id))
+                return f"{grid_id} ({grid_date})"
+            except Exception:
+                return str(grid_id)
+
+        selected_grid = st.selectbox(
+            "Grid ID",
+            grid_ids,
+            index=default_index,
+            key="masked_grid_select",
+            format_func=_format_grid_label,
+        )
         if on_select:
             on_select(selected_grid)
     elif selected_grid is None:
@@ -285,7 +298,20 @@ def render_image_metadata(df: pd.DataFrame, source_path: Path, texts_df: pd.Data
         default_index = 0
         if selected_grid in grid_ids:
             default_index = grid_ids.index(selected_grid)
-        selected_grid = st.selectbox("Grid ID", grid_ids, index=default_index, key="full_grid_select")
+        def _format_grid_label(grid_id):
+            try:
+                grid_date = ImmaculateGridUtils._fixed_date_from_grid_number(int(grid_id))
+                return f"{grid_id} ({grid_date})"
+            except Exception:
+                return str(grid_id)
+
+        selected_grid = st.selectbox(
+            "Grid ID",
+            grid_ids,
+            index=default_index,
+            key="full_grid_select",
+            format_func=_format_grid_label,
+        )
         if on_select:
             on_select(selected_grid)
     elif selected_grid is None:

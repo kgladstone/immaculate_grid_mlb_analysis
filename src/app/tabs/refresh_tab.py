@@ -187,6 +187,11 @@ def render_refresh_tab() -> None:
         st.write(
             "Select a dataset to refresh. Images will also rebuild the derived CSV and fuzzy matching log when metadata is available."
         )
+        buf = io.StringIO()
+        results: Dict[str, int] = {}
+        errors: list[str] = []
+        diags: Dict[str, dict] = {}
+
         choices = ["Prompts", "Texts", "Images"]
         selected = st.radio("Dataset to refresh", options=choices, index=0)
         texts_db_input = None
@@ -203,11 +208,6 @@ def render_refresh_tab() -> None:
             image_start_date = st.date_input("Image start date (optional)", value=None)
             image_end_date = st.date_input("Image end date (optional)", value=None)
             st.markdown("**Images workflow:** Preview counts, then process.")
-
-        buf = io.StringIO()
-        results: Dict[str, int] = {}
-        errors: list[str] = []
-        diags: Dict[str, dict] = {}
 
         if selected == "Images":
             col1, col2 = st.columns(2)

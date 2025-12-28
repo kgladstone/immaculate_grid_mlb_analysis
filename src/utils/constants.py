@@ -105,20 +105,29 @@ TEAM_LIST = {
     "Rangers": "TEX"
 }
 
+TEAM_ALIASES = {
+    "Oakland Athletics": "Athletics",
+}
+
 CATEGORY_LIST = {
     # Overall
-    "WAR" : "Overall",
-    "All Star" : "Overall",
-    "Hall of Fame": "Overall",
-    "MVP" : "Overall",
-    "Rookie of the Year": "Overall",
-    "First Round Draft Pick" : "Overall",
+    "WAR" : "General Award",
+    "All Star" : "General Award",
+    "Hall of Fame": "General Award",
+    "MVP" : "General Award",
+    "Rookie of the Year": "General Award",
+    "First Round Draft Pick" : "General Award",
 
     # Demographic
     "Born" : "Demographic",
     "Major" : "Demographic",
     "United States" : "Demographic",
     "Canada" : "Demographic",
+    "Cuba" : "Demographic",
+    "Venezuela" : "Demographic",
+    "Puerto Rico" : "Demographic",
+    "Mexico" : "Demographic",
+    "Dominican Republic" : "Demographic",
 
     # One Team
     "Only One Team" : "One Team",

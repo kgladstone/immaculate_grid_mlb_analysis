@@ -76,6 +76,9 @@ FUNCTIONS: Dict[str, Callable] = {
     "analyze_low_bit_high_reward": analyze_low_bit_high_reward,
     "analyze_novelties": analyze_novelties,
     "analyze_prediction_future_grid": analyze_prediction_future_grid,
+    "raw_prompts": lambda prompts: prompts,
+    "raw_results": lambda texts_raw: texts_raw,
+    "raw_images_metadata": lambda images_raw: images_raw,
 }
 
 
@@ -86,6 +89,7 @@ def _resolve_arg(token: Any, ctx: Dict[str, Any], person: Any) -> Any:
         "prompts": ctx.get("prompts"),
         "categories": ctx.get("categories"),
         "images": ctx.get("images"),
+        "images_raw": ctx.get("images_raw"),
         "color_map": ctx.get("color_map"),
         "person": person,
         "restricted": GRID_PLAYERS_RESTRICTED,

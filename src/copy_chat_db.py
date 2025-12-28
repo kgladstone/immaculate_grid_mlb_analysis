@@ -70,7 +70,7 @@ def validate_db(path: Path) -> tuple:
     return journal, integrity
 
 
-def copy_image_attachments(src_root: Path, dest_root: Path) -> dict:
+def copy_image_attachments(src_root: Path, dest_root: Path, progress_cb=None) -> dict:
     """
     Copy image attachments into a workspace-friendly cache. Returns counts and bytes.
     """
@@ -117,24 +117,33 @@ def copy_image_attachments(src_root: Path, dest_root: Path) -> dict:
             if pct >= next_threshold:
                 mb_done = copied_bytes / (1024 * 1024)
                 print(f"  {pct*100:5.1f}% ({mb_done:.1f}/{mb_total:.1f} MB)")
+                if progress_cb:
+                    progress_cb(pct, f"Copying attachments ({pct*100:.1f}%)")
                 next_threshold += 0.1
 
     skipped = 0  # skipped counted implicitly by existing files above
     return {"copied": copied, "skipped": skipped, "bytes": total_bytes}
 
 
-def main():
-    src_dir = Path(APPLE_TEXTS_DB_PATH).expanduser().parent
+def main(progress_cb=None, src_dir: Path | None = None):
+    if src_dir is None:
+        src_dir = Path(APPLE_TEXTS_DB_PATH).expanduser().parent
     dest_dir = Path(__file__).resolve().parent.parent / "chat_snapshot"
 
     # Step 1: copy raw files (chat.db + WAL/SHM)
+    if progress_cb:
+        progress_cb(0.05, "Copying chat.db and WAL files")
     dest_path = copy_chat_db_with_wal(src_dir=src_dir, dest_dir=dest_dir)
 
     # Step 2: create a stable backup from the copied chat.db to chat_snapshot/chat_backup.db
+    if progress_cb:
+        progress_cb(0.35, "Creating backup snapshot")
     backup_path = dest_dir / "chat_backup.db"
     sqlite_backup(dest_path, backup_path)
 
     # Step 3: validate both files
+    if progress_cb:
+        progress_cb(0.55, "Validating snapshot integrity")
     summaries = []
     for label, path in [("snapshot chat.db", dest_path), ("backup chat_backup.db", backup_path)]:
         try:
@@ -147,12 +156,17 @@ def main():
     attachments_src = src_dir / "Attachments"
     attachments_dest = dest_dir / "Attachments"
     try:
-        attachment_counts = copy_image_attachments(attachments_src, attachments_dest)
+        if progress_cb:
+            progress_cb(0.7, "Copying attachments")
+        attachment_counts = copy_image_attachments(attachments_src, attachments_dest, progress_cb=progress_cb)
         summaries.append(
             f"Attachments: copied {attachment_counts['copied']}, skipped {attachment_counts['skipped']} (dest: {attachments_dest})"
         )
     except Exception as exc:
         summaries.append(f"Attachments: copy failed: {exc}")
+
+    if progress_cb:
+        progress_cb(1.0, "Cache reset complete")
 
     print(f"Snapshot folder: {dest_dir}")
     print("\n".join(summaries))
