@@ -9,7 +9,7 @@ from collections import Counter
 from sklearn.cluster import DBSCAN
 import difflib
 
-from utils.constants import TEAM_LIST, CATEGORY_LIST
+from utils.constants import TEAM_LIST, CATEGORY_LIST, TEAM_ALIASES
 from utils.utils import ImmaculateGridUtils
 
 
@@ -125,6 +125,7 @@ def make_texts_melted(texts):
 # -------------------------------------------------------------------------------------------------
 
 def get_team_name_without_city(full_name):
+    full_name = normalize_team_aliases(full_name)
     # Iterate through the dictionary keys
     for team_name in TEAM_LIST:
         # Check if the team name appears at the end of the full name
@@ -152,6 +153,7 @@ def category_is_team(category):
     Returns:
         bool: True if the category corresponds to a team, otherwise False.
     """
+    category = normalize_team_aliases(category)
     for team in TEAM_LIST:
         if team in category:
             return True
@@ -168,6 +170,7 @@ def get_team_from_category(category):
     Returns:
         str: The extracted team name, or an empty string if no match is found.
     """
+    category = normalize_team_aliases(category)
     for team in TEAM_LIST:
         if team in category:
             return team
@@ -195,7 +198,16 @@ def get_categories_from_prompt(prompt):
             second = None
     else:
         first, second = prompt
-    return first, second
+    return normalize_team_aliases(first), normalize_team_aliases(second)
+
+
+def normalize_team_aliases(text):
+    if not isinstance(text, str):
+        return text
+    normalized = text
+    for alias, canonical in TEAM_ALIASES.items():
+        normalized = normalized.replace(alias, canonical)
+    return normalized
 
 
 # -------------------------------------------------------------------------------------------------

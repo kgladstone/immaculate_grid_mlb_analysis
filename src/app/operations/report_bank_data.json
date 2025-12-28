@@ -426,5 +426,35 @@
       "images"
     ],
     "category": "Players & Favorites"
+  },
+  {
+    "title": "Raw Prompts",
+    "func": "raw_prompts",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "prompts"
+    ],
+    "category": "Raw Data"
+  },
+  {
+    "title": "Raw Results",
+    "func": "raw_results",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "texts_raw"
+    ],
+    "category": "Raw Data"
+  },
+  {
+    "title": "Raw Images Metadata",
+    "func": "raw_images_metadata",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images_raw"
+    ],
+    "category": "Raw Data"
   }
 ]

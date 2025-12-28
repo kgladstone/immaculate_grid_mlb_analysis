@@ -4,6 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from data.loader import Loader
+from data.data_prep import normalize_team_aliases
 from utils.utils import ImmaculateGridUtils
 
 class PromptsLoader(Loader):
@@ -52,7 +53,8 @@ class PromptsLoader(Loader):
             for col, val in row.items():
                 for char in ["(", "'", ")"]:  # Remove unwanted characters
                     val = val.replace(char, "")
-                new_row[col] = val.replace(", ", " + ")  # Replace separator for readability
+                val = val.replace(", ", " + ")  # Replace separator for readability
+                new_row[col] = normalize_team_aliases(val)
             new_rows.append(new_row)
 
         # Create a new DataFrame with cleaned rows and convert 'game_id' to integer
@@ -81,7 +83,10 @@ class PromptsLoader(Loader):
         soup = BeautifulSoup(response.text, 'html.parser')
         buttons = soup.find_all("button", attrs={'aria-label': True})
         labels = [str(grid_id)]
-        labels.extend(PromptsLoader._parse_raw_prompts_to_tuple(button['aria-label']) for button in buttons)
+        labels.extend(
+            tuple(normalize_team_aliases(part) for part in PromptsLoader._parse_raw_prompts_to_tuple(button['aria-label']))
+            for button in buttons
+        )
         return labels
 
     @staticmethod
