@@ -484,3 +484,22 @@ def render_data_availability(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, i
         + "</tbody></table></div>"
     )
     st.markdown(table_html, unsafe_allow_html=True)
+
+
+def render_scores_matrix(texts_df: pd.DataFrame) -> None:
+    st.caption("Scores by player and grid (blank means missing).")
+    if texts_df.empty:
+        st.info("No text results available.")
+        return
+    if not {"grid_number", "name", "score"}.issubset(texts_df.columns):
+        st.warning("Missing required columns in text results.")
+        return
+
+    matrix_df = (
+        texts_df.pivot_table(index="grid_number", columns="name", values="score", aggfunc="first")
+        .sort_index(ascending=False)
+    )
+    matrix_df = matrix_df.reindex(columns=sorted(GRID_PLAYERS.keys()))
+    styler = matrix_df.style.background_gradient(cmap="RdYlGn_r", axis=None)
+    styler = styler.format(lambda val: "" if pd.isna(val) else f"{int(val)}")
+    st.dataframe(styler, height=min(600, 30 * len(matrix_df) + 40), use_container_width=True)

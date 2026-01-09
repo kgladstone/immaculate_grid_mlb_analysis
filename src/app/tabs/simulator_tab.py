@@ -1,103 +1,19 @@
 from __future__ import annotations
 
 import random
-import shutil
-import zipfile
-from typing import Optional, Tuple, Callable, List
+from typing import Optional, Tuple
 
 import pandas as pd
 import streamlit as st
-import unidecode
 from pathlib import Path
 
 
-def clear_pybaseball_cache(paths: Optional[list[Path]] = None):
-    paths = paths or [Path.home() / ".pybaseball", Path.home() / ".cache" / "pybaseball"]
-    for path in paths:
-        shutil.rmtree(path, ignore_errors=True)
-    _load_team_master.clear()
-    _load_player_master.clear()
-    _load_appearances.clear()
-
-
-def _inspect_cache(paths: List[Path], limit: int = 5) -> List[dict]:
-    """
-    Inspect cached files to help diagnose corrupt downloads. Returns up to `limit` entries.
-    """
-    entries = []
-    for base in paths:
-        if not base.exists():
-            continue
-        for f in base.rglob("*"):
-            if not f.is_file():
-                continue
-            if len(entries) >= limit:
-                return entries
-            try:
-                size = f.stat().st_size
-                header = f.read_bytes()[:120]
-                header_preview = header.decode("utf-8", errors="replace")
-                is_zip = zipfile.is_zipfile(f)
-                entries.append(
-                    {
-                        "path": str(f),
-                        "size_bytes": size,
-                        "is_zipfile": is_zip,
-                        "header_preview": header_preview,
-                    }
-                )
-            except Exception:
-                continue
-    return entries
-
-
-def load_pybaseball_data(
-    clear_before: bool = False,
-    loaders: Optional[Tuple[Callable, Callable, Callable]] = None,
-    clear_fn: Optional[Callable[[list[Path]], None]] = None,
-) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[Exception]]:
-    team_loader, player_loader, app_loader = loaders or (_load_team_master, _load_player_master, _load_appearances)
-    clear_fn = clear_fn or clear_pybaseball_cache
-    cache_paths = [Path.home() / ".pybaseball", Path.home() / ".cache" / "pybaseball"]
-    if clear_before:
-        clear_fn(cache_paths)
-    try:
-        return team_loader(), player_loader(), app_loader(), None
-    except Exception as exc:
-        # Retry once after clearing cache (common for corrupted zip)
-        clear_fn(cache_paths)
-        try:
-            return team_loader(), player_loader(), app_loader(), None
-        except Exception as exc2:
-            return None, None, None, exc2
-
-
 @st.cache_data(show_spinner=True)
-def _load_team_master(max_year: int = 2023) -> pd.DataFrame:
-    import pybaseball as pb
-
-    frames = []
-    for year in range(1876, max_year + 1):
-        frames.append(pb.team_ids(year)[["yearID", "teamID", "franchID"]])
-    df = pd.concat(frames, ignore_index=True).drop_duplicates()
-    return df
-
-
-@st.cache_data(show_spinner=True)
-def _load_player_master() -> pd.DataFrame:
-    import pybaseball as pb
-
-    df = pb.chadwick_register()
-    df["name_last"] = df["name_last"].apply(lambda x: unidecode.unidecode(str(x)))
-    df["name_first"] = df["name_first"].apply(lambda x: unidecode.unidecode(str(x)))
-    return df
-
-
-@st.cache_data(show_spinner=True)
-def _load_appearances() -> pd.DataFrame:
-    import pybaseball as pb
-
-    return pb.lahman.appearances()
+def _load_cached_baseball(cache_dir: Path) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    teams = pd.read_csv(cache_dir / "teams.csv")
+    players = pd.read_csv(cache_dir / "players.csv")
+    appearances = pd.read_csv(cache_dir / "appearances.csv")
+    return teams, players, appearances
 
 
 def _get_player_row(player_master: pd.DataFrame, last: str, first: str) -> pd.DataFrame:
@@ -138,50 +54,35 @@ def _random_team_pair(team_master: pd.DataFrame, max_year: int = 2023) -> Tuple[
 
 
 def render_simulator_tab() -> None:
-    st.write("Check if a player fits a team intersection using Lahman/Chadwick data (pybaseball).")
-
-    cache_dir = Path.home() / ".pybaseball"
-    cache_dir_alt = Path.home() / ".cache" / "pybaseball"
+    st.write("Check if a player fits a team intersection using locally cached Lahman/Chadwick data (built via pybaseball).")
+    local_cache_dir = Path("bin/baseball_cache").resolve()
 
     team_master = player_master = appearances = None
-    clear_before = st.checkbox("Clear pybaseball cache before loading", value=False)
     start_clicked = st.button("Start simulator")
+    load_clicked = start_clicked
 
-    if start_clicked:
-        team_master, player_master, appearances, exc = load_pybaseball_data(clear_before=clear_before)
-        if exc:
-            exc_text = str(exc)
-            st.error(f"Failed to load pybaseball data: {exc_text}")
-            if "Failed to resolve" in exc_text or "NameResolutionError" in exc_text:
-                st.warning(
-                    "Network/DNS looks blocked. Pybaseball must download from github.com; "
-                    "enable network or manually place a fresh Chadwick/Lahman cache under "
-                    f"{cache_dir} (or {cache_dir_alt})."
-                )
-            st.info(f"Try clearing the pybaseball cache and retry. Cache paths: {cache_dir}, {cache_dir_alt}")
-            # Inspect cache to show what kind of file caused trouble
-            cache_inspect = _inspect_cache([cache_dir, cache_dir_alt], limit=5)
-            if cache_inspect:
-                st.warning("Sample of cached files (is_zipfile flag and header preview):")
-                for entry in cache_inspect:
-                    st.text(f"{entry['path']} | size={entry['size_bytes']} | is_zipfile={entry['is_zipfile']}\n{entry['header_preview']}")
-            if st.button("Clear pybaseball cache and retry"):
-                clear_pybaseball_cache([cache_dir, cache_dir_alt])
-                team_master, player_master, appearances, exc = load_pybaseball_data(clear_before=False)
-                if exc:
-                    st.error(f"Retry failed: {exc}")
-                    st.stop()
-            else:
-                st.stop()
-        else:
+    if load_clicked:
+        if not (local_cache_dir / "teams.csv").exists():
+            st.error("Local baseball cache not found.")
+            st.info(
+                "Run the cache builder from a terminal that can access pybaseball:\n"
+                "`python src/build_baseball_cache.py`"
+            )
+            st.stop()
+        try:
+            team_master, player_master, appearances = _load_cached_baseball(local_cache_dir)
             st.success(
-                f"Loaded pybaseball data successfully: teams={len(team_master):,}, "
+                f"Loaded local baseball cache: teams={len(team_master):,}, "
                 f"players={len(player_master):,}, appearances={len(appearances):,}"
             )
-            with st.expander("Preview loaded data", expanded=False):
+            with st.expander("Preview cached data", expanded=False):
                 st.write("Teams (head):", team_master.head())
                 st.write("Players (head):", player_master.head())
                 st.write("Appearances (head):", appearances.head())
+        except Exception as exc:
+            st.error(f"Failed to load local baseball cache: {exc}")
+            st.info("Rebuild the cache with: `python src/build_baseball_cache.py`")
+            st.stop()
 
     # If data not loaded, don't render the rest
     if team_master is None or player_master is None or appearances is None:

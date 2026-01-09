@@ -2,7 +2,15 @@ import os
 import pandas as pd
 
 class Loader:
-    def __init__(self, source, cache_path, fetch_function=None, validate_function=None):
+    def __init__(
+        self,
+        source,
+        cache_path,
+        fetch_function=None,
+        validate_function=None,
+        dedupe_subset=None,
+        dedupe_keep="first",
+    ):
         """
         Initialize the Loader.
 
@@ -17,6 +25,8 @@ class Loader:
         self.fetch_function = fetch_function
         self.validate_function = validate_function
         self.data = None
+        self.dedupe_subset = dedupe_subset
+        self.dedupe_keep = dedupe_keep
 
     def load(self):
         """
@@ -28,7 +38,11 @@ class Loader:
 
         if cached_data is not None and new_data is not None:
             print("Combining cached data with new data...")
-            combined_data = pd.concat([cached_data, new_data]).drop_duplicates()
+            combined_data = pd.concat([cached_data, new_data])
+            if self.dedupe_subset:
+                combined_data = combined_data.drop_duplicates(subset=self.dedupe_subset, keep=self.dedupe_keep)
+            else:
+                combined_data = combined_data.drop_duplicates()
             new_rows_count = len(combined_data) - len(cached_data)
             print(f"{new_rows_count} new rows added to the cache.")
             self.data = combined_data
