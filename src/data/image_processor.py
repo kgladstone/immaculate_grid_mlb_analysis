@@ -43,6 +43,7 @@ class ImageProcessor():
             self.attachments_cache_root = snapshot_cache
         else:
             self.attachments_cache_root = Path(self.db_path).parent / "Attachments"
+        self._attachments_index = None
 
         print("*"*20)
         print("Loading images...")
@@ -78,7 +79,8 @@ class ImageProcessor():
         # Query to find attachments with metadata
         query = f"""
         SELECT 
-            attachment.filename, 
+            attachment.filename,
+            attachment.transfer_name,
             attachment.mime_type, 
             message.date, 
             CASE
@@ -109,19 +111,57 @@ class ImageProcessor():
 
         cleaned_results = []
 
-        for filename, mime_type, message_date, sender_phone in results:
+        for filename, transfer_name, mime_type, message_date, sender_phone in results:
+            path = None
             if filename:
-                path = os.path.expanduser(filename)
-                submitter = MY_NAME if sender_phone == MY_NAME else phone_to_player.get(sender_phone, "Unknown")
-                image_date = ImmaculateGridUtils._convert_timestamp(message_date)
-                cleaned_results.append({
-                    "path": path, 
-                    "mime_type": mime_type,
-                    "submitter": submitter, 
-                    "image_date": image_date
-                    })
+                path = self._resolve_attachment_path(filename)
+            elif transfer_name:
+                path = self._find_attachment_by_name(transfer_name)
+            if not path:
+                continue
+            submitter = MY_NAME if sender_phone == MY_NAME else phone_to_player.get(sender_phone, "Unknown")
+            image_date = ImmaculateGridUtils._convert_timestamp(message_date)
+            cleaned_results.append({
+                "path": path,
+                "mime_type": mime_type,
+                "submitter": submitter,
+                "image_date": image_date
+                })
 
-        return pd.DataFrame(cleaned_results)
+        return pd.DataFrame(
+            cleaned_results,
+            columns=["path", "mime_type", "submitter", "image_date"],
+        )
+
+    def _build_attachments_index(self) -> dict:
+        if self._attachments_index is not None:
+            return self._attachments_index
+        index: dict[str, list[str]] = {}
+        roots = []
+        if self.attachments_cache_root and self.attachments_cache_root.exists():
+            roots.append(self.attachments_cache_root)
+        if self.attachments_source_root and self.attachments_source_root.exists():
+            roots.append(self.attachments_source_root)
+        for root in roots:
+            for path in root.rglob("*"):
+                if not path.is_file():
+                    continue
+                key = path.name.lower()
+                index.setdefault(key, []).append(str(path))
+        self._attachments_index = index
+        return index
+
+    def _find_attachment_by_name(self, transfer_name: str) -> str | None:
+        if not transfer_name:
+            return None
+        index = self._build_attachments_index()
+        matches = index.get(transfer_name.lower())
+        if not matches:
+            return None
+        if len(matches) == 1:
+            return matches[0]
+        matches.sort(key=lambda p: (os.path.getmtime(p), p), reverse=True)
+        return matches[0]
     
 
     def _resolve_attachment_path(self, raw_path: str) -> str:
@@ -360,6 +400,9 @@ class ImageProcessor():
         """
         Safely read an image using OpenCV, handling HEIC format if needed.
         """
+        if not image_path:
+            return None
+        image_path = str(image_path)
         mime_type = self.get_mime_type(image_path)
         if mime_type == 'image/heic':
             return self.read_heic_with_cv2(image_path)

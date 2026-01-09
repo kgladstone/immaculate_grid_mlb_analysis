@@ -128,6 +128,8 @@ def refresh_selected_data(
 
             # Preview counts by date before processing
             preview_df = image_processor._fetch_images()
+            if "image_date" not in preview_df.columns:
+                preview_df = pd.DataFrame(columns=["path", "submitter", "image_date"])
             preview_df["image_date"] = pd.to_datetime(preview_df["image_date"]).dt.date
             if image_date_range:
                 start_date, end_date = image_date_range
