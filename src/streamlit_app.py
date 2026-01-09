@@ -4,7 +4,12 @@ import streamlit as st
 
 from app.operations.data_loaders import load_image_metadata_df, load_prompts_df, load_texts_df, resolve_path
 from app.tabs.refresh_tab import render_refresh_tab
-from app.tabs.data_viewer_tab import render_image_metadata, render_prompts_and_texts, render_data_availability
+from app.tabs.data_viewer_tab import (
+    render_image_metadata,
+    render_prompts_and_texts,
+    render_data_availability,
+    render_scores_matrix,
+)
 from app.tabs.analytics_tab import render_analytics
 from app.tabs.simulator_tab import render_simulator_tab
 from utils.constants import IMAGES_METADATA_PATH
@@ -21,7 +26,7 @@ def main():
     images_df = load_image_metadata_df()
 
     data_tab, refresh_tab, analytics_tab, simulator_tab = st.tabs(
-        ["🗂 Data Viewer", "🔄 Refresh Data", "📊 Analytics", "🎮 Simulator"]
+        ["🗂 Data Viewer", "➕ Add / Update Data", "📊 Analytics", "🎮 Simulator"]
     )
 
     with data_tab:
@@ -47,8 +52,8 @@ def main():
             )
             st.session_state[shared_grid_key] = selected_grid
 
-        combined_tab, images_tab, availability_tab = st.tabs(
-            ["Masked Results", "Full Results", "Data Availability"]
+        combined_tab, images_tab, availability_tab, scores_tab = st.tabs(
+            ["Masked Results", "Full Results", "Data Availability", "Scores Matrix"]
         )
 
         with combined_tab:
@@ -75,6 +80,10 @@ def main():
         with availability_tab:
             st.write("Coverage of texts and image metadata by grid and player.")
             render_data_availability(prompts_df, texts_df, images_df)
+
+        with scores_tab:
+            st.write("Text scores by player and grid.")
+            render_scores_matrix(texts_df)
 
     with refresh_tab:
         render_refresh_tab()

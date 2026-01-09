@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 import shutil
 import traceback
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, Tuple
 
@@ -179,8 +181,10 @@ def refresh_selected_data(
 
 
 def render_refresh_tab() -> None:
-    st.subheader("Refresh Data")
-    main_tab, upload_tab = st.tabs(["Refresh Data", "Upload & Register Image"])
+    st.subheader("Add / Update Data")
+    main_tab, upload_tab, manual_tab = st.tabs(
+        ["Refresh Data", "Upload & Register Image", "Manual Data Entry"]
+    )
 
     # --- Main refresh tab ---
     with main_tab:
@@ -442,3 +446,119 @@ def render_refresh_tab() -> None:
                         st.json(entry_out)
                     except Exception as exc:
                         st.warning(f"Could not upsert metadata: {exc}")
+
+    # --- Manual entry tab ---
+    with manual_tab:
+        st.write("Add a manual result entry directly to results.csv.")
+        results_path = resolve_path(MESSAGES_CSV_PATH)
+        results_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if "manual_matrix" not in st.session_state:
+            st.session_state["manual_matrix"] = [[False, False, False] for _ in range(3)]
+        if "manual_grid_number" not in st.session_state:
+            st.session_state["manual_grid_number"] = ImmaculateGridUtils.get_today_grid_id()
+        if "manual_date" not in st.session_state:
+            auto_date = ImmaculateGridUtils._fixed_date_from_grid_number(st.session_state["manual_grid_number"])
+            st.session_state["manual_date"] = datetime.strptime(auto_date, "%Y-%m-%d").date()
+        if "manual_date_auto" not in st.session_state:
+            st.session_state["manual_date_auto"] = True
+        with st.form("manual_entry_form", clear_on_submit=False):
+            st.selectbox("Player (name)", options=sorted(GRID_PLAYERS.keys()), key="manual_player")
+            st.number_input("Grid number", min_value=0, step=1, key="manual_grid_number")
+            st.checkbox("Auto-update date from grid number", key="manual_date_auto")
+            st.date_input("Date", key="manual_date", format="MM/DD/YYYY")
+
+            st.markdown("**Matrix**")
+            matrix_df = pd.DataFrame(
+                st.session_state["manual_matrix"],
+                columns=["Left", "Center", "Right"],
+                index=["Top", "Middle", "Bottom"],
+            )
+            edited_df = st.data_editor(
+                matrix_df,
+                num_rows="fixed",
+                use_container_width=False,
+                key="manual_matrix_editor",
+            )
+            st.number_input("Score", min_value=0, step=1, key="manual_score")
+            col_submit, col_reset = st.columns(2)
+            add_clicked = col_submit.form_submit_button("Add entry to results.csv")
+            reset_clicked = col_reset.form_submit_button("Reset matrix")
+
+        if reset_clicked:
+            st.session_state["manual_matrix"] = [[False, False, False] for _ in range(3)]
+            st.rerun()
+
+        matrix = (
+            edited_df.astype(bool).values.tolist()
+            if isinstance(edited_df, pd.DataFrame)
+            else st.session_state["manual_matrix"]
+        )
+        st.session_state["manual_matrix"] = matrix
+        correct = sum(sum(1 for cell in row if cell) for row in matrix)
+        st.write(f"Correct cells: {correct}")
+
+        def _existing_entry_mask(results_df: pd.DataFrame, name: str, grid_number: int):
+            if results_df.empty or not {"name", "grid_number"}.issubset(results_df.columns):
+                return None
+            return (results_df["name"] == name) & (results_df["grid_number"] == grid_number)
+
+        def _write_manual_entry(entry: dict, overwrite: bool) -> None:
+            if results_path.exists():
+                results_df = pd.read_csv(results_path)
+            else:
+                results_df = pd.DataFrame()
+            if overwrite:
+                mask = _existing_entry_mask(results_df, entry["name"], entry["grid_number"])
+                if mask is not None and mask.any():
+                    results_df = results_df[~mask]
+            entry_df = pd.DataFrame([entry])
+            results_df = pd.concat([results_df, entry_df], ignore_index=True)
+            results_df.to_csv(results_path, index=False)
+            st.success(f"Added manual entry for {entry['name']} (grid {entry['grid_number']}).")
+            st.cache_data.clear()
+            st.rerun()
+
+        pending_entry = st.session_state.get("manual_pending_entry")
+        if st.session_state.get("manual_overwrite_pending") and pending_entry:
+            st.warning("An entry for this player and grid already exists. Confirm to overwrite it.")
+            col_confirm, col_cancel = st.columns(2)
+            with col_confirm:
+                if st.button("Confirm overwrite", key="manual_confirm_overwrite"):
+                    _write_manual_entry(pending_entry, overwrite=True)
+                    st.session_state.pop("manual_overwrite_pending", None)
+                    st.session_state.pop("manual_pending_entry", None)
+            with col_cancel:
+                if st.button("Cancel", key="manual_cancel_overwrite"):
+                    st.session_state.pop("manual_overwrite_pending", None)
+                    st.session_state.pop("manual_pending_entry", None)
+
+        if add_clicked:
+            name = st.session_state.get("manual_player")
+            grid_number = int(st.session_state.get("manual_grid_number", 0))
+            score = int(st.session_state.get("manual_score", 0))
+            if st.session_state.get("manual_date_auto"):
+                date_str = ImmaculateGridUtils._fixed_date_from_grid_number(grid_number)
+            else:
+                date_val = st.session_state.get("manual_date")
+                date_str = date_val.strftime("%Y-%m-%d") if date_val else ""
+
+            entry = {
+                "grid_number": grid_number,
+                "correct": correct,
+                "score": score,
+                "date": date_str,
+                "matrix": json.dumps(matrix),
+                "name": name,
+            }
+            if results_path.exists():
+                results_df = pd.read_csv(results_path)
+            else:
+                results_df = pd.DataFrame()
+            mask = _existing_entry_mask(results_df, name, grid_number)
+            if mask is not None and mask.any():
+                st.session_state["manual_pending_entry"] = entry
+                st.session_state["manual_overwrite_pending"] = True
+                st.rerun()
+            else:
+                _write_manual_entry(entry, overwrite=False)

@@ -16,7 +16,9 @@ class MessagesLoader(Loader):
             source=db_path,
             cache_path=cache_path,
             fetch_function=self._fetch_messages,
-            validate_function=self._validate_messages
+            validate_function=self._validate_messages,
+            dedupe_subset=["name", "grid_number"],
+            dedupe_keep="first",
         )
 
     def _fetch_messages(self, db_path):
