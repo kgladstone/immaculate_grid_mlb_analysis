@@ -21,6 +21,30 @@ To generate the complete analysis, follow these steps in order:
 ## Skill Practice
 - **Simulator:** An interactive game that lets users test their Immaculate Grid skills.
 
+## Player History Database (Terminal Script)
+- **Script:** `src/scripts/build_player_history_database.py`
+- **Purpose:** Downloads and compiles a historical MLB player database with player ID, names, teams, years played, career mid-year, and (when available) positions and awards.
+- **Command:**
+  - `python src/scripts/build_player_history_database.py`
+- **Output file:**
+  - `csv/mlb_player_history.csv`
+
+## Analytics: Player Data Subtab
+- In Streamlit, open `📊 Analytics` and then the `Player Data` subtab.
+- Includes:
+  - Player search view: usage by submitter for any searched player.
+  - Mosaic-style chart: per-user composition of top players with percentages.
+  - Career mid-year histogram by submitter (requires `csv/mlb_player_history.csv`).
+
+## Code Organization
+- `src/streamlit_app.py`: App entrypoint.
+- `src/app/tabs/`: Streamlit UI tabs.
+- `src/app/operations/`: Report registry and shared UI data loaders.
+- `src/data/`: Ingestion and parsing pipelines (messages, prompts, images).
+- `src/analytics/`: Heavier cross-user analytics/report computations.
+- `src/utils/`: Constants and reusable grid parsing utilities.
+- `src/scripts/`: Runnable terminal scripts (cache builders, DB snapshot helpers).
+
 This sequence ensures a smooth workflow, from data refresh to analysis and reporting. Make sure to run the scripts in the specified order for accurate results.
 
 ## Troubleshooting

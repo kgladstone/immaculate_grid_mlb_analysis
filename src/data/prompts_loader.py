@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 
 from data.loader import Loader
 from data.data_prep import normalize_team_aliases
-from utils.utils import ImmaculateGridUtils
+from utils.grid_utils import ImmaculateGridUtils
 
 class PromptsLoader(Loader):
     def __init__(self, grid_storage_path):

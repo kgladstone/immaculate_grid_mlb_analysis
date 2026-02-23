@@ -16,6 +16,8 @@ from utils.constants import GRID_PLAYERS
 from app.operations.report_bank import load_report_bank, run_report
 from data.data_prep import preprocess_data_into_texts_structure, make_color_map, build_category_structure
 from data.mlb_reference import correct_typos_with_fuzzy_matching
+from app.tabs.player_data_tab import render_player_data_analytics
+from utils.constants import PLAYER_HISTORY_CSV_PATH
 
 ANALYTICS_CACHE_DIR = Path(".cache")
 EXCEL_REPORT_TITLES = {
@@ -33,11 +35,25 @@ def _build_analytics_context(
     images_df: pd.DataFrame,
     fix_typos: bool,
     progress_cb=None,
+    phase_cb=None,
 ):
+    total_steps = 5 if fix_typos else 4
+
+    if phase_cb:
+        phase_cb(1, total_steps, "Loading submitter color map")
     color_map = make_color_map(GRID_PLAYERS)
+
+    if phase_cb:
+        phase_cb(2, total_steps, "Preparing text results structure")
     texts_struct = preprocess_data_into_texts_structure(texts_df)
+
+    if phase_cb:
+        phase_cb(3, total_steps, "Building category structure")
     categories = build_category_structure(texts_struct, prompts_df)
+
     if fix_typos:
+        if phase_cb:
+            phase_cb(4, total_steps, "Correcting image response names")
         with contextlib.redirect_stdout(io.StringIO()):
             image_metadata, _ = correct_typos_with_fuzzy_matching(
                 images_df,
@@ -47,6 +63,10 @@ def _build_analytics_context(
             )
     else:
         image_metadata = images_df
+
+    if phase_cb:
+        phase_cb(total_steps, total_steps, "Finalizing analytics context")
+
     return {
         "color_map": color_map,
         "texts": texts_struct,
@@ -120,15 +140,40 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
 
     build_clicked = st.button("Build/refresh analytics cache")
     if build_clicked:
-        progress_bar = st.progress(0.0) if fix_typos else None
+        progress_bar = st.progress(0.0)
+        status_text = st.empty()
+        total_steps = 5 if fix_typos else 4
+
+        def _phase_cb(step, total, label, done=None, done_total=None):
+            suffix = ""
+            if done is not None and done_total:
+                suffix = f" ({done}/{done_total} assets built)"
+            status_text.write(f"Building analytics cache... Step {step}/{total}: {label}{suffix}")
+
+            # Smooth progress across phases; if in-phase counts exist, use them.
+            phase_start = (step - 1) / max(total, 1)
+            phase_width = 1.0 / max(total, 1)
+            if done is not None and done_total:
+                in_phase = min(1.0, max(0.0, done / done_total))
+            else:
+                in_phase = 1.0 if step == total else 0.0
+            progress_bar.progress(min(1.0, phase_start + in_phase * phase_width))
 
         def _cb(done, total):
-            if progress_bar and total > 0:
-                progress_bar.progress(min(1.0, done / total))
+            if total > 0:
+                _phase_cb(4, total_steps, "Correcting image response names", done, total)
 
         with st.spinner("Building analytics cache..."):
-            ctx = _build_analytics_context(prompts_df, texts_df, images_df, fix_typos, progress_cb=_cb)
+            ctx = _build_analytics_context(
+                prompts_df,
+                texts_df,
+                images_df,
+                fix_typos,
+                progress_cb=_cb,
+                phase_cb=_phase_cb,
+            )
             _save_analytics_cache(ctx, cache_path)
+        _phase_cb(total_steps, total_steps, "Complete")
         st.success("Cache built.")
         cache_ready = True
         cached_ctx = ctx
@@ -139,7 +184,9 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
     ctx = cached_ctx if cached_ctx is not None else _build_analytics_context(prompts_df, texts_df, images_df, fix_typos)
 
     all_reports = load_report_bank()
-    report_tab, export_tab = st.tabs(["Report Preview", "Report Export Selection"])
+    report_tab, dynamic_analysis_tab, export_tab = st.tabs(
+        ["Report Preview", "Dynamic Analysis", "Report Export Selection"]
+    )
 
     with report_tab:
         categories = sorted({r.get("category", "Misc") for r in all_reports})
@@ -214,6 +261,14 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
             if log_text:
                 with st.expander("Logs", expanded=False):
                     st.text(log_text)
+
+    with dynamic_analysis_tab:
+        st.markdown("### Dynamic Analysis")
+        st.caption(
+            "For historical player fields (teams/years/positions/awards), build the CSV with: "
+            "`python src/scripts/build_player_history_database.py`"
+        )
+        render_player_data_analytics(ctx["images"], Path(PLAYER_HISTORY_CSV_PATH))
 
     with export_tab:
         st.markdown("### Report export selection")

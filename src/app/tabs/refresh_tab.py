@@ -18,7 +18,7 @@ from data.image_processor import ImageProcessor
 from data.messages_loader import MessagesLoader
 from data.mlb_reference import correct_typos_with_fuzzy_matching
 from data.prompts_loader import PromptsLoader
-from utils.utils import ImmaculateGridUtils
+from utils.grid_utils import ImmaculateGridUtils
 from utils.constants import (
     APPLE_TEXTS_DB_PATH,
     IMAGES_METADATA_CSV_PATH,

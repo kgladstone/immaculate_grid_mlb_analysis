@@ -24,7 +24,7 @@ from utils.constants import (
     IMAGES_PARSER_PATH,
     MESSAGES_CSV_PATH,
 )
-from utils.utils import ImmaculateGridUtils
+from utils.grid_utils import ImmaculateGridUtils
 from data.messages_loader import MessagesLoader
 from data.data_prep import (
     matrix_string_to_flat_list, 
@@ -197,7 +197,7 @@ class ImageProcessor():
         raise FileNotFoundError(
             f"Attachment not accessible: {expanded}. "
             f"Tried cache at {cache_root}. "
-            "Run copy_chat_db.py to sync Attachments or grant Full Disk Access."
+            "Run src/scripts/copy_chat_db.py to sync Attachments or grant Full Disk Access."
         )
 
     def _validate_images(self, data):

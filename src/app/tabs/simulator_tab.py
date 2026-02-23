@@ -16,6 +16,41 @@ def _load_cached_baseball(cache_dir: Path) -> Tuple[pd.DataFrame, pd.DataFrame, 
     return teams, players, appearances
 
 
+def load_pybaseball_data(clear_before=False, loaders=None, clear_fn=None):
+    """
+    Compatibility loader retained for tests/tooling that expect retry-on-bad-zip behavior.
+    """
+    if loaders is None:
+        raise ValueError("loaders must be provided")
+
+    team_loader, player_loader, app_loader = loaders
+    clear_fn = clear_fn or (lambda paths: None)
+    cache_paths = [
+        "~/.pybaseball/cache",
+        "~/Library/Caches/pybaseball",
+    ]
+
+    if clear_before:
+        clear_fn(cache_paths)
+
+    try:
+        team_master = team_loader()
+        player_master = player_loader()
+        appearances = app_loader()
+        return team_master, player_master, appearances, None
+    except Exception as exc:
+        if "zip file" not in str(exc).lower():
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), exc
+        clear_fn(cache_paths)
+        try:
+            team_master = team_loader()
+            player_master = player_loader()
+            appearances = app_loader()
+            return team_master, player_master, appearances, None
+        except Exception as retry_exc:
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), retry_exc
+
+
 def _get_player_row(player_master: pd.DataFrame, last: str, first: str) -> pd.DataFrame:
     return player_master.loc[
         (player_master["name_last"].str.lower() == last.lower().strip())
@@ -66,7 +101,7 @@ def render_simulator_tab() -> None:
             st.error("Local baseball cache not found.")
             st.info(
                 "Run the cache builder from a terminal that can access pybaseball:\n"
-                "`python src/build_baseball_cache.py`"
+                "`python src/scripts/build_baseball_cache.py`"
             )
             st.stop()
         try:
@@ -81,7 +116,7 @@ def render_simulator_tab() -> None:
                 st.write("Appearances (head):", appearances.head())
         except Exception as exc:
             st.error(f"Failed to load local baseball cache: {exc}")
-            st.info("Rebuild the cache with: `python src/build_baseball_cache.py`")
+            st.info("Rebuild the cache with: `python src/scripts/build_baseball_cache.py`")
             st.stop()
 
     # If data not loaded, don't render the rest
@@ -128,4 +163,4 @@ def render_simulator_tab() -> None:
                     st.error(f"❌ No. {first} {last} did not play for both {team1} and {team2}.")
 
 
-__all__ = ["render_simulator_tab"]
+__all__ = ["render_simulator_tab", "load_pybaseball_data"]
