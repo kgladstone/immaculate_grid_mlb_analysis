@@ -16,7 +16,7 @@ from utils.constants import (
     MESSAGES_CSV_PATH,
     PROMPTS_CSV_PATH,
 )
-from utils.utils import ImmaculateGridUtils
+from utils.grid_utils import ImmaculateGridUtils
 from app.operations.data_loaders import resolve_path
 
 
@@ -131,7 +131,11 @@ def render_responses_grid(responses) -> None:
         "<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:6px;'>"
     ]
     for label, value in cells:
-        safe_value = str(value).replace("\n", "<br>")
+        value_str = str(value).strip()
+        if value_str in {"", "<Empty>"}:
+            safe_value = "<span style='color:#c0392b;font-weight:700;font-size:18px;'>X</span>"
+        else:
+            safe_value = value_str.replace("\n", "<br>")
         html_parts.append(
             "<div style='border:1px solid #ddd;border-radius:6px;padding:8px;"
             "background:#fff;min-height:70px;display:flex;flex-direction:column;justify-content:center;'>"

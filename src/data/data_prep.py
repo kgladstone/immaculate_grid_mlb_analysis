@@ -10,7 +10,7 @@ from sklearn.cluster import DBSCAN
 import difflib
 
 from utils.constants import TEAM_LIST, CATEGORY_LIST, TEAM_ALIASES
-from utils.utils import ImmaculateGridUtils
+from utils.grid_utils import ImmaculateGridUtils
 
 
 def compare_flat_matrix_with_flat_image_responses(matrix_flat, responses_flat):

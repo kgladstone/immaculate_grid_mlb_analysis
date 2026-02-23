@@ -4,7 +4,7 @@ import os
 import datetime
 
 from data.loader import Loader
-from utils.utils import ImmaculateGridUtils
+from utils.grid_utils import ImmaculateGridUtils
 from utils.constants import GRID_PLAYERS
 
 class MessagesLoader(Loader):

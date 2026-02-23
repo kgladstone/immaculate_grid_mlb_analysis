@@ -12,3 +12,6 @@ fuzzywuzzy
 scikit-learn
 streamlit
 openpyxl
+pybaseball
+Unidecode
+plotly

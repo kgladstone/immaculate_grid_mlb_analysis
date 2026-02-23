@@ -3,7 +3,12 @@ from __future__ import annotations
 import shutil
 import sqlite3
 import os
+import sys
 from pathlib import Path
+
+SRC_DIR = Path(__file__).resolve().parents[1]
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
 from utils.constants import APPLE_TEXTS_DB_PATH
 
@@ -25,7 +30,7 @@ def copy_chat_db(src: Path, dest: Path) -> Path:
 
 def copy_chat_db_with_wal(
     src_dir: Path | None = None,
-    dest_dir: Path = Path(__file__).resolve().parent.parent / "chat_snapshot",
+    dest_dir: Path = Path(__file__).resolve().parents[2] / "chat_snapshot",
 ) -> Path:
     """
     Copy chat.db, chat.db-wal, and chat.db-shm to a snapshot folder.
@@ -128,7 +133,7 @@ def copy_image_attachments(src_root: Path, dest_root: Path, progress_cb=None) ->
 def main(progress_cb=None, src_dir: Path | None = None):
     if src_dir is None:
         src_dir = Path(APPLE_TEXTS_DB_PATH).expanduser().parent
-    dest_dir = Path(__file__).resolve().parent.parent / "chat_snapshot"
+    dest_dir = Path(__file__).resolve().parents[2] / "chat_snapshot"
 
     # Step 1: copy raw files (chat.db + WAL/SHM)
     if progress_cb:

@@ -53,6 +53,7 @@ APPLE_TEXTS_DB_PATH = str(USER_HOME / "Library/Messages/chat.db")  # Path to the
 APPLE_IMAGES_PATH = str(USER_HOME / "Library/Messages/Attachments/")
 MESSAGES_CSV_PATH = csv_dir / "results.csv"
 PROMPTS_CSV_PATH = csv_dir / "prompts.csv"
+PLAYER_HISTORY_CSV_PATH = csv_dir / "mlb_player_history.csv"
 IMAGES_PATH = root_dir / "images/"  # Path to the images folder
 IMAGES_METADATA_PATH = bin_dir / "images_metadata.json"  # Path to the images metadata file
 IMAGES_METADATA_CSV_PATH = bin_dir / "images_metadata.csv"  # Path to the images metadata CSV file
