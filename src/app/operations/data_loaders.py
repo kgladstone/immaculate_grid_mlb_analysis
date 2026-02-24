@@ -18,24 +18,36 @@ def resolve_path(path_like) -> Path:
 
 
 @st.cache_data(show_spinner=False)
+def _load_prompts_df_cached(path_str: str, mtime_ns: int) -> pd.DataFrame:
+    path = Path(path_str)
+    if not path.exists():
+        return pd.DataFrame()
+    return pd.read_csv(path)
+
+
 def load_prompts_df() -> pd.DataFrame:
     path = resolve_path(PROMPTS_CSV_PATH)
+    mtime_ns = path.stat().st_mtime_ns if path.exists() else -1
+    return _load_prompts_df_cached(str(path), mtime_ns)
+
+
+@st.cache_data(show_spinner=False)
+def _load_texts_df_cached(path_str: str, mtime_ns: int) -> pd.DataFrame:
+    path = Path(path_str)
     if not path.exists():
         return pd.DataFrame()
     return pd.read_csv(path)
 
 
-@st.cache_data(show_spinner=False)
 def load_texts_df() -> pd.DataFrame:
     path = resolve_path(MESSAGES_CSV_PATH)
-    if not path.exists():
-        return pd.DataFrame()
-    return pd.read_csv(path)
+    mtime_ns = path.stat().st_mtime_ns if path.exists() else -1
+    return _load_texts_df_cached(str(path), mtime_ns)
 
 
 @st.cache_data(show_spinner=False)
-def load_image_metadata_df() -> pd.DataFrame:
-    path = resolve_path(IMAGES_METADATA_PATH)
+def _load_image_metadata_df_cached(path_str: str, mtime_ns: int) -> pd.DataFrame:
+    path = Path(path_str)
     if not path.exists():
         return pd.DataFrame()
     try:
@@ -49,3 +61,9 @@ def load_image_metadata_df() -> pd.DataFrame:
     if isinstance(data, dict):
         return pd.DataFrame([data])
     return pd.DataFrame()
+
+
+def load_image_metadata_df() -> pd.DataFrame:
+    path = resolve_path(IMAGES_METADATA_PATH)
+    mtime_ns = path.stat().st_mtime_ns if path.exists() else -1
+    return _load_image_metadata_df_cached(str(path), mtime_ns)

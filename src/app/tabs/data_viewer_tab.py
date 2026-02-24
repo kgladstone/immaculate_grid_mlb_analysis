@@ -20,6 +20,20 @@ from utils.grid_utils import ImmaculateGridUtils
 from app.operations.data_loaders import resolve_path
 
 
+def _norm_grid_id(value) -> str:
+    if pd.isna(value):
+        return ""
+    text = str(value).strip()
+    if text.endswith(".0"):
+        text = text[:-2]
+    return text
+
+
+def _grid_sort_key(value: str):
+    text = _norm_grid_id(value)
+    return (0, int(text)) if text.isdigit() else (1, text)
+
+
 def format_prompt_cell(value: str) -> str:
     try:
         parsed = ast.literal_eval(value)
@@ -204,9 +218,9 @@ def render_prompts_and_texts(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, s
         f"Prompt source: `{resolve_path(PROMPTS_CSV_PATH)}` | Texts source: `{resolve_path(MESSAGES_CSV_PATH)}`"
     )
 
-    grids_prompts = set(prompts_df["grid_id"].unique()) if not prompts_df.empty else set()
-    grids_texts = set(texts_df["grid_number"].unique()) if not texts_df.empty else set()
-    grid_ids = sorted(grids_prompts | grids_texts, reverse=True)
+    grids_prompts = set(prompts_df["grid_id"].map(_norm_grid_id).unique()) if not prompts_df.empty else set()
+    grids_texts = set(texts_df["grid_number"].map(_norm_grid_id).unique()) if not texts_df.empty else set()
+    grid_ids = sorted(grids_prompts | grids_texts, key=_grid_sort_key, reverse=True)
 
     if not grid_ids:
         st.info("No prompts or texts available.")
@@ -240,7 +254,7 @@ def render_prompts_and_texts(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, s
     with col_prompt:
         st.subheader("Prompt")
         if not prompts_df.empty and selected_grid in grids_prompts:
-            row = prompts_df[prompts_df["grid_id"] == selected_grid].iloc[0]
+            row = prompts_df[prompts_df["grid_id"].map(_norm_grid_id) == _norm_grid_id(selected_grid)].iloc[0]
             grid = prompts_row_to_grid(row)
             render_prompts_grid(grid)
         else:
@@ -248,7 +262,11 @@ def render_prompts_and_texts(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, s
 
     with col_texts:
         st.subheader("Player Results")
-        entries = texts_df[texts_df["grid_number"] == selected_grid] if not texts_df.empty else pd.DataFrame()
+        entries = (
+            texts_df[texts_df["grid_number"].map(_norm_grid_id) == _norm_grid_id(selected_grid)]
+            if not texts_df.empty
+            else pd.DataFrame()
+        )
         if entries.empty:
             st.info("No results for this grid.")
             return
@@ -297,7 +315,7 @@ def render_image_metadata(df: pd.DataFrame, source_path: Path, texts_df: pd.Data
         texts_df = pd.DataFrame()
 
     images_dir = resolve_path(IMAGES_PATH)
-    grid_ids = sorted(df["grid_number"].dropna().unique(), reverse=True)
+    grid_ids = sorted(df["grid_number"].dropna().map(_norm_grid_id).unique(), key=_grid_sort_key, reverse=True)
     if show_selector:
         default_index = 0
         if selected_grid in grid_ids:
@@ -320,14 +338,36 @@ def render_image_metadata(df: pd.DataFrame, source_path: Path, texts_df: pd.Data
             on_select(selected_grid)
     elif selected_grid is None:
         selected_grid = grid_ids[0]
-    filtered = df[df["grid_number"] == selected_grid]
+    filtered = df[df["grid_number"].map(_norm_grid_id) == _norm_grid_id(selected_grid)]
 
     if filtered.empty:
+        available = ", ".join(grid_ids[:10])
+        st.caption(f"Available image grids (latest): {available}")
         st.info("No images for this grid.")
         return
 
+    submitter_series_all = df.get("submitter", pd.Series(dtype=str)).astype(str).str.strip().str.lower()
+    undefined_total = int((submitter_series_all == "undefined").sum())
+    submitter_series_grid = filtered.get("submitter", pd.Series(dtype=str)).astype(str).str.strip().str.lower()
+    undefined_grid = int((submitter_series_grid == "undefined").sum())
+    if undefined_total > 0:
+        st.warning(
+            f"Undefined uploads: {undefined_grid} in this grid, {undefined_total} total. "
+            "Use Add / Update Data -> Assign Users to resolve them."
+        )
+        show_only_undefined = st.checkbox(
+            "Show only Undefined uploads for this grid",
+            value=False,
+            key=f"full_show_only_undefined_{selected_grid}",
+        )
+        if show_only_undefined:
+            filtered = filtered[filtered["submitter"].astype(str).str.strip().str.lower() == "undefined"]
+            if filtered.empty:
+                st.info("No Undefined uploads for this grid.")
+                return
+
     grid_texts = (
-        texts_df[texts_df["grid_number"] == selected_grid]
+        texts_df[texts_df["grid_number"].map(_norm_grid_id) == _norm_grid_id(selected_grid)]
         if not texts_df.empty and "grid_number" in texts_df.columns
         else pd.DataFrame()
     )
@@ -427,7 +467,7 @@ def render_data_availability(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, i
         st.info("No data available to summarize.")
         return
 
-    grid_ids = sorted(grid_ids, reverse=True)
+    grid_ids = sorted(grid_ids, key=_grid_sort_key, reverse=True)
 
     players = list(GRID_PLAYERS.keys())
 
@@ -444,6 +484,8 @@ def render_data_availability(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, i
             ].empty
         if has_text and has_image:
             return "#2ecc71"
+        if has_image:
+            return "#f39c12"
         if has_text:
             return "#f1c40f"
         return "#ffffff"
@@ -467,6 +509,7 @@ def render_data_availability(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, i
     legend_html = (
         "<div style='margin-bottom:8px; font-size:13px;'>"
         "<span style='display:inline-block;width:14px;height:14px;border:1px solid #ccc;background:#2ecc71;margin-right:6px;vertical-align:middle;'></span>Text + Image"
+        "<span style='display:inline-block;width:14px;height:14px;border:1px solid #ccc;background:#f39c12;margin-left:12px;margin-right:6px;vertical-align:middle;'></span>Image only"
         "<span style='display:inline-block;width:14px;height:14px;border:1px solid #ccc;background:#f1c40f;margin-left:12px;margin-right:6px;vertical-align:middle;'></span>Text only"
         "<span style='display:inline-block;width:14px;height:14px;border:1px solid #ccc;background:#ffffff;margin-left:12px;margin-right:6px;vertical-align:middle;'></span>None"
         "</div>"

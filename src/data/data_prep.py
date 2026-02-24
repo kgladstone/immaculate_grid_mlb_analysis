@@ -536,10 +536,27 @@ def create_disaggregated_results_df(
 
     imd = pd.concat([imd, responses_expanded], axis=1)
 
+    # Only melt actual grid response positions (avoid melting metadata columns).
+    position_cols = [
+        "top_left",
+        "top_center",
+        "top_right",
+        "middle_left",
+        "middle_center",
+        "middle_right",
+        "bottom_left",
+        "bottom_center",
+        "bottom_right",
+    ]
+    for col in position_cols:
+        if col not in imd.columns:
+            imd[col] = ""
+
     imd_long = imd.melt(
         id_vars=["grid_number", "date", "submitter", "image_filename"],
+        value_vars=position_cols,
         var_name="position",
-        value_name="response"
+        value_name="response",
     )
 
     # ------------------------------------------------------------------ #
@@ -549,7 +566,21 @@ def create_disaggregated_results_df(
         prompts
         .melt(id_vars=["grid_number"], var_name="position", value_name="prompt")
     )
-    prm_long["prompt"] = prm_long["prompt"].apply(ast.literal_eval)
+    def _parse_prompt_value(value):
+        # Prompts can already be tuple/list objects or stringified tuples.
+        if isinstance(value, (tuple, list)):
+            return tuple(value) if isinstance(value, list) else value
+        if isinstance(value, str):
+            try:
+                parsed = ast.literal_eval(value)
+                if isinstance(parsed, (tuple, list)):
+                    return tuple(parsed) if isinstance(parsed, list) else parsed
+                return value
+            except Exception:
+                return value
+        return value
+
+    prm_long["prompt"] = prm_long["prompt"].apply(_parse_prompt_value)
 
     # ------------------------------------------------------------------ #
     # 4. merge image data with prompts
@@ -572,8 +603,20 @@ def create_disaggregated_results_df(
         "prompt",
         "response",
     ]
-    return (
-        combined[final_cols]
-        .sort_values(["grid_number", "submitter", "position"])
-        .reset_index(drop=True)
-    )
+    out = combined[final_cols].copy()
+    out["grid_number"] = pd.to_numeric(out["grid_number"], errors="coerce")
+    position_order = [
+        "top_left",
+        "top_center",
+        "top_right",
+        "middle_left",
+        "middle_center",
+        "middle_right",
+        "bottom_left",
+        "bottom_center",
+        "bottom_right",
+    ]
+    out["position"] = pd.Categorical(out["position"], categories=position_order, ordered=True)
+    out = out.sort_values(["grid_number", "submitter", "position"], ascending=[True, True, True]).reset_index(drop=True)
+    out["position"] = out["position"].astype(str)
+    return out

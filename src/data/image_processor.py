@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import shutil
+import hashlib
 from pathlib import Path
 import pytesseract
 import regex as re
@@ -48,6 +49,14 @@ class ImageProcessor():
         print("*"*20)
         print("Loading images...")
         print("*"*20)
+
+    @staticmethod
+    def _file_sha256(path: str | Path) -> str:
+        h = hashlib.sha256()
+        with Path(path).open("rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
 
     def _fetch_images(self):
         """
@@ -304,8 +313,29 @@ class ImageProcessor():
             else:
                 existing_paths = set()
 
-        # Preload messages
+        # Preload messages + existing metadata keys for skip logic
         messages_data = MessagesLoader(self.db_path, MESSAGES_CSV_PATH).load().get_data()
+        existing_metadata = self.load_image_metadata()
+        if len(existing_metadata) > 0:
+            existing_metadata = existing_metadata.copy()
+            existing_metadata["grid_number_norm"] = (
+                existing_metadata["grid_number"].astype(str).str.replace(".0", "", regex=False).str.strip()
+            )
+            existing_metadata["submitter_norm"] = existing_metadata["submitter"].astype(str).str.strip()
+            existing_combinations = set(
+                zip(existing_metadata["grid_number_norm"], existing_metadata["submitter_norm"])
+            )
+            if "source_hash" in existing_metadata.columns:
+                existing_hashes = {
+                    str(x).strip()
+                    for x in existing_metadata["source_hash"].tolist()
+                    if str(x).strip() and str(x).lower() != "nan"
+                }
+            else:
+                existing_hashes = set()
+        else:
+            existing_combinations = set()
+            existing_hashes = set()
 
         print("**" * 50)
         print("Starting Image Processing...")
@@ -322,6 +352,27 @@ class ImageProcessor():
             image_date = result['image_date']
             mime_type = result['mime_type']
             parser_message = None
+            source_hash = ""
+            grid_number = None
+
+            def _emit(stage: str, image_done: bool = False, result_message: str | None = None):
+                if progress_callback:
+                    try:
+                        progress_callback(
+                            idx - (1 if not image_done else 0),
+                            total,
+                            current_date=image_date,
+                            current_submitter=submitter,
+                            stage=stage,
+                            grid_number=grid_number,
+                            image_path=path,
+                            image_done=image_done,
+                            result_message=result_message,
+                        )
+                    except Exception:
+                        pass
+
+            _emit("start")
 
             # # Short circuit by providing image dates to parse
             # if image_dates_to_parse == False:
@@ -334,52 +385,87 @@ class ImageProcessor():
 
             if path:
                 if os.path.exists(path):
+                    _emit("hash_check_start")
+                    try:
+                        source_hash = self._file_sha256(path)
+                        _emit("hash_checked")
+                    except Exception as exc:
+                        parser_message = f"Warning: Could not hash image ({exc})"
+                        _emit("hash_failed")
 
                     if path in existing_paths:
-                        print(f"Warning: Skipping existing path {path}")
-                        # continue
+                        parser_message = f"Warning: Skipping existing path {path}"
+                        print(parser_message)
+                        parser_data_entry = {
+                            "path": path,
+                            "submitter": submitter,
+                            "image_date": image_date,
+                            "parser_message": parser_message,
+                            "source_hash": source_hash,
+                        }
+                        self.save_parser_metadata(parser_data_entry)
+                        _emit("skip_existing_path", image_done=True, result_message=parser_message)
+                        continue
 
                     print("*" * 50)
                     print(f"Processing: {path} from {submitter} on {image_date}")
 
+                    # Skip if exact image already exists by hash
+                    if parser_message is None and source_hash and source_hash in existing_hashes:
+                        parser_message = "Warning: Exact image already exists in metadata (source_hash match)"
+                        _emit("skip_hash_match", image_done=True, result_message=parser_message)
+
                     # Extract the grid number for checking
-                    text = self.extract_text_from_image(path) # OCR operation
-                    grid_number = self.grid_number_from_image_text(text) # Text operation
+                    if parser_message is None:
+                        _emit("grid_identify_start")
+                        text = self.extract_text_from_image(path) # OCR operation
+                        grid_number = self.grid_number_from_image_text(text) # Text operation
+                        if grid_number is not None:
+                            _emit("grid_identified")
+                    else:
+                        grid_number = None
 
                     # Check if the grid number is valid, if not, skip the image and log a message in the parser
-                    if grid_number is None:
+                    if parser_message is None and grid_number is None:
                         parser_message = f"Warning: Invalid image. Could not extract grid number from {path}"
+                        _emit("grid_not_found", image_done=True, result_message=parser_message)
                         # if "Immaculate Grid Baseball." in path:
                         #     print(path)
                         #     print("Quitting since it should be pulling that one in ^^")
                         #     input("Press Enter to continue...")
 
-                    else:
-                        # Extract existing grid_number and submitter combos
-                        existing_metadata = self.load_image_metadata()
-                        existing_combinations = {(row.grid_number, row.submitter) for row in existing_metadata.itertuples()}
-
-                        # Check if this combination already exists in metadata
-                        if (grid_number, submitter) in existing_combinations:
+                    elif parser_message is None:
+                        grid_key = str(grid_number).strip()
+                        submitter_key = str(submitter).strip()
+                        # Skip if same grid+submitter already exists
+                        if (grid_key, submitter_key) in existing_combinations:
                             parser_message = f"Warning: This grid already exists in metadata (#{grid_number} for {submitter})"
                             print(parser_message)
-                            continue
-
-                        # Process the image
+                            _emit("skip_grid_submitter_exists", image_done=True, result_message=parser_message)
                         else:
+                            # Process the image
                             try:
+                                _emit("parsing_start")
                                 matrix = messages_data[(messages_data['grid_number'] == grid_number) & (messages_data['name'] == submitter)]['matrix'].iloc[0]
                                 parser_message = self.process_image_with_dynamic_grid(path, submitter, image_date, grid_number, matrix) # OCR operation
-                            
+                                if parser_message and str(parser_message).startswith("Success"):
+                                    existing_combinations.add((grid_key, submitter_key))
+                                    if source_hash:
+                                        existing_hashes.add(source_hash)
+                                    _emit("parsing_success", image_done=True, result_message=parser_message)
+                                else:
+                                    _emit("parsing_finished", image_done=True, result_message=parser_message)
                             # There is no corresponding text matrix for this image
                             except IndexError as e:
                                 print(e)
                                 parser_message = f"Warning: Issue with the text matrix"
+                                _emit("missing_text_matrix", image_done=True, result_message=parser_message)
             parser_data_entry = {
                 "path": path,
                 "submitter": submitter,
                 "image_date": image_date,
-                "parser_message": parser_message
+                "parser_message": parser_message,
+                "source_hash": source_hash,
             }
 
             # Append the parser data entry
@@ -388,7 +474,17 @@ class ImageProcessor():
 
             if progress_callback:
                 try:
-                    progress_callback(idx, total, current_date=image_date, current_submitter=submitter)
+                    progress_callback(
+                        idx,
+                        total,
+                        current_date=image_date,
+                        current_submitter=submitter,
+                        stage="image_complete",
+                        grid_number=grid_number,
+                        image_path=path,
+                        image_done=True,
+                        result_message=parser_message,
+                    )
                 except Exception:
                     # Best-effort progress updates; don't crash processing
                     pass
@@ -1203,6 +1299,24 @@ class ImageProcessor():
         """
         # Load existing metadata if the file exists
         parser_metadata = self.load_parser_metadata()
+
+        if "source_hash" not in parser_metadata.columns:
+            parser_metadata["source_hash"] = ""
+        if "source_hash" not in parser_data_new_entry:
+            parser_data_new_entry["source_hash"] = ""
+        if len(parser_metadata) > 0:
+            def _ensure_hash(row):
+                existing = str(row.get("source_hash") or "").strip()
+                if existing:
+                    return existing
+                p = row.get("path")
+                if isinstance(p, str) and p and os.path.exists(p):
+                    try:
+                        return self._file_sha256(p)
+                    except Exception:
+                        return ""
+                return ""
+            parser_metadata["source_hash"] = parser_metadata.apply(_ensure_hash, axis=1)
 
         # Append the new metadata if no duplicate found
         parser_metadata = pd.concat(
