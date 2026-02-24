@@ -353,8 +353,14 @@ class ImageProcessor():
             parser_message = None
             source_hash = ""
             grid_number = None
+            parsed_responses = None
 
-            def _emit(stage: str, image_done: bool = False, result_message: str | None = None):
+            def _emit(
+                stage: str,
+                image_done: bool = False,
+                result_message: str | None = None,
+                parsed_responses_payload=None,
+            ):
                 if progress_callback:
                     try:
                         progress_callback(
@@ -367,6 +373,7 @@ class ImageProcessor():
                             image_path=path,
                             image_done=image_done,
                             result_message=result_message,
+                            parsed_responses=parsed_responses_payload,
                         )
                     except Exception:
                         pass
@@ -461,7 +468,23 @@ class ImageProcessor():
                                     existing_combinations.add((grid_key, submitter_key))
                                     if source_hash:
                                         existing_hashes.add(source_hash)
-                                    _emit("parsing_success", image_done=True, result_message=parser_message)
+                                    # Pull the saved responses so UI can show the latest successful 3x3 parse.
+                                    try:
+                                        meta_after = self.load_image_metadata()
+                                        mask = (
+                                            (meta_after["grid_number"].astype(str).str.replace(".0", "", regex=False) == str(grid_number))
+                                            & (meta_after["submitter"].astype(str) == str(submitter))
+                                        )
+                                        if mask.any():
+                                            parsed_responses = meta_after.loc[mask].iloc[0].get("responses")
+                                    except Exception:
+                                        parsed_responses = None
+                                    _emit(
+                                        "parsing_success",
+                                        image_done=True,
+                                        result_message=parser_message,
+                                        parsed_responses_payload=parsed_responses,
+                                    )
                                 else:
                                     _emit("parsing_finished", image_done=True, result_message=parser_message)
                             # There is no corresponding text matrix for this image
@@ -495,6 +518,7 @@ class ImageProcessor():
                         image_path=path,
                         image_done=True,
                         result_message=parser_message,
+                        parsed_responses=parsed_responses,
                     )
                 except Exception:
                     # Best-effort progress updates; don't crash processing
