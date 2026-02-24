@@ -416,6 +416,7 @@ def render_refresh_tab() -> None:
                     progress_text = st.empty()
                     progress_bar = st.progress(0.0)
                     checklist_box = st.empty()
+                    prev_parse_box = st.empty()
                     checklist_state = {
                         "image_key": None,
                         "hash_checked": False,
@@ -423,6 +424,39 @@ def render_refresh_tab() -> None:
                         "grid_number": None,
                         "parsing_started": False,
                     }
+                    prev_success = {
+                        "responses": None,
+                        "meta": "",
+                    }
+
+                    def _responses_to_text_grid(responses_obj) -> str:
+                        if not isinstance(responses_obj, dict):
+                            return "No parsed responses."
+                        order = [
+                            "top_left", "top_center", "top_right",
+                            "middle_left", "middle_center", "middle_right",
+                            "bottom_left", "bottom_center", "bottom_right",
+                        ]
+                        vals = []
+                        for key in order:
+                            v = str(responses_obj.get(key, "")).strip()
+                            vals.append(v if v else "X")
+                        rows = [vals[0:3], vals[3:6], vals[6:9]]
+                        # simple fixed-width text table for easy visual scanning
+                        width = 18
+                        lines = []
+                        for row in rows:
+                            lines.append(" | ".join(s[:width].ljust(width) for s in row))
+                        return "\n".join(lines)
+
+                    def _render_prev_success():
+                        if isinstance(prev_success["responses"], dict):
+                            grid_txt = _responses_to_text_grid(prev_success["responses"])
+                            prev_parse_box.markdown(
+                                "**Previous successful parse (3x3)**  \n"
+                                f"{prev_success['meta']}\n"
+                                f"```text\n{grid_txt}\n```"
+                            )
 
                     def _render_checklist(current_date, current_submitter):
                         grid_label = checklist_state["grid_number"] if checklist_state["grid_number"] is not None else "?"
@@ -444,6 +478,7 @@ def render_refresh_tab() -> None:
                         image_path=None,
                         image_done=False,
                         result_message=None,
+                        parsed_responses=None,
                     ):
                         image_key = f"{current_date}|{current_submitter}|{image_path}"
                         if checklist_state["image_key"] != image_key and not image_done:
@@ -475,8 +510,16 @@ def render_refresh_tab() -> None:
 
                         if not image_done:
                             _render_checklist(current_date, current_submitter)
+                            _render_prev_success()
                         else:
                             checklist_box.empty()
+                            if isinstance(parsed_responses, dict) and len(parsed_responses) > 0:
+                                prev_success["responses"] = parsed_responses
+                                prev_success["meta"] = (
+                                    f"`{current_date or '?'} / {current_submitter or '?'} / "
+                                    f"grid {grid_number if grid_number is not None else '?'} / Success`"
+                                )
+                            _render_prev_success()
 
                     with st.spinner("Processing images..."):
                         try:
