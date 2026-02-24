@@ -447,7 +447,14 @@ class ImageProcessor():
                             try:
                                 _emit("parsing_start")
                                 matrix = messages_data[(messages_data['grid_number'] == grid_number) & (messages_data['name'] == submitter)]['matrix'].iloc[0]
-                                parser_message = self.process_image_with_dynamic_grid(path, submitter, image_date, grid_number, matrix) # OCR operation
+                                parser_message = self.process_image_with_dynamic_grid(
+                                    path,
+                                    submitter,
+                                    image_date,
+                                    grid_number,
+                                    matrix,
+                                    source_hash=source_hash,
+                                ) # OCR operation
                                 if parser_message and str(parser_message).startswith("Success"):
                                     existing_combinations.add((grid_key, submitter_key))
                                     if source_hash:
@@ -1272,7 +1279,22 @@ class ImageProcessor():
         )
 
         if existing_entry:
-            print(f"Metadata for grid_number {metadata_new_entry['grid_number']} and submitter {metadata_new_entry['submitter']} already exists.")
+            # Update existing row with any richer/new fields (e.g., source_hash, path, responses).
+            mask = (
+                (consolidated_metadata["grid_number"] == metadata_new_entry["grid_number"])
+                & (consolidated_metadata["submitter"] == metadata_new_entry["submitter"])
+            )
+            for key, value in metadata_new_entry.items():
+                consolidated_metadata.loc[mask, key] = value
+            if "date" in consolidated_metadata.columns:
+                consolidated_metadata["date"] = consolidated_metadata["date"].astype(str)
+            data_as_dicts = consolidated_metadata.to_dict(orient="records")
+            with open(self.cache_path, "w") as f:
+                json.dump(data_as_dicts, f, indent=4)
+            print(
+                f"Metadata updated for grid_number {metadata_new_entry['grid_number']} "
+                f"and submitter {metadata_new_entry['submitter']}."
+            )
             return
 
         # Append the new metadata_new_entry if no duplicate found
@@ -1339,7 +1361,16 @@ class ImageProcessor():
         print(f"Parser metadata saved: {IMAGES_PARSER_PATH}")
 
 
-    def process_image_with_dynamic_grid(self, image_path, submitter, image_date, grid_number, matrix, skip_validation=False):
+    def process_image_with_dynamic_grid(
+        self,
+        image_path,
+        submitter,
+        image_date,
+        grid_number,
+        matrix,
+        skip_validation=False,
+        source_hash="",
+    ):
         """
         Process an image with dynamic header/footer detection and grid cell OCR assignment.
 
@@ -1447,6 +1478,7 @@ class ImageProcessor():
             "date": image_date,
             "responses": responses,  # Responses indexed by position
             "image_filename": os.path.basename(dest_image_path),
+            "source_hash": source_hash,
         }
 
         print("*" * 80)
