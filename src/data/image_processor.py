@@ -293,25 +293,24 @@ class ImageProcessor():
         # Convert back to string for serialization/logging downstream
         results["image_date"] = results["image_date"].astype(str)
 
-        # Collect parser data if parser data file is not empty
+        # Collect parser data for primary hash dedupe and path short-circuit
+        existing_paths = set()
+        existing_parser_hashes = set()
         if os.path.exists(IMAGES_PARSER_PATH):
-            
             parser_existing_data = self.load_parser_metadata()
-
             if len(parser_existing_data) > 0:
-                # Keep any parser messages with "Invalid image" from the parser_existing_data
-                parser_existing_data = parser_existing_data[
-                    parser_existing_data["parser_message"].str.contains(
-                        "Invalid image|already exists|Success|Warning: Grid image is invalid|Failed to",
-                        na=False
-                    )
-                ]
-
-                # Extract paths from parser_existing_data
-                existing_paths = set(parser_existing_data["path"])
-
-            else:
-                existing_paths = set()
+                if "path" in parser_existing_data.columns:
+                    existing_paths = {
+                        str(p).strip()
+                        for p in parser_existing_data["path"].tolist()
+                        if str(p).strip() and str(p).lower() != "nan"
+                    }
+                if "source_hash" in parser_existing_data.columns:
+                    existing_parser_hashes = {
+                        str(h).strip()
+                        for h in parser_existing_data["source_hash"].tolist()
+                        if str(h).strip() and str(h).lower() != "nan"
+                    }
 
         # Preload messages + existing metadata keys for skip logic
         messages_data = MessagesLoader(self.db_path, MESSAGES_CSV_PATH).load().get_data()
@@ -410,8 +409,11 @@ class ImageProcessor():
                     print("*" * 50)
                     print(f"Processing: {path} from {submitter} on {image_date}")
 
-                    # Skip if exact image already exists by hash
-                    if parser_message is None and source_hash and source_hash in existing_hashes:
+                    # Primary dedupe: parser hashes. Backup dedupe: metadata hashes.
+                    if parser_message is None and source_hash and source_hash in existing_parser_hashes:
+                        parser_message = "Warning: Exact image already exists in parser metadata (source_hash match)"
+                        _emit("skip_hash_match_parser", image_done=True, result_message=parser_message)
+                    elif parser_message is None and source_hash and source_hash in existing_hashes:
                         parser_message = "Warning: Exact image already exists in metadata (source_hash match)"
                         _emit("skip_hash_match", image_done=True, result_message=parser_message)
 
@@ -478,6 +480,8 @@ class ImageProcessor():
             # Append the parser data entry
             print(parser_message)
             self.save_parser_metadata(parser_data_entry)
+            if source_hash:
+                existing_parser_hashes.add(source_hash)
 
             if progress_callback:
                 try:
