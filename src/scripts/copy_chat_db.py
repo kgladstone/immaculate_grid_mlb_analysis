@@ -4,6 +4,7 @@ import shutil
 import sqlite3
 import os
 import sys
+import time
 from pathlib import Path
 
 SRC_DIR = Path(__file__).resolve().parents[1]
@@ -13,6 +14,10 @@ if str(SRC_DIR) not in sys.path:
 from utils.constants import APPLE_TEXTS_DB_PATH
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".heic", ".gif", ".heif"}
+
+
+def _fmt_mb(num_bytes: int) -> str:
+    return f"{(num_bytes / (1024 * 1024)):.1f} MB"
 
 
 def copy_chat_db(src: Path, dest: Path) -> Path:
@@ -46,11 +51,20 @@ def copy_chat_db_with_wal(
     if not db_path.exists():
         raise FileNotFoundError(f"Source DB not found at {db_path}")
 
+    print(f"[copy] Source DB: {db_path}")
+    print(f"[copy] Destination folder: {dest_dir}")
     shutil.copy2(db_path, dest_dir / "chat.db")
+    print(f"[copy] Copied chat.db ({_fmt_mb((dest_dir / 'chat.db').stat().st_size)})")
     if wal_path.exists():
         shutil.copy2(wal_path, dest_dir / "chat.db-wal")
+        print(f"[copy] Copied chat.db-wal ({_fmt_mb((dest_dir / 'chat.db-wal').stat().st_size)})")
+    else:
+        print("[copy] chat.db-wal not found (ok).")
     if shm_path.exists():
         shutil.copy2(shm_path, dest_dir / "chat.db-shm")
+        print(f"[copy] Copied chat.db-shm ({_fmt_mb((dest_dir / 'chat.db-shm').stat().st_size)})")
+    else:
+        print("[copy] chat.db-shm not found (ok).")
 
     return (dest_dir / "chat.db").resolve()
 
@@ -59,12 +73,14 @@ def sqlite_backup(src: Path, dest: Path) -> None:
     """
     Use SQLite backup API to create a consistent snapshot of chat.db.
     """
+    print(f"[backup] Creating SQLite backup: {src} -> {dest}")
     dest.parent.mkdir(parents=True, exist_ok=True)
     src_con = sqlite3.connect(src)
     dst_con = sqlite3.connect(dest)
     src_con.backup(dst_con)
     dst_con.close()
     src_con.close()
+    print(f"[backup] Done ({_fmt_mb(dest.stat().st_size)})")
 
 
 def validate_db(path: Path) -> tuple:
@@ -87,10 +103,14 @@ def copy_image_attachments(src_root: Path, dest_root: Path, progress_cb=None) ->
             "Grant Full Disk Access to your terminal/IDE or copy from an FDA-enabled shell."
         )
 
+    print(f"[attachments] Scanning source: {src_root}")
+    t_scan = time.time()
     candidates = []
+    considered_files = 0
     for path in src_root.rglob("*"):
         if not path.is_file():
             continue
+        considered_files += 1
         if path.suffix.lower() not in IMAGE_EXTENSIONS:
             continue
         rel = path.relative_to(src_root)
@@ -99,6 +119,10 @@ def copy_image_attachments(src_root: Path, dest_root: Path, progress_cb=None) ->
             continue
         size = path.stat().st_size
         candidates.append((path, dest_path, size))
+    print(
+        f"[attachments] Scan complete in {time.time()-t_scan:.1f}s | "
+        f"files considered={considered_files}, new images={len(candidates)}"
+    )
 
     total_bytes = sum(size for _, _, size in candidates)
     if total_bytes == 0:
@@ -131,24 +155,31 @@ def copy_image_attachments(src_root: Path, dest_root: Path, progress_cb=None) ->
 
 
 def main(progress_cb=None, src_dir: Path | None = None):
+    t0 = time.time()
     if src_dir is None:
         src_dir = Path(APPLE_TEXTS_DB_PATH).expanduser().parent
     dest_dir = Path(__file__).resolve().parents[2] / "chat_snapshot"
+    print("[start] copy_chat_db.py")
+    print(f"[start] Source directory: {src_dir}")
+    print(f"[start] Destination directory: {dest_dir}")
 
     # Step 1: copy raw files (chat.db + WAL/SHM)
     if progress_cb:
         progress_cb(0.05, "Copying chat.db and WAL files")
+    print("[step 1/4] Copying chat.db + WAL/SHM...")
     dest_path = copy_chat_db_with_wal(src_dir=src_dir, dest_dir=dest_dir)
 
     # Step 2: create a stable backup from the copied chat.db to chat_snapshot/chat_backup.db
     if progress_cb:
         progress_cb(0.35, "Creating backup snapshot")
+    print("[step 2/4] Creating stable SQLite backup...")
     backup_path = dest_dir / "chat_backup.db"
     sqlite_backup(dest_path, backup_path)
 
     # Step 3: validate both files
     if progress_cb:
         progress_cb(0.55, "Validating snapshot integrity")
+    print("[step 3/4] Validating SQLite integrity...")
     summaries = []
     for label, path in [("snapshot chat.db", dest_path), ("backup chat_backup.db", backup_path)]:
         try:
@@ -163,6 +194,7 @@ def main(progress_cb=None, src_dir: Path | None = None):
     try:
         if progress_cb:
             progress_cb(0.7, "Copying attachments")
+        print("[step 4/4] Copying image attachments...")
         attachment_counts = copy_image_attachments(attachments_src, attachments_dest, progress_cb=progress_cb)
         summaries.append(
             f"Attachments: copied {attachment_counts['copied']}, skipped {attachment_counts['skipped']} (dest: {attachments_dest})"
@@ -175,6 +207,7 @@ def main(progress_cb=None, src_dir: Path | None = None):
 
     print(f"Snapshot folder: {dest_dir}")
     print("\n".join(summaries))
+    print(f"[done] Total elapsed: {time.time()-t0:.1f}s")
     print("Use chat_snapshot/chat_backup.db for Streamlit 'Messages DB path' (stable snapshot).")
 
 
