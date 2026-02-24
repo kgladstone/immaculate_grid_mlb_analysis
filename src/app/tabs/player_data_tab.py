@@ -116,8 +116,15 @@ def _render_player_search_chart(usage_df: pd.DataFrame) -> None:
 
     submitter_options = sorted(player_rows["submitter"].dropna().astype(str).unique().tolist())
     submitter_filter_key = "player_search_submitter_filter"
-    if submitter_filter_key not in st.session_state:
+    submitter_filter_player_key = "player_search_submitter_filter_player"
+
+    if (
+        submitter_filter_key not in st.session_state
+        or st.session_state.get(submitter_filter_player_key) != selected_player
+    ):
         st.session_state[submitter_filter_key] = submitter_options
+        st.session_state[submitter_filter_player_key] = selected_player
+
     selected_submitters = [
         s for s in st.session_state.get(submitter_filter_key, []) if s in submitter_options
     ]
@@ -137,17 +144,17 @@ def _render_player_search_chart(usage_df: pd.DataFrame) -> None:
         .sort_values(["month", "submitter"])
     )
 
-    fig = px.line(
+    fig = px.area(
         trend,
         x="month",
         y="count",
         color="submitter",
-        markers=True,
-        title=f"Monthly Usage Over Time: {selected_player}",
+        title=f"Monthly Usage Over Time (Stacked Area): {selected_player}",
         labels={"month": "Month", "count": "Times Used"},
     )
     fig.update_xaxes(dtick="M1", tickformat="%Y-%m")
     fig.update_layout(hovermode="x unified")
+    fig.update_yaxes(rangemode="tozero")
     st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
     trend_table = trend.copy()
     trend_table["month"] = trend_table["month"].dt.strftime("%b %Y")
