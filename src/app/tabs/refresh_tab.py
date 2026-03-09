@@ -32,7 +32,7 @@ from utils.constants import (
     PROMPTS_CSV_PATH,
     GRID_PLAYERS,
 )
-from app.operations.data_loaders import resolve_path
+from app.operations.data_loaders import load_image_metadata_df, resolve_path
 
 UPLOAD_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".heic"}
 
@@ -480,6 +480,24 @@ def render_refresh_tab() -> None:
                         result_message=None,
                         parsed_responses=None,
                     ):
+                        stage_labels = {
+                            "start": "Start",
+                            "hash_check_start": "Checking hash",
+                            "hash_checked": "Hash checked",
+                            "hash_failed": "Hash failed",
+                            "skip_existing_path": "Skipped (existing parser path)",
+                            "skip_hash_match_parser": "Skipped (exact hash in parser)",
+                            "skip_hash_match": "Skipped (exact hash in metadata)",
+                            "grid_identify_start": "Identifying grid",
+                            "grid_identified": "Grid identified",
+                            "grid_not_found": "Grid not found",
+                            "skip_grid_submitter_exists": "Skipped (grid+submitter exists)",
+                            "parsing_start": "Parsing",
+                            "parsing_success": "Parsed successfully",
+                            "parsing_finished": "Parsing finished",
+                            "missing_text_matrix": "Missing text matrix",
+                            "image_complete": "Image complete",
+                        }
                         image_key = f"{current_date}|{current_submitter}|{image_path}"
                         if checklist_state["image_key"] != image_key and not image_done:
                             checklist_state["image_key"] = image_key
@@ -505,8 +523,14 @@ def render_refresh_tab() -> None:
                         extra = ""
                         if current_date or current_submitter:
                             extra = f" | {current_date or '?'} / {current_submitter or '?'}"
-                        stage_msg = f" | {stage}" if stage else ""
-                        progress_text.write(f"Processing images {done}/{total} ({pct*100:.1f}%){extra}{stage_msg}")
+                        stage_label = stage_labels.get(stage, stage or "")
+                        stage_msg = f" | {stage_label}" if stage_label else ""
+                        reason_msg = ""
+                        if image_done and result_message:
+                            reason_msg = f" | {result_message}"
+                        progress_text.write(
+                            f"Processing images {done}/{total} ({pct*100:.1f}%){extra}{stage_msg}{reason_msg}"
+                        )
 
                         if not image_done:
                             _render_checklist(current_date, current_submitter)
@@ -914,9 +938,8 @@ def render_refresh_tab() -> None:
     # --- Assign users tab ---
     with assign_tab:
         st.write("Review `Undefined` uploads and assign each image to a submitter.")
-        ip = ImageProcessor(str(_default_messages_db_path()), str(IMAGES_METADATA_PATH), str(IMAGES_PATH))
         try:
-            meta_df = ip.load_image_metadata()
+            meta_df = load_image_metadata_df().copy()
         except Exception as exc:
             st.error(f"Could not load image metadata: {exc}")
             meta_df = pd.DataFrame()

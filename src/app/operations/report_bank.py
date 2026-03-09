@@ -36,6 +36,7 @@ from analytics.analysis import (
     analyze_shame_index,
     analyze_low_bit_high_reward,
     analyze_novelties,
+    analyze_grid_overlap_submitters,
     analyze_prediction_future_grid,
 )
 
@@ -73,6 +74,7 @@ FUNCTIONS: Dict[str, Callable] = {
     "analyze_shame_index": analyze_shame_index,
     "analyze_low_bit_high_reward": analyze_low_bit_high_reward,
     "analyze_novelties": analyze_novelties,
+    "analyze_grid_overlap_submitters": analyze_grid_overlap_submitters,
     "analyze_prediction_future_grid": analyze_prediction_future_grid,
     "raw_prompts": lambda prompts: prompts,
     "raw_results": lambda texts_raw: texts_raw,

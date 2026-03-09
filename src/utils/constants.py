@@ -44,6 +44,8 @@ csv_dir = root_dir / "csv/"  # Target the 'csv' folder in the root directory
 bin_dir = root_dir / "bin/"
 
 CONFIG_PATH = bin_dir / 'config.json'  # Path to the configuration file
+TEAM_LIST_PATH = root_dir / "src" / "utils" / "team_list.json"
+FRANCHID_MODERN_ALIGNMENT_PATH = root_dir / "src" / "utils" / "franchid_modern_alignment.json"
 # Load configuration from a separate JSON file
 with open(CONFIG_PATH, 'r') as config_file:
     config = json.load(config_file)
@@ -73,38 +75,38 @@ GRID_PLAYERS_RESTRICTED = {player: GRID_PLAYERS[player] for player in GRID_PLAYE
 # --------------------------------------------------------------------------------------------------
 # Immutables
 
-TEAM_LIST = {
-    "Cubs": "CHC",
-    "Cardinals": "STL",
-    "Brewers": "MIL",
-    "Reds": "CIN",
-    "Pirates": "PIT",
-    "Nationals": "WSH",
-    "Mets": "NYM",
-    "Marlins": "MIA",
-    "Phillies": "PHI",
-    "Braves": "ATL",
-    "Dodgers": "LAD",
-    "Diamondbacks": "ARI",
-    "Rockies": "COL",
-    "Giants": "SFG",
-    "Padres": "SDP",
-    "Royals": "KCR",
-    "White Sox": "CWS",
-    "Twins": "MIN",
-    "Guardians": "CLE",
-    "Tigers": "DET",
-    "Red Sox": "BOS",
-    "Yankees": "NYY",
-    "Blue Jays": "TOR",
-    "Rays": "TBR",
-    "Orioles": "BAL",
-    "Angels": "LAA",
-    "Athletics": "ATH",
-    "Astros": "HOU",
-    "Mariners": "SEA",
-    "Rangers": "TEX"
+def _load_team_list(path: Path) -> dict:
+    with path.open("r") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"TEAM_LIST JSON must be an object mapping names to codes: {path}")
+    return data
+
+
+TEAM_LIST = _load_team_list(TEAM_LIST_PATH)
+
+
+def _load_franchid_alignment(path: Path) -> dict:
+    with path.open("r") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"Franchise alignment JSON must be an object keyed by franchID: {path}")
+    return data
+
+
+FRANCHID_MODERN_ALIGNMENT = _load_franchid_alignment(FRANCHID_MODERN_ALIGNMENT_PATH)
+
+# Normalize legacy/current franchise codes to a canonical representation.
+# Example: Oakland appears as OAK historically and ATH in modern data.
+FRANCHID_EQUIVALENTS = {
+    "OAK": "ATH",
+    "ATH": "ATH",
 }
+
+
+def canonicalize_franchid(value) -> str:
+    code = str(value).strip().upper()
+    return FRANCHID_EQUIVALENTS.get(code, code)
 
 TEAM_ALIASES = {
     "Oakland Athletics": "Athletics",

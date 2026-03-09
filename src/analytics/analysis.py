@@ -1173,6 +1173,7 @@ def analyze_grid_cell_with_shared_guesses(image_metadata, prompts, player_list):
     filtered_rows = grouped[grouped["analyzed_response"].apply(
         lambda x: has_repeated_players(x, 2)
     )]
+    filtered_rows = filtered_rows.copy()
 
     # Step 5: Extract prompt by grid_number and position
     def get_prompt(prompts, grid_number, position):
@@ -2328,6 +2329,154 @@ def analyze_novelties(images_df: pd.DataFrame) -> pd.DataFrame:
         return df
     df = df.sort_values(by="first_global_date", ascending=False)
     return df.reset_index(drop=True)
+
+
+def analyze_grid_overlap_submitters(images_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Rank grids by how much submitters overlapped on the exact same cell answers.
+
+    Output columns:
+      - grid_number
+      - submitters
+      - overlap_cells (e.g. "6/9")
+      - overlap_cells_count (numeric for sorting)
+      - full_consensus_cells (all submitters same answer in the cell)
+      - overlap_pairs (sum of nC2 counts per shared answer across all cells)
+    """
+    if images_df is None or images_df.empty:
+        return pd.DataFrame()
+    required_cols = {"grid_number", "submitter", "responses"}
+    if not required_cols.issubset(images_df.columns):
+        return pd.DataFrame()
+
+    def _norm(value: object) -> str:
+        if not isinstance(value, str):
+            return ""
+        return " ".join(value.strip().lower().split())
+
+    ordered_positions = [
+        "top_left", "top_center", "top_right",
+        "middle_left", "middle_center", "middle_right",
+        "bottom_left", "bottom_center", "bottom_right",
+    ]
+
+    def _cell_label(pos: str) -> str:
+        mapping = {
+            "top_left": "R1C1",
+            "top_center": "R1C2",
+            "top_right": "R1C3",
+            "middle_left": "R2C1",
+            "middle_center": "R2C2",
+            "middle_right": "R2C3",
+            "bottom_left": "R3C1",
+            "bottom_center": "R3C2",
+            "bottom_right": "R3C3",
+        }
+        return mapping.get(pos, pos)
+
+    def _preview_grid(responses: dict) -> str:
+        vals = []
+        for pos in ordered_positions:
+            val = responses.get(pos, "")
+            if isinstance(val, str):
+                vals.append(val.strip())
+            else:
+                vals.append("")
+        return (
+            f"{vals[0]} | {vals[1]} | {vals[2]} / "
+            f"{vals[3]} | {vals[4]} | {vals[5]} / "
+            f"{vals[6]} | {vals[7]} | {vals[8]}"
+        )
+
+    rows = []
+    for grid_number, group in images_df.groupby("grid_number"):
+        valid_group = group[group["responses"].apply(lambda x: isinstance(x, dict))].copy()
+        if valid_group.empty:
+            continue
+        # Keep one row per submitter to avoid duplicate uploads inflating overlap.
+        valid_group = valid_group.drop_duplicates(subset=["submitter"], keep="last")
+
+        submitter_count = int(valid_group["submitter"].nunique())
+        if submitter_count < 2:
+            continue
+
+        # position -> list of normalized non-empty responses
+        position_answers = {}
+        # position -> list of (submitter, original_answer)
+        position_submitter_answers = {}
+        for _, row in valid_group.iterrows():
+            submitter = str(row.get("submitter", "")).strip()
+            responses = row.get("responses")
+            for pos, answer in responses.items():
+                norm = _norm(answer)
+                if not norm:
+                    continue
+                position_answers.setdefault(str(pos), []).append(norm)
+                position_submitter_answers.setdefault(str(pos), []).append((submitter, str(answer).strip()))
+
+        if not position_answers:
+            continue
+
+        overlap_cells = 0
+        consensus_cells = 0
+        overlap_pairs = 0
+        cell_overlap_details = []
+
+        for pos, answers in position_answers.items():
+            if len(answers) < 2:
+                continue
+            counts = pd.Series(answers).value_counts()
+            top_count = int(counts.iloc[0]) if not counts.empty else 0
+            if top_count >= 2:
+                overlap_cells += 1
+                top_norm = str(counts.index[0])
+                participants = [
+                    sub
+                    for sub, ans in position_submitter_answers.get(pos, [])
+                    if _norm(ans) == top_norm
+                ]
+                # Preserve first-seen casing for readability.
+                display_answer = next(
+                    (ans for _, ans in position_submitter_answers.get(pos, []) if _norm(ans) == top_norm),
+                    top_norm,
+                )
+                cell_overlap_details.append(
+                    f"{_cell_label(pos)}: {display_answer} ({top_count}/{submitter_count}; {', '.join(sorted(set(participants)))})"
+                )
+            if len(counts) == 1 and len(answers) == submitter_count:
+                consensus_cells += 1
+            for c in counts.tolist():
+                if c >= 2:
+                    overlap_pairs += int(c * (c - 1) / 2)
+
+        submitter_names = sorted(set(valid_group["submitter"].astype(str).tolist()))
+        previews = []
+        for _, row in valid_group.sort_values(by="submitter").iterrows():
+            submitter = str(row.get("submitter", "")).strip()
+            responses = row.get("responses") or {}
+            previews.append(f"{submitter}: {_preview_grid(responses)}")
+
+        rows.append(
+            {
+                "grid_number": int(grid_number),
+                "submitters": submitter_count,
+                "submitter_names": ", ".join(submitter_names),
+                "overlap_cells": f"{overlap_cells}/9",
+                "overlap_cells_count": overlap_cells,
+                "full_consensus_cells": consensus_cells,
+                "overlap_pairs": overlap_pairs,
+                "shared_cell_details": " || ".join(cell_overlap_details),
+                "grid_preview_by_submitter": " || ".join(previews),
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    return df.sort_values(
+        by=["overlap_cells_count", "overlap_pairs", "full_consensus_cells", "submitters", "grid_number"],
+        ascending=[False, False, False, False, False],
+    ).reset_index(drop=True)
 
 
 def analyze_prompts_most_wrong(prompts_df: pd.DataFrame, texts_df: pd.DataFrame) -> pd.DataFrame:

@@ -3,196 +3,106 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 import pandas as pd
 import unidecode
 
+try:
+    from scripts.lahman_box_crawler import (
+        APPEARANCES_REQUIRED_COLUMNS,
+        PEOPLE_REQUIRED_COLUMNS,
+        TEAMS_REQUIRED_COLUMNS,
+        LahmanBoxCrawler,
+    )
+except ImportError:  # pragma: no cover - allows running as direct script
+    from lahman_box_crawler import (
+        APPEARANCES_REQUIRED_COLUMNS,
+        PEOPLE_REQUIRED_COLUMNS,
+        TEAMS_REQUIRED_COLUMNS,
+        LahmanBoxCrawler,
+    )
+from utils.constants import canonicalize_franchid
 
-def build_cache(cache_dir: Path, max_year: int, lahman_zip_path: Path | None = None, lahman_url: str | None = None) -> None:
-    import pybaseball as pb
-    import pybaseball.lahman as lahman
 
+ProgressCb = Callable[[str], None]
+
+
+def _emit(message: str, progress_cb: ProgressCb | None = None) -> None:
+    print(message, flush=True)
+    if progress_cb is not None:
+        progress_cb(message)
+
+
+def _load_required_tables(
+    cache_dir: Path,
+    lahman_zip_path: Path | None,
+    lahman_url: str | None,
+    progress_cb: ProgressCb | None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    _emit("[1/4] Downloading required Lahman files via crawler (Teams, People, Appearances)...", progress_cb)
+
+    crawler = LahmanBoxCrawler(progress_cb=progress_cb)
+    candidate_urls = [lahman_url] if lahman_url else []
+    local_zip_paths = [lahman_zip_path] if lahman_zip_path else []
+    downloaded = crawler.download_required_csvs(
+        output_dir=cache_dir,
+        required_files={
+            "Teams.csv": TEAMS_REQUIRED_COLUMNS,
+            "People.csv": PEOPLE_REQUIRED_COLUMNS,
+            "Appearances.csv": APPEARANCES_REQUIRED_COLUMNS,
+        },
+        candidate_urls=candidate_urls,
+        local_zip_paths=local_zip_paths,
+    )
+    teams_path = downloaded.get("Teams.csv")
+    people_path = downloaded.get("People.csv")
+    appearances_path = downloaded.get("Appearances.csv")
+    if teams_path is None or people_path is None or appearances_path is None:
+        raise RuntimeError("Lahman crawler did not return all required files (Teams, People, Appearances).")
+
+    teams_raw = pd.read_csv(teams_path)
+    people_raw = pd.read_csv(people_path)
+    appearances = pd.read_csv(appearances_path)
+    _emit(
+        f"[2/4] Downloaded raw rows: Teams={len(teams_raw):,}, People={len(people_raw):,}, Appearances={len(appearances):,}",
+        progress_cb,
+    )
+    return teams_raw, people_raw, appearances
+
+
+def build_cache(
+    cache_dir: Path,
+    max_year: int,
+    lahman_zip_path: Path | None = None,
+    lahman_url: str | None = None,
+    progress_cb: ProgressCb | None = None,
+) -> None:
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # Teams
-    frames = []
-    for year in range(1876, max_year + 1):
-        frames.append(pb.team_ids(year)[["yearID", "teamID", "franchID"]])
-    teams = pd.concat(frames, ignore_index=True).drop_duplicates()
+    teams_raw, people_raw, appearances = _load_required_tables(cache_dir, lahman_zip_path, lahman_url, progress_cb)
+
+    _emit("[3/4] Building local simulator cache files...", progress_cb)
+    teams = teams_raw.loc[:, ["yearID", "teamID", "franchID"]].copy()
+    teams = teams[pd.to_numeric(teams["yearID"], errors="coerce").fillna(0).astype(int) <= int(max_year)]
+    teams["franchID"] = teams["franchID"].apply(canonicalize_franchid)
+    teams = teams.drop_duplicates()
     teams.to_csv(cache_dir / "teams.csv", index=False)
 
-    # Players (Chadwick register)
-    players = pb.chadwick_register()
+    players = people_raw.loc[:, ["nameLast", "nameFirst", "playerID"]].copy()
+    players = players.rename(columns={"nameLast": "name_last", "nameFirst": "name_first", "playerID": "key_bbref"})
     players["name_last"] = players["name_last"].apply(lambda x: unidecode.unidecode(str(x)))
     players["name_first"] = players["name_first"].apply(lambda x: unidecode.unidecode(str(x)))
+    players = players.drop_duplicates()
     players.to_csv(cache_dir / "players.csv", index=False)
 
-    # Appearances
-    lahman_zip_candidates = [
-        "https://github.com/chadwickbureau/baseballdatabank/archive/refs/heads/main.zip",
-        "https://github.com/chadwickbureau/baseballdatabank/archive/refs/heads/master.zip",
-        "https://github.com/chadwickbureau/baseballdatabank/archive/master.zip",
-        "https://github.com/chadwickbureau/baseballdatabank/releases/latest/download/baseballdatabank.zip",
-        "https://seanlahman.com/files/database/baseballdatabank-master.zip",
-    ]
-    default_lahman_zip = cache_dir / "lahman.zip"
-    if lahman_zip_path is None and default_lahman_zip.exists():
-        lahman_zip_path = default_lahman_zip
-
-    lahman_zip_url = lahman_url
-    try:
-        import requests
-        from io import BytesIO
-        import zipfile
-
-        if lahman_zip_url is None:
-            for candidate in lahman_zip_candidates:
-                try:
-                    resp = requests.get(candidate, timeout=30)
-                    status = resp.status_code
-                    ok = status == 200 and zipfile.is_zipfile(BytesIO(resp.content))
-                    print(
-                        f"Lahman probe: {candidate} | status={status} | zip={ok}",
-                        flush=True,
-                    )
-                    if ok:
-                        lahman_zip_url = candidate
-                        break
-                except Exception as exc:
-                    print(f"Lahman probe failed: {candidate} | {exc}", flush=True)
-    except Exception:
-        lahman_zip_url = None
-    try:
-        original_get_lahman_zip = lahman.get_lahman_zip
-
-        def _patched_get_lahman_zip():
-            import requests
-            from zipfile import ZipFile
-            from io import BytesIO
-
-            if lahman_zip_path:
-                if not lahman_zip_path.exists():
-                    raise RuntimeError(f"Lahman ZIP not found at {lahman_zip_path}")
-                return ZipFile(lahman_zip_path)
-            if not lahman_zip_url:
-                raise RuntimeError("No reachable Lahman ZIP URL found.")
-            resp = requests.get(lahman_zip_url, timeout=30)
-            resp.raise_for_status()
-            return ZipFile(BytesIO(resp.content))
-
-        lahman.get_lahman_zip = _patched_get_lahman_zip
-    except Exception:
-        original_get_lahman_zip = None
-
-    try:
-        import pybaseball.lahman as lahman
-        import requests
-        import zipfile
-        import hashlib
-        import inspect
-        from io import BytesIO
-
-        def _probe_url(url: str) -> None:
-            resp = requests.get(url, timeout=30, stream=True, allow_redirects=True)
-            body = resp.raw.read(4096)
-            content_type = (resp.headers.get("Content-Type") or "").lower()
-            header_bytes = body[:64]
-            magic_hex = header_bytes.hex()
-            print(f"Lahman URL: {url}", flush=True)
-            if resp.url != url:
-                print(f"Redirected to: {resp.url}", flush=True)
-            print(f"Status: {resp.status_code} | content-type: {content_type}", flush=True)
-            print(f"Header sample size: {len(body)} bytes | sha256: {hashlib.sha256(body).hexdigest()[:16]}...", flush=True)
-            print(f"Header magic (hex): {magic_hex}", flush=True)
-            if body.startswith(b'PK\x03\x04') or body.startswith(b'PK\x05\x06'):
-                print("File signature: ZIP (by magic bytes)", flush=True)
-            elif body.startswith(b'<!DOCTYPE html') or body.startswith(b'<html'):
-                print("File signature: HTML document", flush=True)
-            elif body.startswith(b'%PDF-'):
-                print("File signature: PDF document", flush=True)
-            else:
-                print("File signature: unknown", flush=True)
-
-            if "text/html" in content_type or body.startswith(b'<!DOCTYPE html') or body.startswith(b'<html'):
-                preview = body[:200].decode("utf-8", errors="replace").replace("\n", " ")
-                print(f"Body preview: {preview}", flush=True)
-
-        # Discover URL from module constants or function source
-        candidates = []
-        for _, value in vars(lahman).items():
-            if isinstance(value, str) and value.startswith("http"):
-                candidates.append(value)
-        try:
-            source = inspect.getsource(lahman.get_lahman_zip)
-            for token in source.split():
-                if token.startswith("http"):
-                    candidates.append(token.strip("\"'()"))
-        except Exception:
-            pass
-        try:
-            consts = lahman.get_lahman_zip.__code__.co_consts or []
-            for value in consts:
-                if isinstance(value, str) and value.startswith("http"):
-                    candidates.append(value)
-        except Exception:
-            pass
-
-        # Filter likely Lahman zip URLs
-        deduped = []
-        for url in candidates:
-            if url not in deduped:
-                deduped.append(url)
-        lahman_urls = [u for u in deduped if "lahman" in u.lower() or u.lower().endswith(".zip")]
-
-        if not lahman_urls:
-            print("Lahman zip URL not found in pybaseball.lahman (no http URL constants).", flush=True)
-            print("Probing known Lahman sources...", flush=True)
-            lahman_urls = [
-                "https://github.com/chadwickbureau/baseballdatabank/archive/refs/heads/master.zip",
-                "https://github.com/chadwickbureau/baseballdatabank/archive/master.zip",
-                "https://github.com/chadwickbureau/baseballdatabank/releases/latest/download/baseballdatabank.zip",
-                "https://seanlahman.com/files/database/baseballdatabank-master.zip",
-            ]
-
-        for url in lahman_urls:
-            _probe_url(url)
-
-        # Monkeypatch requests used by pybaseball.lahman to capture actual URL + headers
-        try:
-            original_get = lahman.requests.get
-
-            def _logging_get(url, *args, **kwargs):
-                resp = original_get(url, *args, **kwargs)
-                ct = (resp.headers.get("Content-Type") or "").lower()
-                head = resp.content[:64]
-                signature = "unknown"
-                if head.startswith(b"PK\x03\x04") or head.startswith(b"PK\x05\x06"):
-                    signature = "zip"
-                elif head.startswith(b"<!DOCTYPE html") or head.startswith(b"<html"):
-                    signature = "html"
-                print(
-                    f"pybaseball.lahman requests.get -> {url} | status={resp.status_code} | "
-                    f"content-type={ct} | signature={signature}",
-                    flush=True,
-                )
-                return resp
-
-            lahman.requests.get = _logging_get
-            try:
-                lahman.get_lahman_zip()
-            except Exception as exc:
-                print(f"lahman.get_lahman_zip() failed: {exc}", flush=True)
-            finally:
-                lahman.requests.get = original_get
-        except Exception as exc:
-            print(f"Monkeypatch diagnostic failed: {exc}", flush=True)
-    except Exception as exc:
-        print(f"Lahman download diagnostic failed: {exc}", flush=True)
-    appearances = pb.lahman.appearances()
-    if original_get_lahman_zip is not None:
-        lahman.get_lahman_zip = original_get_lahman_zip
     appearances.to_csv(cache_dir / "appearances.csv", index=False)
+    _emit(
+        f"[3/4] Wrote: teams.csv={len(teams):,}, players.csv={len(players):,}, appearances.csv={len(appearances):,}",
+        progress_cb,
+    )
 
+    _emit("[4/4] Writing cache metadata...", progress_cb)
     meta = pd.DataFrame(
         [
             {
@@ -206,16 +116,16 @@ def build_cache(cache_dir: Path, max_year: int, lahman_zip_path: Path | None = N
     )
     meta.to_csv(cache_dir / "cache_meta.csv", index=False)
 
-    print(f"Cache written to: {cache_dir}")
-    print(meta.to_string(index=False))
+    _emit(f"Cache written to: {cache_dir}", progress_cb)
+    _emit(meta.to_string(index=False), progress_cb)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build local baseball cache from pybaseball.")
+    parser = argparse.ArgumentParser(description="Build local baseball cache from pybaseball + Lahman crawler fallback.")
     parser.add_argument("--cache-dir", default="bin/baseball_cache", help="Output directory for cached CSVs.")
     parser.add_argument("--max-year", type=int, default=2023, help="Max year for team IDs.")
-    parser.add_argument("--lahman-zip", default=None, help="Path to a local Lahman zip file.")
-    parser.add_argument("--lahman-url", default=None, help="Override URL for Lahman zip download.")
+    parser.add_argument("--lahman-zip", default=None, help="Optional path to local Lahman ZIP.")
+    parser.add_argument("--lahman-url", default=None, help="Optional explicit Lahman URL.")
     args = parser.parse_args()
 
     cache_dir = Path(args.cache_dir).expanduser().resolve()

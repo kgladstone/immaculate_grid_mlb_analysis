@@ -407,6 +407,16 @@
     "category": "Usage Patterns"
   },
   {
+    "title": "Grid Overlap Among Submitters",
+    "func": "analyze_grid_overlap_submitters",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images"
+    ],
+    "category": "Usage Patterns"
+  },
+  {
     "title": "Low Bit High Reward",
     "func": "analyze_low_bit_high_reward",
     "needs_person": false,

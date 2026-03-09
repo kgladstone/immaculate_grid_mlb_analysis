@@ -46,10 +46,6 @@ class ImageProcessor():
             self.attachments_cache_root = Path(self.db_path).parent / "Attachments"
         self._attachments_index = None
 
-        print("*"*20)
-        print("Loading images...")
-        print("*"*20)
-
     @staticmethod
     def _file_sha256(path: str | Path) -> str:
         h = hashlib.sha256()

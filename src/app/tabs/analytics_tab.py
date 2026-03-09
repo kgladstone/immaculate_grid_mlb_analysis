@@ -126,6 +126,15 @@ def _write_excel_reports(reports, ctx, excel_path: Path, status_text=None, progr
 def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df: pd.DataFrame) -> None:
     st.write("Dynamic preview of all assets that would go into the PDF report.")
 
+    if "analytics_enabled" not in st.session_state:
+        st.session_state["analytics_enabled"] = False
+    if not st.session_state["analytics_enabled"]:
+        if st.button("Load analytics workspace"):
+            st.session_state["analytics_enabled"] = True
+            st.rerun()
+        st.info("Analytics is not loaded by default. Click 'Load analytics workspace' to initialize it.")
+        return
+
     if prompts_df.empty or texts_df.empty:
         st.info("Prompts or texts data is missing; analytics cannot be generated.")
         return
@@ -312,11 +321,16 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
             row[1].write(title)
             pdf_checked = title in st.session_state["export_pdf_titles"]
             excel_checked = title in st.session_state["export_excel_titles"]
-            if row[2].checkbox("", value=pdf_checked, key=f"pdf_{title}"):
+            if row[2].checkbox("Include in PDF", value=pdf_checked, key=f"pdf_{title}", label_visibility="collapsed"):
                 st.session_state["export_pdf_titles"].add(title)
             else:
                 st.session_state["export_pdf_titles"].discard(title)
-            if row[3].checkbox("", value=excel_checked, key=f"excel_{title}"):
+            if row[3].checkbox(
+                "Include in Excel",
+                value=excel_checked,
+                key=f"excel_{title}",
+                label_visibility="collapsed",
+            ):
                 st.session_state["export_excel_titles"].add(title)
             else:
                 st.session_state["export_excel_titles"].discard(title)
