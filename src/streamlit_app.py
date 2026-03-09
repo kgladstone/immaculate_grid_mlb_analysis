@@ -26,7 +26,7 @@ def main():
     images_df = load_image_metadata_df()
 
     data_tab, refresh_tab, analytics_tab, simulator_tab = st.tabs(
-        ["🗂 Data Viewer", "➕ Add / Update Data", "📊 Analytics", "🎮 Simulator"]
+        ["🗂 Data Viewer", "➕ Add / Update Data", "📊 Analytics", "🎮 Mini Games"]
     )
 
     with data_tab:

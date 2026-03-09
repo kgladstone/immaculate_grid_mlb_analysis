@@ -269,6 +269,102 @@ def _generate_random_cube_puzzle(
     return None
 
 
+def _sample_reverse_grid_puzzle(
+    selectable_codes: list[str],
+    player_franch_map: dict[str, set[str]],
+    player_lookup_df: pd.DataFrame,
+    max_attempts: int = 300,
+) -> dict[str, object] | None:
+    """
+    Generate a reverse immaculate grid puzzle:
+    - pick a solvable 3x3 team grid
+    - pick one valid player for each cell
+    - return 9 players (shuffled) plus the hidden solution mapping
+    """
+    if len(selectable_codes) < 6:
+        return None
+
+    id_to_name = (
+        player_lookup_df[["key_bbref", "full_name"]]
+        .dropna(subset=["key_bbref", "full_name"])
+        .drop_duplicates(subset=["key_bbref"])
+        .set_index("key_bbref")["full_name"]
+        .to_dict()
+    )
+
+    all_player_ids = [pid for pid, teams in player_franch_map.items() if teams]
+    if len(all_player_ids) < 9:
+        return None
+
+    def _candidate_ids(required: set[str]) -> list[str]:
+        return [pid for pid, teams in player_franch_map.items() if required.issubset(teams) and pid in id_to_name]
+
+    def _pick_unique(cells: list[tuple[str, str, list[str]]]) -> dict[tuple[str, str], str] | None:
+        # Backtracking over smallest candidate sets first.
+        ordered = sorted(cells, key=lambda c: len(c[2]))
+        used: set[str] = set()
+        out: dict[tuple[str, str], str] = {}
+
+        def rec(i: int) -> bool:
+            if i >= len(ordered):
+                return True
+            r, c, candidates = ordered[i]
+            pool = candidates[:]
+            random.shuffle(pool)
+            for pid in pool:
+                if pid in used:
+                    continue
+                used.add(pid)
+                out[(r, c)] = pid
+                if rec(i + 1):
+                    return True
+                used.remove(pid)
+                out.pop((r, c), None)
+            return False
+
+        return out if rec(0) else None
+
+    for _ in range(max_attempts):
+        picked = random.sample(selectable_codes, 6)
+        row_codes, col_codes = picked[:3], picked[3:]
+        cells = []
+        valid = True
+        for r in row_codes:
+            for c in col_codes:
+                req = {canonicalize_franchid(r), canonicalize_franchid(c)}
+                candidates = _candidate_ids(req)
+                if not candidates:
+                    valid = False
+                    break
+                cells.append((r, c, candidates))
+            if not valid:
+                break
+        if not valid:
+            continue
+
+        assignment = _pick_unique(cells)
+        if not assignment:
+            continue
+
+        solution_grid_ids = [[assignment[(r, c)] for c in col_codes] for r in row_codes]
+        solution_grid_names = [[id_to_name.get(pid, pid) for pid in row] for row in solution_grid_ids]
+        players = [pid for row in solution_grid_ids for pid in row]
+        player_cards = [{"player_id": pid, "player_name": id_to_name.get(pid, pid)} for pid in players]
+        random.shuffle(player_cards)
+
+        counts = _build_grid_counts(row_codes, col_codes, list(player_franch_map.values()))
+        return {
+            "row_codes": row_codes,
+            "col_codes": col_codes,
+            "counts": counts,
+            "player_cards": player_cards,
+            "solution_grid_ids": solution_grid_ids,
+            "solution_grid_names": solution_grid_names,
+        }
+
+    return None
+
+
 def _build_player_franchise_lookup(
     player_master: pd.DataFrame,
     team_master: pd.DataFrame,
@@ -605,7 +701,7 @@ def render_simulator_tab() -> None:
     required_files = ["teams.csv", "players.csv", "appearances.csv"]
     missing_files = [name for name in required_files if not (local_cache_dir / name).exists()]
     data_mgmt_tab, run_simulator_tab, instructions_tab = st.tabs(
-        ["Baseball Reference Data Management", "Run Simulator", "Instructions"]
+        ["Baseball Reference Data Management", "Mini Games", "Instructions"]
     )
 
     with data_mgmt_tab:
@@ -743,8 +839,8 @@ def render_simulator_tab() -> None:
             st.session_state["sim_team1"] = t1
             st.session_state["sim_team2"] = t2
 
-        sim_mode_tab, study_mode_tab, random_grid_tab, random_cube_tab = st.tabs(
-            ["Intersection Checker", "Study Guide", "Random Immaculate Grid", "Random Immaculate Cube"]
+        sim_mode_tab, study_mode_tab, random_grid_tab, random_cube_tab, reverse_grid_tab = st.tabs(
+            ["Intersection Checker", "Study Guide", "Random Immaculate Grid", "Random Immaculate Cube", "Reverse Immaculate Grid"]
         )
 
         with sim_mode_tab:
@@ -1015,11 +1111,55 @@ def render_simulator_tab() -> None:
                         st.warning("Cube not fully solved yet.")
                     st.dataframe(pd.DataFrame(result_rows), use_container_width=True)
 
+        with reverse_grid_tab:
+            st.markdown("### Reverse Immaculate Grid (Players -> Grid)")
+            st.caption(
+                "Generates 9 players that can fill a valid 3x3 team-team immaculate grid. "
+                "Use the player list to solve the hidden grid."
+            )
+            if st.button("Generate reverse 3x3 puzzle", key="sim_generate_reverse_grid"):
+                reverse_puzzle = _sample_reverse_grid_puzzle(
+                    selectable_team_codes,
+                    player_franch_map,
+                    player_lookup_df,
+                )
+                st.session_state["sim_reverse_grid_puzzle"] = reverse_puzzle
+
+            reverse_puzzle = st.session_state.get("sim_reverse_grid_puzzle")
+            if not reverse_puzzle:
+                st.info("Click generate to create a reverse puzzle with guaranteed solutions.")
+            else:
+                row_codes = reverse_puzzle["row_codes"]
+                col_codes = reverse_puzzle["col_codes"]
+                counts = reverse_puzzle["counts"]
+                cards_df = pd.DataFrame(reverse_puzzle["player_cards"])
+
+                st.write("Player bank (9 players)")
+                st.dataframe(cards_df, use_container_width=True)
+
+                st.write("Team grid to solve")
+                puzzle_df = pd.DataFrame(
+                    counts,
+                    index=[f"{team_code_to_name.get(c, c)} ({c})" for c in row_codes],
+                    columns=[f"{team_code_to_name.get(c, c)} ({c})" for c in col_codes],
+                )
+                st.dataframe(puzzle_df, use_container_width=True)
+                st.success("All 9 cells have at least one valid solution.")
+
+                if st.button("Reveal one valid solution", key="sim_reveal_reverse_grid"):
+                    solved_df = pd.DataFrame(
+                        reverse_puzzle["solution_grid_names"],
+                        index=[f"{team_code_to_name.get(c, c)} ({c})" for c in row_codes],
+                        columns=[f"{team_code_to_name.get(c, c)} ({c})" for c in col_codes],
+                    )
+                    st.write("One valid 3x3 fill")
+                    st.dataframe(solved_df, use_container_width=True)
+
     with instructions_tab:
         st.markdown(
             """
             ### What this does
-            The Simulator lets you test whether a player has appeared for both selected MLB franchises.
+            Mini Games let you test intersections, explore study guides, and play random/reverse immaculate puzzle modes.
 
             ### Required local data
             This tab reads three local cache files from `bin/baseball_cache/`:
@@ -1032,10 +1172,10 @@ def render_simulator_tab() -> None:
 
             ### How to use
             1. Open `Baseball Reference Data Management` and click **Build/Rebuild cache**.
-            2. Open `Run Simulator` and click **Start simulator**.
+            2. Open `Mini Games` and click **Start simulator**.
             3. Pick **Team A** and **Team B** (or use **Random teams**).
             4. Enter player first and last name.
-            5. Click **Check player** to verify if the player matches the intersection.
+            5. Click **Confirm player and check** to verify if the player matches the intersection.
 
             ### Notes
             - Name matching depends on the cached player records (spelling matters).

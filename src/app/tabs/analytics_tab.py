@@ -9,6 +9,8 @@ import pandas as pd
 import streamlit as st
 import textwrap
 from matplotlib.backends.backend_pdf import PdfPages
+from PIL import Image
+from PIL import UnidentifiedImageError
 
 import tempfile
 
@@ -27,6 +29,93 @@ EXCEL_REPORT_TITLES = {
     "Raw Results",
     "Raw Images Metadata",
 }
+
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+    _HEIF_ENABLED = True
+except Exception:
+    _HEIF_ENABLED = False
+
+
+def _safe_open_image(img_path: Path):
+    try:
+        with Image.open(img_path) as img:
+            return img.copy(), None
+    except UnidentifiedImageError as exc:
+        try:
+            with img_path.open("rb") as f:
+                header = f.read(16)
+            if b"ftypheic" in header or b"ftypheix" in header:
+                if _HEIF_ENABLED:
+                    with Image.open(img_path) as img:
+                        return img.copy(), None
+                return None, (
+                    "HEIC image detected but HEIC decoder is not installed. "
+                    "Install `pillow-heif` to render this file."
+                )
+        except Exception:
+            pass
+        return None, str(exc)
+    except Exception as exc:
+        return None, str(exc)
+
+
+def _render_responses_preview(responses: object) -> None:
+    ordered = [
+        "top_left", "top_center", "top_right",
+        "middle_left", "middle_center", "middle_right",
+        "bottom_left", "bottom_center", "bottom_right",
+    ]
+    if not isinstance(responses, dict):
+        st.caption("No parsed responses.")
+        return
+    lines = []
+    for row in (ordered[0:3], ordered[3:6], ordered[6:9]):
+        vals = [str(responses.get(pos, "")).strip() for pos in row]
+        lines.append(" | ".join(vals))
+    st.code("\n".join(lines), language="text")
+
+
+def _render_overlap_drilldown(ctx: dict, grid_number: int, submitter_1: str, submitter_2: str) -> None:
+    images_df = ctx.get("images_raw")
+    if images_df is None or images_df.empty:
+        st.warning("No image metadata available for drill-down.")
+        return
+
+    st.markdown(f"### Drill Down: Grid {grid_number} · {submitter_1} vs {submitter_2}")
+    pair = [submitter_1, submitter_2]
+    cols = st.columns(2)
+    for idx, submitter in enumerate(pair):
+        with cols[idx]:
+            st.markdown(f"**{submitter}**")
+            subset = images_df[
+                (pd.to_numeric(images_df.get("grid_number"), errors="coerce") == int(grid_number))
+                & (images_df.get("submitter").astype(str) == str(submitter))
+            ]
+            subset = subset[subset.get("responses").apply(lambda x: isinstance(x, dict))] if not subset.empty else subset
+            if subset.empty:
+                st.warning("No entry found for this submitter/grid.")
+                continue
+            row = subset.iloc[-1]
+
+            img_path = None
+            if pd.notna(row.get("path")) and str(row.get("path")).strip():
+                img_path = Path(str(row.get("path")))
+            elif pd.notna(row.get("image_filename")) and str(row.get("image_filename")).strip():
+                img_path = Path("images") / str(row.get("image_filename"))
+
+            if img_path and img_path.exists():
+                image_obj, err = _safe_open_image(img_path)
+                if image_obj is not None:
+                    st.image(image_obj, caption=img_path.name, use_container_width=True)
+                else:
+                    st.warning(f"Could not render image `{img_path.name}`: {err}")
+            else:
+                st.warning("Image file path is missing or not found.")
+            st.caption(f"Date: {row.get('date', '')}")
+            st.caption("Parsed responses")
+            _render_responses_preview(row.get("responses"))
 
 
 def _build_analytics_context(
@@ -140,7 +229,9 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
         return
     st.markdown("Prepare analytics data (typo correction is expensive; cached locally).")
     cache_path = None
-    fix_typos = st.checkbox("Apply typo correction to image responses (slow)", value=True)
+    fix_typos = st.checkbox("Apply typo correction to image responses (slow)", value=False)
+    if fix_typos:
+        st.caption("Typo correction can increase overlap metrics by normalizing OCR misspellings.")
     cache_path = _analytics_cache_path(fix_typos)
     cached_ctx = _load_analytics_cache(cache_path)
     cache_ready = cached_ctx is not None
@@ -263,7 +354,37 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
                 if output is None:
                     st.info("No data.")
                 elif isinstance(output, pd.DataFrame):
-                    st.dataframe(output.reset_index(drop=True))
+                    df_out = output.reset_index(drop=True)
+                    if selected_report.get("func") == "analyze_grid_overlap_submitters":
+                        df_show = df_out.copy()
+                        if {"grid_number", "submitter_1", "submitter_2"}.issubset(df_show.columns):
+                            st.dataframe(df_show, use_container_width=True)
+                            st.markdown("#### Drill Down")
+                            drill_idx = st.selectbox(
+                                "Select a row",
+                                options=list(df_show.index),
+                                format_func=lambda i: (
+                                    f"Grid {int(df_show.loc[i, 'grid_number'])} | "
+                                    f"{df_show.loc[i, 'submitter_1']} vs {df_show.loc[i, 'submitter_2']} | "
+                                    f"{df_show.loc[i, 'overlap_cells']}"
+                                ),
+                                key="overlap_drill_row_idx",
+                            )
+                            if st.button("Show Drill Down", key="overlap_show_drilldown"):
+                                st.session_state["overlap_drilldown_selection"] = int(drill_idx)
+                            selected_idx = st.session_state.get("overlap_drilldown_selection")
+                            if selected_idx is not None and selected_idx in df_show.index:
+                                sel = df_show.loc[selected_idx]
+                                _render_overlap_drilldown(
+                                    ctx,
+                                    int(sel["grid_number"]),
+                                    str(sel["submitter_1"]),
+                                    str(sel["submitter_2"]),
+                                )
+                        else:
+                            st.dataframe(df_show, use_container_width=True)
+                    else:
+                        st.dataframe(df_out)
                 else:
                     st.text(output)
             log_text = buf.getvalue()

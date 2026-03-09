@@ -8,6 +8,7 @@ import pandas as pd
 from pathlib import Path
 import streamlit as st
 from PIL import Image
+from PIL import UnidentifiedImageError
 
 from utils.constants import (
     GRID_PLAYERS,
@@ -18,6 +19,13 @@ from utils.constants import (
 )
 from utils.grid_utils import ImmaculateGridUtils
 from app.operations.data_loaders import resolve_path
+
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+    _HEIF_ENABLED = True
+except Exception:
+    _HEIF_ENABLED = False
 
 
 def _norm_grid_id(value) -> str:
@@ -209,6 +217,19 @@ def load_image_for_display(img_path: Path):
                 bottom = top + crop_size
                 img = img.crop((0, top, crop_size, bottom))
             return img.copy()
+    except UnidentifiedImageError:
+        # Some uploads are HEIC files mislabeled as .jpg.
+        try:
+            with img_path.open("rb") as f:
+                header = f.read(16)
+            if b"ftypheic" in header or b"ftypheix" in header:
+                if not _HEIF_ENABLED:
+                    return None
+                with Image.open(img_path) as img:
+                    return img.copy()
+        except Exception:
+            return None
+        return None
     except Exception:
         return None
 
@@ -440,7 +461,7 @@ def render_image_metadata(df: pd.DataFrame, source_path: Path, texts_df: pd.Data
                     if display_img is not None:
                         st.image(display_img, caption=filename, use_container_width=True)
                     else:
-                        st.image(str(img_path), caption=filename, use_container_width=True)
+                        st.warning(f"Could not render image file: {filename}")
                 else:
                     st.warning(f"Image not found for entry (filename={filename}).")
 
