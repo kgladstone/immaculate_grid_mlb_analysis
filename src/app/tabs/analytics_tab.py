@@ -395,6 +395,7 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
                 "dynamic_median_year_hist_view": "Median Year Histogram by User (Usage Weighted)",
                 "dynamic_war_hist_view": "Career WAR Distribution by User",
                 "dynamic_war_rarity_scatter_view": "Avg Career WAR vs Grid Rarity (Scatter)",
+                "dynamic_fudged_position_usage_view": "Fudged Position Usage",
             }
             dynamic_view = dynamic_func_to_view.get(selected_report.get("func"))
             if dynamic_view is not None:

@@ -20,6 +20,8 @@ bin/chat_snapshot/*
 # Ignore DS Store
 *.DS_Store
 
+*images_metadata*.json
+
 # Ignore sensitive JSON files
 config.json
 images_metadata.json

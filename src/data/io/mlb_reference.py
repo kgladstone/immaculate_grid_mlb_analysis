@@ -34,6 +34,7 @@ MANUAL_ALIASES = {
     # Add more as needed...
     "Kike Hernandez": "Enrique Hernandez",
     "Kiké Hernandez": "Enrique Hernandez",
+    "Joe Jackson": "Shoeless Joe Jackson",
 }
 
 def load_mlb_player_names():

@@ -12,8 +12,8 @@ import pandas as pd
 from rapidfuzz import process
 import streamlit as st
 
-from data.io.mlb_reference import clean_name, load_mlb_player_names
-from config.constants import MESSAGES_CSV_PATH
+from data.io.mlb_reference import MANUAL_ALIASES, clean_name, load_mlb_player_names
+from config.constants import MESSAGES_CSV_PATH, PROMPTS_CSV_PATH
 
 
 def _safe_lahman_table(table_name: str) -> pd.DataFrame:
@@ -59,6 +59,53 @@ def _normalize_grid_number(value) -> str:
     return text
 
 
+def _prompt_cell_parts(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (tuple, list)):
+        return [str(v) for v in value if str(v).strip()]
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        try:
+            parsed = ast.literal_eval(raw)
+            if isinstance(parsed, (tuple, list)):
+                return [str(v) for v in parsed if str(v).strip()]
+        except Exception:
+            pass
+        return [raw]
+    return [str(value)]
+
+
+def _prompt_text_to_position_code(prompt_text: str) -> str | None:
+    text = re.sub(r"\s+", " ", str(prompt_text).lower()).strip()
+    if not text:
+        return None
+
+    if "played center field" in text or text in {"cf", "center field"}:
+        return "CF"
+    if "played left field" in text or text in {"lf", "left field"}:
+        return "LF"
+    if "played right field" in text or text in {"rf", "right field"}:
+        return "RF"
+    if "played outfield" in text or text in {"of", "outfield"}:
+        return "OF"
+    if "played shortstop" in text or text in {"ss", "shortstop"}:
+        return "SS"
+    if "played third base" in text or text in {"3b", "third base"}:
+        return "3B"
+    if "played second base" in text or text in {"2b", "second base"}:
+        return "2B"
+    if "played first base" in text or text in {"1b", "first base"}:
+        return "1B"
+    if "played catcher" in text or text == "catcher":
+        return "C"
+    if "pitched" in text or " pitching" in text:
+        return "P"
+    return None
+
+
 @lru_cache(maxsize=1)
 def _known_player_names() -> tuple[str, ...]:
     names = sorted(load_mlb_player_names())
@@ -81,10 +128,22 @@ def _canonicalize_player_name_for_ui(raw_name: str) -> str:
     if not name:
         return ""
 
+    def _last_token(s: str) -> str:
+        parts = [p for p in str(s).strip().split() if p]
+        return parts[-1].lower() if parts else ""
+
+    if name in MANUAL_ALIASES:
+        return MANUAL_ALIASES[name]
+
     known = _known_player_names()
     known_set = set(known)
     if name in known_set:
         return name
+
+    # For non-exact matches, single-token inputs are too ambiguous for reliable fuzzy mapping
+    # (e.g., "Rodriguez", "Blue"), so treat them as unresolved.
+    if len(name.split()) < 2:
+        return ""
 
     # Common OCR artifact: leading stray character token (e.g., "Z Ian Happ" -> "Ian Happ")
     parts = name.split()
@@ -96,12 +155,18 @@ def _canonicalize_player_name_for_ui(raw_name: str) -> str:
 
     best = process.extractOne(name, known, score_cutoff=88)
     canonical = str(best[0]) if best else name
+    if best:
+        score = float(best[1]) if len(best) > 1 else 0.0
+        if _last_token(name) and _last_token(canonical) and _last_token(name) != _last_token(canonical):
+            # Block aggressive fuzzy jumps across different surnames.
+            if score < 97:
+                return name
     return canonical
 
 
 def _build_usage_df(images_df: pd.DataFrame) -> pd.DataFrame:
     if images_df.empty or "responses" not in images_df.columns or "submitter" not in images_df.columns:
-        return pd.DataFrame(columns=["submitter", "player", "submission_date", "grid_number"])
+        return pd.DataFrame(columns=["submitter", "player", "submission_date", "grid_number", "position_key"])
 
     rows = []
     for _, row in images_df.iterrows():
@@ -112,7 +177,7 @@ def _build_usage_df(images_df: pd.DataFrame) -> pd.DataFrame:
         grid_number = row.get("grid_number")
         if not submitter or not responses:
             continue
-        for val in responses.values():
+        for position_key, val in responses.items():
             player = _canonicalize_player_name_for_ui(str(val).strip())
             if player:
                 rows.append(
@@ -121,10 +186,11 @@ def _build_usage_df(images_df: pd.DataFrame) -> pd.DataFrame:
                         "player": player,
                         "submission_date": submission_date,
                         "grid_number": grid_number,
+                        "position_key": str(position_key),
                     }
                 )
     if not rows:
-        return pd.DataFrame(columns=["submitter", "player", "submission_date", "grid_number"])
+        return pd.DataFrame(columns=["submitter", "player", "submission_date", "grid_number", "position_key"])
     out = pd.DataFrame(rows)
     known_set = set(_known_player_names())
     # Only enforce canonical whitelist when we actually have a canonical list loaded.
@@ -265,6 +331,301 @@ def _load_grid_rarity_scores() -> pd.DataFrame:
         .rename(columns={"score": "rarity_score"})
     )
     return out
+
+
+@lru_cache(maxsize=1)
+def _load_prompt_position_lookup() -> dict[tuple[str, str], str]:
+    path = Path(PROMPTS_CSV_PATH)
+    if not path.exists():
+        return {}
+    try:
+        prompts = pd.read_csv(path, dtype=str).fillna("")
+    except Exception:
+        return {}
+    if "grid_id" not in prompts.columns:
+        return {}
+
+    pos_cols = [
+        "top_left",
+        "top_center",
+        "top_right",
+        "middle_left",
+        "middle_center",
+        "middle_right",
+        "bottom_left",
+        "bottom_center",
+        "bottom_right",
+    ]
+    existing_cols = [c for c in pos_cols if c in prompts.columns]
+    if not existing_cols:
+        return {}
+
+    lookup: dict[tuple[str, str], str] = {}
+    for _, row in prompts.iterrows():
+        grid_number = _normalize_grid_number(row.get("grid_id"))
+        if not grid_number:
+            continue
+        for pos in existing_cols:
+            parts = _prompt_cell_parts(row.get(pos))
+            mapped = None
+            for part in parts:
+                mapped = _prompt_text_to_position_code(part)
+                if mapped:
+                    break
+            if mapped:
+                lookup[(grid_number, pos)] = mapped
+    return lookup
+
+
+@lru_cache(maxsize=1)
+def _load_career_position_fraction_table(cache_dir: str = "bin/baseball_cache") -> pd.DataFrame:
+    cache_path = Path(cache_dir)
+    appearances_candidates = [cache_path / "appearances.csv", cache_path / "Appearances.csv"]
+    people_candidates = [cache_path / "People.csv", cache_path / "people.csv"]
+    appearances_path = next((p for p in appearances_candidates if p.exists()), None)
+    people_path = next((p for p in people_candidates if p.exists()), None)
+    if appearances_path is None or people_path is None:
+        return pd.DataFrame(columns=["player_norm", "position", "fractional_appearance", "total_games"])
+
+    try:
+        appearances = pd.read_csv(appearances_path, dtype=str)
+    except Exception:
+        return pd.DataFrame(columns=["player_norm", "position", "fractional_appearance", "total_games"])
+    if appearances.empty or "playerID" not in appearances.columns:
+        return pd.DataFrame(columns=["player_norm", "position", "fractional_appearance", "total_games"])
+
+    position_col_to_code = {
+        "G_p": "P",
+        "G_c": "C",
+        "G_1b": "1B",
+        "G_2b": "2B",
+        "G_3b": "3B",
+        "G_ss": "SS",
+        "G_lf": "LF",
+        "G_cf": "CF",
+        "G_rf": "RF",
+    }
+    available_position_cols = [c for c in position_col_to_code if c in appearances.columns]
+    if not available_position_cols:
+        return pd.DataFrame(columns=["player_norm", "position", "fractional_appearance", "total_games"])
+
+    num_cols = ["G_all"] + available_position_cols
+    for col in num_cols:
+        if col not in appearances.columns:
+            appearances[col] = 0
+        appearances[col] = pd.to_numeric(appearances[col], errors="coerce").fillna(0.0)
+
+    per_player = appearances.groupby("playerID", as_index=False)[num_cols].sum()
+    if per_player.empty:
+        return pd.DataFrame(columns=["player_norm", "position", "fractional_appearance", "total_games"])
+
+    per_player["total_games"] = pd.to_numeric(per_player["G_all"], errors="coerce").fillna(0.0)
+    fallback_games = per_player[available_position_cols].sum(axis=1)
+    per_player.loc[per_player["total_games"] <= 0, "total_games"] = fallback_games
+    per_player = per_player[per_player["total_games"] > 0].copy()
+    if per_player.empty:
+        return pd.DataFrame(columns=["player_norm", "position", "fractional_appearance", "total_games"])
+
+    long_frames = []
+    for col in available_position_cols:
+        code = position_col_to_code[col]
+        chunk = per_player[["playerID", "total_games", col]].copy()
+        chunk = chunk.rename(columns={col: "position_games"})
+        chunk["position"] = code
+        chunk["fractional_appearance"] = (
+            pd.to_numeric(chunk["position_games"], errors="coerce").fillna(0.0)
+            / pd.to_numeric(chunk["total_games"], errors="coerce").replace(0, np.nan)
+        )
+        long_frames.append(chunk[["playerID", "position", "fractional_appearance", "total_games"]])
+
+    # For OF prompts, use LF+CF+RF appearances explicitly (can exceed 1.0 by design).
+    outfield_cols = [c for c in ("G_lf", "G_cf", "G_rf") if c in per_player.columns]
+    if outfield_cols:
+        of_chunk = per_player[["playerID", "total_games"] + outfield_cols].copy()
+        of_chunk["position_games"] = of_chunk[outfield_cols].sum(axis=1)
+        of_chunk["position"] = "OF"
+        of_chunk["fractional_appearance"] = (
+            pd.to_numeric(of_chunk["position_games"], errors="coerce").fillna(0.0)
+            / pd.to_numeric(of_chunk["total_games"], errors="coerce").replace(0, np.nan)
+        )
+        long_frames.append(of_chunk[["playerID", "position", "fractional_appearance", "total_games"]])
+    frac_df = pd.concat(long_frames, ignore_index=True)
+
+    try:
+        people = pd.read_csv(people_path, dtype=str)
+    except Exception:
+        return pd.DataFrame(columns=["player_norm", "position", "fractional_appearance", "total_games"])
+    if people.empty:
+        return pd.DataFrame(columns=["player_norm", "position", "fractional_appearance", "total_games"])
+
+    id_col = next((c for c in people.columns if c.lower() in {"playerid", "key_bbref"}), None)
+    first_col = next((c for c in people.columns if c.lower() in {"namefirst", "name_first"}), None)
+    last_col = next((c for c in people.columns if c.lower() in {"namelast", "name_last"}), None)
+    if not id_col or not first_col or not last_col:
+        return pd.DataFrame(columns=["player_norm", "position", "fractional_appearance", "total_games"])
+
+    people = people[[id_col, first_col, last_col]].copy()
+    people.columns = ["playerID", "name_first", "name_last"]
+    people["playerID"] = people["playerID"].astype(str).str.strip()
+    people["name_first"] = people["name_first"].fillna("").astype(str).str.strip()
+    people["name_last"] = people["name_last"].fillna("").astype(str).str.strip()
+    people["player_name"] = (people["name_first"] + " " + people["name_last"]).str.strip()
+    people["player_norm"] = people["player_name"].map(clean_name).map(_normalize_name)
+    people = people[people["player_norm"] != ""]
+
+    merged = frac_df.merge(people[["playerID", "player_norm"]], on="playerID", how="inner")
+    if merged.empty:
+        return pd.DataFrame(columns=["player_norm", "position", "fractional_appearance", "total_games"])
+
+    merged["fractional_appearance"] = pd.to_numeric(merged["fractional_appearance"], errors="coerce")
+    merged["total_games"] = pd.to_numeric(merged["total_games"], errors="coerce")
+    merged = merged.dropna(subset=["fractional_appearance", "total_games"])
+    if merged.empty:
+        return pd.DataFrame(columns=["player_norm", "position", "fractional_appearance", "total_games"])
+
+    # Be generous with duplicate names: if multiple Lahman playerIDs map to one normalized
+    # name, keep the highest observed career fraction for each position.
+    merged = (
+        merged.groupby(["player_norm", "position"], as_index=False)
+        .agg(
+            fractional_appearance=("fractional_appearance", "max"),
+            total_games=("total_games", "max"),
+        )
+    )
+    return merged[["player_norm", "position", "fractional_appearance", "total_games"]]
+
+
+def _render_fudged_position_usage(usage_df: pd.DataFrame) -> None:
+    st.markdown("### Fudged Position Usage")
+    if usage_df.empty:
+        st.info("No parsed player responses available.")
+        return
+
+    if "grid_number" not in usage_df.columns or "position_key" not in usage_df.columns:
+        st.info("Usage data does not include grid/position metadata yet.")
+        return
+
+    prompt_lookup = _load_prompt_position_lookup()
+    if not prompt_lookup:
+        st.warning("No prompt position mapping available from `bin/csv/prompts.csv`.")
+        return
+
+    pos_frac = _load_career_position_fraction_table()
+    if pos_frac.empty:
+        st.warning("No career position fractions available. Rebuild `bin/baseball_cache/appearances.csv` and `People.csv`.")
+        return
+
+    work = usage_df.copy()
+    work["grid_number_norm"] = work["grid_number"].map(_normalize_grid_number)
+    work["position_key"] = work["position_key"].astype(str).str.strip()
+    work["prompt_position"] = work.apply(
+        lambda r: prompt_lookup.get((r.get("grid_number_norm", ""), r.get("position_key", ""))),
+        axis=1,
+    )
+    work = work.dropna(subset=["prompt_position", "player_norm", "submitter", "player"]).copy()
+    if work.empty:
+        st.info("No usages intersected with position-specific prompts.")
+        return
+
+    grouped = (
+        work.groupby(["submitter", "player", "player_norm", "prompt_position"], as_index=False)
+        .agg(
+            grid_uses=("grid_number_norm", "size"),
+            grid_ids=("grid_number_norm", lambda s: ", ".join(sorted({str(v) for v in s if str(v).strip()}, key=lambda x: (0, int(x)) if str(x).isdigit() else (1, str(x))))),
+        )
+        .rename(columns={"prompt_position": "position", "player": "mlb_player"})
+    )
+
+    merged = grouped.merge(
+        pos_frac[["player_norm", "position", "fractional_appearance"]],
+        on=["player_norm", "position"],
+        how="left",
+    )
+    mapped = int(merged["fractional_appearance"].notna().sum())
+    total = int(len(merged))
+    st.caption(f"Mapped career position fractions for {mapped:,}/{total:,} submitter-player-position rows.")
+
+    merged = merged.dropna(subset=["fractional_appearance"]).copy()
+    if merged.empty:
+        st.info("No submitter-player-position rows could be mapped to career position fractions.")
+        return
+
+    merged["fractional_appearance"] = pd.to_numeric(merged["fractional_appearance"], errors="coerce")
+    merged = merged.dropna(subset=["fractional_appearance"]).copy()
+    zero_frac = merged[merged["fractional_appearance"] <= 0].copy()
+    merged = merged[merged["fractional_appearance"] > 0].copy()
+    if not zero_frac.empty:
+        st.caption(
+            f"Excluded {len(zero_frac):,} row(s) with zero career fractional appearance from ranking (likely mismatches or edge cases)."
+        )
+    if merged.empty:
+        st.info("No rows remain after excluding zero-fraction appearances.")
+        return
+    merged["fudge_score"] = np.where(
+        merged["fractional_appearance"] > 0,
+        merged["grid_uses"] / merged["fractional_appearance"],
+        np.inf,
+    )
+    merged["fractional_appearance"] = merged["fractional_appearance"].round(4)
+    merged = merged.sort_values(
+        ["fudge_score", "grid_uses", "submitter", "mlb_player", "position"],
+        ascending=[False, False, True, True, True],
+    ).reset_index(drop=True)
+    merged["rank"] = np.arange(1, len(merged) + 1)
+
+    submitter_agg = (
+        merged.groupby("submitter", as_index=False)
+        .agg(
+            grid_uses_total=("grid_uses", "sum"),
+            unique_player_positions=("position", "size"),
+            submitter_fudge_score=("fudge_score", "sum"),
+            weighted_fractional_appearance=(
+                "fractional_appearance",
+                lambda s: np.average(s, weights=merged.loc[s.index, "grid_uses"]) if len(s) else np.nan,
+            ),
+        )
+    )
+    submitter_agg["submitter_fudge_score"] = pd.to_numeric(
+        submitter_agg["submitter_fudge_score"], errors="coerce"
+    ).round(2)
+    submitter_agg["weighted_fractional_appearance"] = pd.to_numeric(
+        submitter_agg["weighted_fractional_appearance"], errors="coerce"
+    ).round(4)
+    submitter_agg = submitter_agg.sort_values(
+        ["submitter_fudge_score", "grid_uses_total", "submitter"],
+        ascending=[False, False, True],
+    ).reset_index(drop=True)
+    submitter_agg["cheat_rank"] = np.arange(1, len(submitter_agg) + 1)
+    submitter_agg["saint_rank"] = (
+        submitter_agg["submitter_fudge_score"].rank(method="min", ascending=True).astype(int)
+    )
+
+    st.markdown("#### Submitter Rollup")
+    st.caption(
+        "`cheat_rank` ranks higher aggregate fudge first; `saint_rank` ranks lower aggregate fudge first."
+    )
+    st.dataframe(
+        submitter_agg[
+            [
+                "cheat_rank",
+                "saint_rank",
+                "submitter",
+                "submitter_fudge_score",
+                "weighted_fractional_appearance",
+                "grid_uses_total",
+                "unique_player_positions",
+            ]
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.markdown("#### Submitter | Player | Position Detail")
+    st.dataframe(
+        merged[["rank", "submitter", "mlb_player", "position", "fractional_appearance", "grid_uses", "grid_ids", "fudge_score"]],
+        use_container_width=True,
+        hide_index=True,
+    )
 
 
 def _render_player_search_chart(usage_df: pd.DataFrame) -> None:
@@ -723,6 +1084,7 @@ def render_player_data_analytics(
         "Median Year Histogram by User (Usage Weighted)",
         "Career WAR Distribution by User",
         "Avg Career WAR vs Grid Rarity (Scatter)",
+        "Fudged Position Usage",
     ]
     if forced_analysis and forced_analysis in analysis_options:
         selected_analysis = forced_analysis
@@ -746,3 +1108,5 @@ def render_player_data_analytics(
         _render_war_histogram(usage_df, war_lookup)
     elif selected_analysis == "Avg Career WAR vs Grid Rarity (Scatter)":
         _render_war_vs_rarity_scatter(usage_df, war_lookup)
+    elif selected_analysis == "Fudged Position Usage":
+        _render_fudged_position_usage(usage_df)

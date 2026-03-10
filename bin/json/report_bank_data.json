@@ -488,6 +488,16 @@
     "category": "Real Player Data"
   },
   {
+    "title": "Fudged Position Usage",
+    "func": "dynamic_fudged_position_usage_view",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images"
+    ],
+    "category": "Real Player Data"
+  },
+  {
     "title": "Raw Prompts",
     "func": "raw_prompts",
     "needs_person": false,

@@ -1305,21 +1305,26 @@ class ImageProcessor():
                 # Deal with unwanted newline characters
                 # ocr_text = self.split_and_get_valid_word(ocr_text)
 
-                # Remove all characters until the first uppercase letter or accented uppercase letter
-                ocr_text = re.sub(r'^[^A-ZÀ-Ö]*', '', ocr_text).strip()
+                # Remove leading noise, but keep lowercase-leading names (e.g., "ivan Rodriguez").
+                ocr_text = re.sub(r'^[^A-Za-zÀ-ÖØ-öø-ÿ]*', '', ocr_text).strip()
 
                 # Remove all characters at the end that are not letters or accented characters
                 ocr_text = re.sub(r'[^A-Za-zÀ-ÖØ-öø-ÿ]+$', '', ocr_text).strip()
+                ocr_text = re.sub(r'\s+', ' ', ocr_text).strip()
+
+                # OCR often lowercases the first character; normalize to sentence-case start.
+                if len(ocr_text) > 0 and bool(re.match(r"^[a-zà-öø-ÿ]", ocr_text)):
+                    ocr_text = ocr_text[0].upper() + ocr_text[1:]
 
                 # If ocr_text is too short, then coerce to empty string
                 if len(ocr_text) < 3:
                     print(f"Warning: Name string {ocr_text} is too short")
                     ocr_text = ""
 
-                # If ocr_text is not a proper word, then return None
-                if len(ocr_text) > 0 and not bool(re.match(r"^[A-Z]", ocr_text)):
+                # If ocr_text still does not begin with a letter, drop that cell instead of aborting the whole image.
+                if len(ocr_text) > 0 and not bool(re.match(r"^[A-Za-zÀ-ÖØ-öø-ÿ]", ocr_text)):
                     print(f"Warning: Improper name... {ocr_text}")
-                    return None
+                    ocr_text = ""
                 
             # Save the OCR text to the dictionary
             cell_texts[(row, col)] = ocr_text

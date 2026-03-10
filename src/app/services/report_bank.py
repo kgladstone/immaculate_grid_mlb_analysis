@@ -83,6 +83,7 @@ FUNCTIONS: Dict[str, Callable] = {
     "dynamic_median_year_hist_view": lambda images: images,
     "dynamic_war_hist_view": lambda images: images,
     "dynamic_war_rarity_scatter_view": lambda images: images,
+    "dynamic_fudged_position_usage_view": lambda images: images,
     "dynamic_median_year_hist_unique_view": lambda images: images,
     "raw_prompts": lambda prompts: prompts,
     "raw_results": lambda texts_raw: texts_raw,
