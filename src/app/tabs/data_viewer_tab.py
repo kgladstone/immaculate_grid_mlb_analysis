@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 from typing import List
 
 import pandas as pd
@@ -196,15 +197,34 @@ def extract_player_positions(responses) -> List[tuple]:
     if isinstance(parsed, dict):
         for key, label in label_order:
             val = parsed.get(key)
-            positions.append((label, str(val) if val else "<Empty>"))
+            positions.append((label, _clean_display_player_name(val)))
     elif isinstance(parsed, list):
         for idx, label in enumerate(label_order):
             if idx < len(parsed):
                 val = parsed[idx]
-                positions.append((label[1], str(val) if val else "<Empty>"))
+                positions.append((label[1], _clean_display_player_name(val)))
             else:
                 positions.append((label[1], "<Empty>"))
     return positions
+
+
+def _clean_display_player_name(value) -> str:
+    """Normalize OCR/parser noise for UI display only; do not persist changes."""
+    if value is None:
+        return "<Empty>"
+    text = str(value).strip()
+    if not text:
+        return "<Empty>"
+
+    # Trim simple punctuation artifacts around names.
+    text = re.sub(r"^[\s\-\.,;:!?]+", "", text)
+    text = re.sub(r"[\s\-\.,;:!?]+$", "", text)
+
+    # Drop single-letter OCR artifacts like "Z Justin Turner" or "Justin Turner Z".
+    text = re.sub(r"^[A-Za-z]\s+(?=[A-Za-z])", "", text)
+    text = re.sub(r"(?<=[A-Za-z])\s+[A-Za-z]$", "", text)
+
+    return text or "<Empty>"
 
 
 def load_image_for_display(img_path: Path):

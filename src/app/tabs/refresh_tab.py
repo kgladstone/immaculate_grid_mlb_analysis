@@ -1665,7 +1665,10 @@ def render_refresh_tab() -> None:
                     key="edit_data_meta_source_hash",
                 )
 
-            if st.button("Save parser metadata edits", key="edit_data_save_meta"):
+            def _save_parser_meta_row(
+                responses_payload: dict,
+                parser_message_payload: str | None = None,
+            ) -> tuple[bool, str]:
                 meta_path = resolve_path(IMAGES_METADATA_PATH)
                 if meta_path.exists():
                     with meta_path.open() as f:
@@ -1675,31 +1678,93 @@ def render_refresh_tab() -> None:
                     meta_df = pd.DataFrame()
 
                 if meta_df.empty:
-                    st.error("images_metadata.json is empty or missing.")
+                    return False, "images_metadata.json is empty or missing."
+
+                mask = (
+                    meta_df.get("submitter", pd.Series(dtype=str)).astype(str).str.strip() == str(edit_submitter).strip()
+                ) & (
+                    meta_df.get("grid_number", pd.Series(dtype=str)).map(_norm_grid_id) == edit_grid_norm
+                )
+                if not mask.any():
+                    return False, "Could not find matching parser metadata row to update."
+
+                meta_df.loc[mask, "responses"] = [responses_payload]
+                meta_df.loc[mask, "date"] = str(edited_meta_date).strip()
+                meta_df.loc[mask, "image_date"] = str(edited_meta_image_date).strip()
+                if parser_message_payload is None:
+                    meta_df.loc[mask, "parser_message"] = str(edited_meta_parser_message).strip()
                 else:
-                    mask = (
-                        meta_df.get("submitter", pd.Series(dtype=str)).astype(str).str.strip() == str(edit_submitter).strip()
-                    ) & (
-                        meta_df.get("grid_number", pd.Series(dtype=str)).map(_norm_grid_id) == edit_grid_norm
+                    meta_df.loc[mask, "parser_message"] = str(parser_message_payload).strip()
+                meta_df.loc[mask, "image_filename"] = str(edited_meta_filename).strip()
+                meta_df.loc[mask, "path"] = str(edited_meta_path).strip()
+                if "source_hash" not in meta_df.columns:
+                    meta_df["source_hash"] = ""
+                meta_df.loc[mask, "source_hash"] = str(edited_meta_source_hash).strip()
+                meta_df.to_json(meta_path, orient="records", indent=4)
+                st.session_state["edit_data_meta_row"] = meta_df.loc[mask].iloc[0].to_dict()
+                st.cache_data.clear()
+                ok, msg = _rebuild_image_metadata_derivatives()
+                if ok:
+                    st.caption(msg)
+                else:
+                    st.warning(f"Saved parser metadata, but failed to rebuild derived metadata CSVs: {msg}")
+                return True, ""
+
+            col_save_meta, col_fuzzy_meta = st.columns(2)
+            if col_save_meta.button("Save parser metadata edits", key="edit_data_save_meta"):
+                ok, msg = _save_parser_meta_row(edited_responses)
+                if ok:
+                    st.success(f"Saved parser metadata edits for {edit_submitter}, grid {edit_grid_norm}.")
+                else:
+                    st.error(msg)
+
+            if col_fuzzy_meta.button("Apply fuzzy filter to this grid", key="edit_data_fuzzy_grid"):
+                try:
+                    prompts_loader = PromptsLoader(str(PROMPTS_CSV_PATH))
+                    prompts_loader.load().validate()
+                    prompts_df = prompts_loader.get_data()
+
+                    one_row = pd.DataFrame(
+                        [
+                            {
+                                "submitter": str(edit_submitter),
+                                "grid_number": str(edit_grid_norm),
+                                "date": str(edited_meta_date).strip(),
+                                "image_filename": str(edited_meta_filename).strip(),
+                                "responses": edited_responses,
+                            }
+                        ]
                     )
-                    if not mask.any():
-                        st.error("Could not find matching parser metadata row to update.")
-                    else:
-                        meta_df.loc[mask, "responses"] = [edited_responses]
-                        meta_df.loc[mask, "date"] = str(edited_meta_date).strip()
-                        meta_df.loc[mask, "image_date"] = str(edited_meta_image_date).strip()
-                        meta_df.loc[mask, "parser_message"] = str(edited_meta_parser_message).strip()
-                        meta_df.loc[mask, "image_filename"] = str(edited_meta_filename).strip()
-                        meta_df.loc[mask, "path"] = str(edited_meta_path).strip()
-                        if "source_hash" not in meta_df.columns:
-                            meta_df["source_hash"] = ""
-                        meta_df.loc[mask, "source_hash"] = str(edited_meta_source_hash).strip()
-                        meta_df.to_json(meta_path, orient="records", indent=4)
-                        st.session_state["edit_data_meta_row"] = meta_df.loc[mask].iloc[0].to_dict()
-                        st.cache_data.clear()
-                        ok, msg = _rebuild_image_metadata_derivatives()
-                        if ok:
-                            st.caption(msg)
-                        else:
-                            st.warning(f"Saved parser metadata, but failed to rebuild derived metadata CSVs: {msg}")
-                        st.success(f"Saved parser metadata edits for {edit_submitter}, grid {edit_grid_norm}.")
+                    disagg = create_disaggregated_results_df(one_row, prompts_df)
+                    disagg, typo_log = correct_typos_with_fuzzy_matching(
+                        disagg,
+                        "response",
+                        verbose=False,
+                    )
+                    corrected = dict(edited_responses)
+                    if not disagg.empty and {"position", "response"}.issubset(disagg.columns):
+                        for _, r in disagg.iterrows():
+                            pos = str(r.get("position", "")).strip()
+                            if pos:
+                                corrected[pos] = str(r.get("response", "") or "").strip()
+                    change_count = 0
+                    for key in corrected.keys():
+                        if str(edited_responses.get(key, "")).strip() != str(corrected.get(key, "")).strip():
+                            change_count += 1
+                    st.success(
+                        f"Applied fuzzy filter preview to {edit_submitter}, grid {edit_grid_norm}. "
+                        f"Detected changes: {change_count}."
+                    )
+                    st.caption("Preview only: parser metadata was not modified.")
+                    preview_rows = []
+                    for pos in pos_order:
+                        preview_rows.append(
+                            {
+                                "position": pos,
+                                "original": str(edited_responses.get(pos, "") or "").strip(),
+                                "fuzzy_preview": str(corrected.get(pos, "") or "").strip(),
+                            }
+                        )
+                    st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
+                except Exception as exc:
+                    st.error(f"Failed to apply fuzzy filter for this grid: {exc}")
