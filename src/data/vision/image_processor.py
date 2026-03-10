@@ -45,6 +45,7 @@ class ImageProcessor():
         else:
             self.attachments_cache_root = Path(self.db_path).parent / "Attachments"
         self._attachments_index = None
+        self.last_inaccessible_attachments: list[str] = []
 
     @staticmethod
     def _file_sha256(path: str | Path) -> str:
@@ -58,6 +59,7 @@ class ImageProcessor():
         """
         Query the attachments database
         """
+        self.last_inaccessible_attachments = []
         
         # Map phone numbers to player names
         phone_to_player = dict()
@@ -116,10 +118,16 @@ class ImageProcessor():
 
         cleaned_results = []
 
+        skipped_unreadable = 0
         for filename, transfer_name, mime_type, message_date, sender_phone in results:
             path = None
             if filename:
-                path = self._resolve_attachment_path(filename)
+                try:
+                    path = self._resolve_attachment_path(filename)
+                except FileNotFoundError as exc:
+                    skipped_unreadable += 1
+                    self.last_inaccessible_attachments.append(str(exc))
+                    continue
             elif transfer_name:
                 path = self._find_attachment_by_name(transfer_name)
             if not path:
@@ -132,6 +140,12 @@ class ImageProcessor():
                 "submitter": submitter,
                 "image_date": image_date
                 })
+
+        if skipped_unreadable > 0:
+            print(
+                f"Skipped {skipped_unreadable} unreadable attachment(s) during image fetch "
+                f"(showing first: {self.last_inaccessible_attachments[0] if self.last_inaccessible_attachments else 'n/a'})."
+            )
 
         return pd.DataFrame(
             cleaned_results,
@@ -342,7 +356,26 @@ class ImageProcessor():
         total = len(results)
         # Process each attachment
         for idx, (_, result) in enumerate(results.iterrows(), start=1):
-            path = self._resolve_attachment_path(result['path'])
+            try:
+                path = self._resolve_attachment_path(result['path'])
+            except FileNotFoundError as exc:
+                print(f"Skipping unreadable attachment during processing: {exc}")
+                if progress_callback:
+                    try:
+                        progress_callback(
+                            idx,
+                            total,
+                            current_date=result.get("image_date"),
+                            current_submitter=result.get("submitter"),
+                            stage="skipped_unreadable_attachment",
+                            image_path=str(result.get("path")),
+                            image_done=True,
+                            result_message=str(exc),
+                            parsed_responses=None,
+                        )
+                    except Exception:
+                        pass
+                continue
             submitter = result['submitter']
             image_date = result['image_date']
             mime_type = result['mime_type']

@@ -360,6 +360,11 @@ def refresh_selected_data(
             preview_df = image_processor._fetch_images()
             if "image_date" not in preview_df.columns:
                 preview_df = pd.DataFrame(columns=["path", "submitter", "image_date"])
+            diagnostics["Images_unreadable_attachments_skipped"] = int(len(getattr(image_processor, "last_inaccessible_attachments", [])))
+            if diagnostics["Images_unreadable_attachments_skipped"] > 0:
+                diagnostics["Images_unreadable_attachments_sample"] = (
+                    getattr(image_processor, "last_inaccessible_attachments", [])[:3]
+                )
             preview_df["image_date"] = pd.to_datetime(preview_df["image_date"]).dt.date
             if image_date_range:
                 start_date, end_date = image_date_range
@@ -421,8 +426,8 @@ def refresh_selected_data(
 
 def render_refresh_tab() -> None:
     st.subheader("Add / Update Data")
-    main_tab, upload_tab, assign_tab, manual_tab = st.tabs(
-        ["🔄 Refresh Data", "📤 Upload & Register Image", "👤 Assign Users", "✍️ Manual Data Entry"]
+    main_tab, upload_tab, assign_tab, manual_tab, edit_tab = st.tabs(
+        ["🔄 Refresh Data", "📤 Upload & Register Image", "👤 Assign Users", "✍️ Manual Data Entry", "🛠️ Edit Data"]
     )
 
     # --- Main refresh tab ---
@@ -1173,6 +1178,19 @@ def render_refresh_tab() -> None:
                 use_container_width=False,
                 key="manual_matrix_editor",
             )
+            st.markdown("**Responses (saved to parser metadata)**")
+            pos_order = [
+                "top_left", "top_center", "top_right",
+                "middle_left", "middle_center", "middle_right",
+                "bottom_left", "bottom_center", "bottom_right",
+            ]
+            response_cols = st.columns(3)
+            for idx, pos in enumerate(pos_order):
+                with response_cols[idx % 3]:
+                    st.text_input(
+                        pos.replace("_", " ").title(),
+                        key=f"manual_resp_{pos}",
+                    )
             st.number_input("Score", min_value=0, step=1, key="manual_score")
             col_submit, col_reset = st.columns(2)
             add_clicked = col_submit.form_submit_button("Add entry to text_message_responses.csv")
@@ -1196,7 +1214,68 @@ def render_refresh_tab() -> None:
                 return None
             return (results_df["name"] == name) & (results_df["grid_number"] == grid_number)
 
-        def _write_manual_entry(entry: dict, overwrite: bool) -> None:
+        def _upsert_manual_parser_metadata(entry: dict, responses: dict) -> tuple[bool, str]:
+            try:
+                meta_path = resolve_path(IMAGES_METADATA_PATH)
+                if meta_path.exists():
+                    try:
+                        with meta_path.open() as f:
+                            raw = json.load(f)
+                    except Exception:
+                        raw = []
+                else:
+                    raw = []
+
+                meta_df = pd.DataFrame(raw if isinstance(raw, list) else [])
+                if meta_df.empty:
+                    meta_df = pd.DataFrame(
+                        columns=[
+                            "path",
+                            "submitter",
+                            "grid_number",
+                            "image_date",
+                            "parser_message",
+                            "image_filename",
+                            "date",
+                            "responses",
+                            "source_hash",
+                        ]
+                    )
+                for col in ["path", "submitter", "grid_number", "image_date", "parser_message", "image_filename", "date", "responses", "source_hash"]:
+                    if col not in meta_df.columns:
+                        meta_df[col] = ""
+
+                mask = (
+                    meta_df["submitter"].astype(str).str.strip() == str(entry["name"]).strip()
+                ) & (
+                    meta_df["grid_number"].map(_norm_grid_id) == _norm_grid_id(entry["grid_number"])
+                )
+
+                if mask.any():
+                    meta_df.loc[mask, "responses"] = [responses]
+                    meta_df.loc[mask, "date"] = str(entry["date"])
+                    meta_df.loc[mask, "image_date"] = str(entry["date"])
+                    meta_df.loc[mask, "parser_message"] = "manually entered"
+                else:
+                    new_row = {
+                        "path": "",
+                        "submitter": str(entry["name"]),
+                        "grid_number": int(entry["grid_number"]),
+                        "image_date": str(entry["date"]),
+                        "parser_message": "manually entered",
+                        "image_filename": "",
+                        "date": str(entry["date"]),
+                        "responses": responses,
+                        "source_hash": "",
+                    }
+                    meta_df = pd.concat([meta_df, pd.DataFrame([new_row])], ignore_index=True)
+
+                meta_df.to_json(meta_path, orient="records", indent=4)
+                return True, "parser metadata saved"
+            except Exception as exc:
+                return False, str(exc)
+
+        def _write_manual_entry(entry: dict, overwrite: bool, responses: dict) -> None:
             if results_path.exists():
                 results_df = pd.read_csv(results_path)
             else:
@@ -1208,7 +1287,17 @@ def render_refresh_tab() -> None:
             entry_df = pd.DataFrame([entry])
             results_df = pd.concat([results_df, entry_df], ignore_index=True)
             results_df.to_csv(results_path, index=False)
+            ok_meta, msg_meta = _upsert_manual_parser_metadata(entry, responses)
+            ok_deriv, msg_deriv = _rebuild_image_metadata_derivatives()
             st.success(f"Added manual entry for {entry['name']} (grid {entry['grid_number']}).")
+            if ok_meta:
+                st.caption("Parser metadata updated with `parser_message = manually entered`.")
+            else:
+                st.warning(f"Text result saved, but parser metadata update failed: {msg_meta}")
+            if ok_deriv:
+                st.caption(msg_deriv)
+            else:
+                st.warning(f"Saved manual data, but failed to rebuild images metadata derivatives: {msg_deriv}")
             st.cache_data.clear()
             st.rerun()
 
@@ -1218,18 +1307,32 @@ def render_refresh_tab() -> None:
             col_confirm, col_cancel = st.columns(2)
             with col_confirm:
                 if st.button("Confirm overwrite", key="manual_confirm_overwrite"):
-                    _write_manual_entry(pending_entry, overwrite=True)
+                    pending_responses = st.session_state.get("manual_pending_responses") or {}
+                    _write_manual_entry(pending_entry, overwrite=True, responses=pending_responses)
                     st.session_state.pop("manual_overwrite_pending", None)
                     st.session_state.pop("manual_pending_entry", None)
+                    st.session_state.pop("manual_pending_responses", None)
             with col_cancel:
                 if st.button("Cancel", key="manual_cancel_overwrite"):
                     st.session_state.pop("manual_overwrite_pending", None)
                     st.session_state.pop("manual_pending_entry", None)
+                    st.session_state.pop("manual_pending_responses", None)
 
         if add_clicked:
             name = st.session_state.get("manual_player")
             grid_number = int(st.session_state.get("manual_grid_number", 0))
             score = int(st.session_state.get("manual_score", 0))
+            responses = {
+                "top_left": str(st.session_state.get("manual_resp_top_left", "") or "").strip(),
+                "top_center": str(st.session_state.get("manual_resp_top_center", "") or "").strip(),
+                "top_right": str(st.session_state.get("manual_resp_top_right", "") or "").strip(),
+                "middle_left": str(st.session_state.get("manual_resp_middle_left", "") or "").strip(),
+                "middle_center": str(st.session_state.get("manual_resp_middle_center", "") or "").strip(),
+                "middle_right": str(st.session_state.get("manual_resp_middle_right", "") or "").strip(),
+                "bottom_left": str(st.session_state.get("manual_resp_bottom_left", "") or "").strip(),
+                "bottom_center": str(st.session_state.get("manual_resp_bottom_center", "") or "").strip(),
+                "bottom_right": str(st.session_state.get("manual_resp_bottom_right", "") or "").strip(),
+            }
             if st.session_state.get("manual_date_auto"):
                 date_str = ImmaculateGridUtils._fixed_date_from_grid_number(grid_number)
             else:
@@ -1251,7 +1354,326 @@ def render_refresh_tab() -> None:
             mask = _existing_entry_mask(results_df, name, grid_number)
             if mask is not None and mask.any():
                 st.session_state["manual_pending_entry"] = entry
+                st.session_state["manual_pending_responses"] = responses
                 st.session_state["manual_overwrite_pending"] = True
                 st.rerun()
             else:
-                _write_manual_entry(entry, overwrite=False)
+                _write_manual_entry(entry, overwrite=False, responses=responses)
+
+    # --- Edit data tab ---
+    with edit_tab:
+        st.write("Look up an existing grid + submitter and edit both text-result matrix data and parser metadata.")
+        st.caption(
+            f"Text results source: `{resolve_path(MESSAGES_CSV_PATH)}` | "
+            f"Parser metadata source: `{resolve_path(IMAGES_METADATA_PATH)}`"
+        )
+
+        available_grids: set[str] = set()
+        results_path = resolve_path(MESSAGES_CSV_PATH)
+        if results_path.exists():
+            try:
+                results_seed = pd.read_csv(results_path, usecols=["name", "grid_number"], dtype=str)
+            except Exception:
+                results_seed = pd.DataFrame()
+            if not results_seed.empty and {"name", "grid_number"}.issubset(results_seed.columns):
+                mask = results_seed["name"].astype(str).str.strip() == st.session_state.get("edit_data_submitter", "")
+                available_grids.update(
+                    results_seed.loc[mask, "grid_number"].map(_norm_grid_id).dropna().astype(str).tolist()
+                )
+        try:
+            meta_seed = load_image_metadata_df().copy()
+        except Exception:
+            meta_seed = pd.DataFrame()
+        if not meta_seed.empty and {"submitter", "grid_number"}.issubset(meta_seed.columns):
+            mask = meta_seed["submitter"].astype(str).str.strip() == st.session_state.get("edit_data_submitter", "")
+            available_grids.update(
+                meta_seed.loc[mask, "grid_number"].map(_norm_grid_id).dropna().astype(str).tolist()
+            )
+
+        def _grid_sort_key(v: str):
+            try:
+                return (0, int(str(v)))
+            except Exception:
+                return (1, str(v))
+
+        available_grid_options = sorted(available_grids, key=_grid_sort_key)
+        col_lookup_a, col_lookup_b = st.columns(2)
+        with col_lookup_a:
+            edit_submitter = st.selectbox(
+                "Submitter",
+                options=sorted(GRID_PLAYERS.keys()),
+                key="edit_data_submitter",
+            )
+        # Refresh options now that submitter selection is resolved for this rerun.
+        if edit_submitter:
+            available_grids = set()
+            if results_path.exists():
+                try:
+                    results_seed = pd.read_csv(results_path, usecols=["name", "grid_number"], dtype=str)
+                except Exception:
+                    results_seed = pd.DataFrame()
+                if not results_seed.empty:
+                    mask = results_seed["name"].astype(str).str.strip() == str(edit_submitter).strip()
+                    available_grids.update(
+                        results_seed.loc[mask, "grid_number"].map(_norm_grid_id).dropna().astype(str).tolist()
+                    )
+            if not meta_seed.empty:
+                mask = meta_seed["submitter"].astype(str).str.strip() == str(edit_submitter).strip()
+                available_grids.update(
+                    meta_seed.loc[mask, "grid_number"].map(_norm_grid_id).dropna().astype(str).tolist()
+                )
+            available_grid_options = sorted(available_grids, key=_grid_sort_key)
+        if available_grid_options and "edit_data_grid_number" in st.session_state:
+            current_val = _norm_grid_id(st.session_state.get("edit_data_grid_number"))
+            if current_val not in available_grid_options:
+                st.session_state["edit_data_grid_number"] = available_grid_options[0]
+        with col_lookup_b:
+            edit_grid = st.selectbox(
+                "Grid number",
+                options=available_grid_options,
+                key="edit_data_grid_number",
+            )
+
+        if not available_grid_options:
+            st.info("No available grids found for the selected submitter.")
+            return
+
+        edit_grid_norm = _norm_grid_id(edit_grid)
+        lookup_clicked = st.button("Lookup entry", key="edit_data_lookup")
+        lookup_key = f"{edit_submitter}::{edit_grid_norm}"
+
+        if lookup_clicked:
+            # Lookup text-message results row.
+            results_path = resolve_path(MESSAGES_CSV_PATH)
+            if results_path.exists():
+                try:
+                    results_df = pd.read_csv(results_path)
+                except Exception:
+                    results_df = pd.DataFrame()
+            else:
+                results_df = pd.DataFrame()
+
+            text_row = None
+            if not results_df.empty and {"name", "grid_number"}.issubset(results_df.columns):
+                mask = (
+                    results_df["name"].astype(str).str.strip() == str(edit_submitter).strip()
+                ) & (
+                    results_df["grid_number"].map(_norm_grid_id) == edit_grid_norm
+                )
+                matches = results_df[mask]
+                if not matches.empty:
+                    text_row = matches.iloc[0].to_dict()
+
+            # Lookup parser metadata row.
+            try:
+                meta_df = load_image_metadata_df().copy()
+            except Exception:
+                meta_df = pd.DataFrame()
+
+            meta_row = None
+            if not meta_df.empty and {"submitter", "grid_number"}.issubset(meta_df.columns):
+                mask = (
+                    meta_df["submitter"].astype(str).str.strip() == str(edit_submitter).strip()
+                ) & (
+                    meta_df["grid_number"].map(_norm_grid_id) == edit_grid_norm
+                )
+                matches = meta_df[mask]
+                if not matches.empty:
+                    meta_row = matches.iloc[0].to_dict()
+
+            st.session_state["edit_data_lookup_key"] = lookup_key
+            st.session_state["edit_data_text_row"] = text_row
+            st.session_state["edit_data_meta_row"] = meta_row
+
+            if text_row is None and meta_row is None:
+                st.warning("No matching text-result or parser metadata row found.")
+
+        active_lookup_key = st.session_state.get("edit_data_lookup_key")
+        text_row = st.session_state.get("edit_data_text_row")
+        meta_row = st.session_state.get("edit_data_meta_row")
+        if active_lookup_key != lookup_key:
+            st.info("Run lookup to load editable values for the selected submitter + grid.")
+            return
+
+        st.markdown("### Edit Text Result (Matrix / Score / Date)")
+        if not text_row:
+            st.info("No text_result row found for this submitter/grid.")
+        else:
+            raw_matrix = text_row.get("matrix")
+            parsed_matrix = [[False, False, False], [False, False, False], [False, False, False]]
+            try:
+                candidate = raw_matrix
+                if isinstance(candidate, str):
+                    candidate = json.loads(candidate)
+                if isinstance(candidate, list) and len(candidate) == 3 and all(isinstance(r, list) and len(r) == 3 for r in candidate):
+                    parsed_matrix = [[bool(v) for v in r] for r in candidate]
+            except Exception:
+                parsed_matrix = [[False, False, False], [False, False, False], [False, False, False]]
+
+            matrix_df = pd.DataFrame(parsed_matrix, columns=["Left", "Center", "Right"], index=["Top", "Middle", "Bottom"])
+            edited_matrix_df = st.data_editor(
+                matrix_df,
+                num_rows="fixed",
+                use_container_width=False,
+                key="edit_data_matrix_editor",
+            )
+            edited_matrix = edited_matrix_df.astype(bool).values.tolist()
+            edited_correct = int(sum(sum(1 for v in row if bool(v)) for row in edited_matrix))
+            col_text_a, col_text_b = st.columns(2)
+            with col_text_a:
+                edited_score = st.number_input(
+                    "Score",
+                    min_value=0,
+                    step=1,
+                    value=int(pd.to_numeric(text_row.get("score", 0), errors="coerce") or 0),
+                    key="edit_data_score",
+                )
+            with col_text_b:
+                date_default = pd.to_datetime(text_row.get("date"), errors="coerce")
+                edited_date = st.date_input(
+                    "Date",
+                    value=(date_default.date() if pd.notna(date_default) else datetime.now().date()),
+                    key="edit_data_date",
+                    format="MM/DD/YYYY",
+                )
+            st.caption(f"Correct cells (computed from matrix): {edited_correct}")
+
+            if st.button("Save text result edits", key="edit_data_save_text"):
+                results_path = resolve_path(MESSAGES_CSV_PATH)
+                if results_path.exists():
+                    results_df = pd.read_csv(results_path)
+                else:
+                    results_df = pd.DataFrame(columns=["grid_number", "correct", "score", "date", "matrix", "name"])
+                if not {"name", "grid_number"}.issubset(results_df.columns):
+                    st.error("text_message_responses.csv is missing required columns (`name`, `grid_number`).")
+                else:
+                    mask = (
+                        results_df["name"].astype(str).str.strip() == str(edit_submitter).strip()
+                    ) & (
+                        results_df["grid_number"].map(_norm_grid_id) == edit_grid_norm
+                    )
+                    payload_grid_number = int(edit_grid_norm) if str(edit_grid_norm).isdigit() else str(edit_grid_norm)
+                    payload = {
+                        "grid_number": payload_grid_number,
+                        "correct": int(edited_correct),
+                        "score": int(edited_score),
+                        "date": edited_date.strftime("%Y-%m-%d"),
+                        "matrix": json.dumps(edited_matrix),
+                        "name": str(edit_submitter),
+                    }
+                    if mask.any():
+                        for col, value in payload.items():
+                            if col in results_df.columns:
+                                results_df.loc[mask, col] = value
+                            else:
+                                results_df[col] = results_df.get(col, "")
+                                results_df.loc[mask, col] = value
+                    else:
+                        results_df = pd.concat([results_df, pd.DataFrame([payload])], ignore_index=True)
+                    results_df.to_csv(results_path, index=False)
+                    st.session_state["edit_data_text_row"] = payload
+                    st.cache_data.clear()
+                    st.success(f"Saved text result edits for {edit_submitter}, grid {edit_grid_norm}.")
+
+        st.markdown("### Edit Parser Metadata (Image Registry)")
+        if not meta_row:
+            st.info("No parser metadata row found for this submitter/grid.")
+        else:
+            responses = meta_row.get("responses")
+            if isinstance(responses, str):
+                try:
+                    parsed = json.loads(responses)
+                    responses = parsed if isinstance(parsed, dict) else {}
+                except Exception:
+                    responses = {}
+            if not isinstance(responses, dict):
+                responses = {}
+
+            pos_order = [
+                "top_left", "top_center", "top_right",
+                "middle_left", "middle_center", "middle_right",
+                "bottom_left", "bottom_center", "bottom_right",
+            ]
+            st.caption("Responses")
+            response_cols = st.columns(3)
+            edited_responses = {}
+            for idx, pos in enumerate(pos_order):
+                with response_cols[idx % 3]:
+                    edited_responses[pos] = st.text_input(
+                        pos.replace("_", " ").title(),
+                        value=str(responses.get(pos, "") or ""),
+                        key=f"edit_data_resp_{pos}",
+                    )
+
+            col_meta_a, col_meta_b = st.columns(2)
+            with col_meta_a:
+                edited_meta_date = st.text_input(
+                    "date",
+                    value=str(meta_row.get("date", "") or ""),
+                    key="edit_data_meta_date",
+                )
+                edited_meta_image_date = st.text_input(
+                    "image_date",
+                    value=str(meta_row.get("image_date", "") or ""),
+                    key="edit_data_meta_image_date",
+                )
+                edited_meta_parser_message = st.text_input(
+                    "parser_message",
+                    value=str(meta_row.get("parser_message", "") or ""),
+                    key="edit_data_meta_parser_message",
+                )
+            with col_meta_b:
+                edited_meta_filename = st.text_input(
+                    "image_filename",
+                    value=str(meta_row.get("image_filename", "") or ""),
+                    key="edit_data_meta_filename",
+                )
+                edited_meta_path = st.text_input(
+                    "path",
+                    value=str(meta_row.get("path", "") or ""),
+                    key="edit_data_meta_path",
+                )
+                edited_meta_source_hash = st.text_input(
+                    "source_hash",
+                    value=str(meta_row.get("source_hash", "") or ""),
+                    key="edit_data_meta_source_hash",
+                )
+
+            if st.button("Save parser metadata edits", key="edit_data_save_meta"):
+                meta_path = resolve_path(IMAGES_METADATA_PATH)
+                if meta_path.exists():
+                    with meta_path.open() as f:
+                        raw = json.load(f)
+                    meta_df = pd.DataFrame(raw if isinstance(raw, list) else [])
+                else:
+                    meta_df = pd.DataFrame()
+
+                if meta_df.empty:
+                    st.error("images_metadata.json is empty or missing.")
+                else:
+                    mask = (
+                        meta_df.get("submitter", pd.Series(dtype=str)).astype(str).str.strip() == str(edit_submitter).strip()
+                    ) & (
+                        meta_df.get("grid_number", pd.Series(dtype=str)).map(_norm_grid_id) == edit_grid_norm
+                    )
+                    if not mask.any():
+                        st.error("Could not find matching parser metadata row to update.")
+                    else:
+                        meta_df.loc[mask, "responses"] = [edited_responses]
+                        meta_df.loc[mask, "date"] = str(edited_meta_date).strip()
+                        meta_df.loc[mask, "image_date"] = str(edited_meta_image_date).strip()
+                        meta_df.loc[mask, "parser_message"] = str(edited_meta_parser_message).strip()
+                        meta_df.loc[mask, "image_filename"] = str(edited_meta_filename).strip()
+                        meta_df.loc[mask, "path"] = str(edited_meta_path).strip()
+                        if "source_hash" not in meta_df.columns:
+                            meta_df["source_hash"] = ""
+                        meta_df.loc[mask, "source_hash"] = str(edited_meta_source_hash).strip()
+                        meta_df.to_json(meta_path, orient="records", indent=4)
+                        st.session_state["edit_data_meta_row"] = meta_df.loc[mask].iloc[0].to_dict()
+                        st.cache_data.clear()
+                        ok, msg = _rebuild_image_metadata_derivatives()
+                        if ok:
+                            st.caption(msg)
+                        else:
+                            st.warning(f"Saved parser metadata, but failed to rebuild derived metadata CSVs: {msg}")
+                        st.success(f"Saved parser metadata edits for {edit_submitter}, grid {edit_grid_norm}.")
