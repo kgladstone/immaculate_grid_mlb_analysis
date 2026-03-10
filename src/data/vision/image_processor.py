@@ -351,8 +351,29 @@ class ImageProcessor():
         print(f"Image dates to parse: {image_dates_to_parse}")
         print("**" * 50)
 
-        # Sort by date descending to process newest first
-        results = results.sort_values(by="image_date", ascending=False)
+        # Prioritize filenames that explicitly include "Immaculate".
+        # After that, process non-Immaculate files by submitters with fewer such files first.
+        results = results.copy()
+        results["priority_immaculate_name"] = results["path"].astype(str).map(lambda p: Path(str(p)).name).str.contains(
+            "immaculate", case=False, na=False
+        )
+        non_imm = results[~results["priority_immaculate_name"]].copy()
+        non_imm_counts = (
+            non_imm.groupby("submitter")["path"]
+            .size()
+            .to_dict()
+        )
+        results["non_imm_submitter_count"] = results["submitter"].map(non_imm_counts).fillna(0).astype(int)
+        # For immaculate rows, keep this key neutral so they sort primarily by date.
+        results["non_imm_submitter_count"] = np.where(
+            results["priority_immaculate_name"],
+            -1,
+            results["non_imm_submitter_count"],
+        )
+        results = results.sort_values(
+            by=["priority_immaculate_name", "non_imm_submitter_count", "submitter", "image_date"],
+            ascending=[False, True, True, False],
+        )
         total = len(results)
         # Process each attachment
         for idx, (_, result) in enumerate(results.iterrows(), start=1):

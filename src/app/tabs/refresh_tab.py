@@ -385,6 +385,17 @@ def refresh_selected_data(
             )
             diagnostics["Images_counts_by_day"] = pivot.to_dict(orient="records")
             diagnostics["Images_total_in_range"] = len(preview_df)
+            preview_df["immaculate_name"] = preview_df["path"].astype(str).map(lambda p: Path(str(p)).name).str.contains("immaculate", case=False, na=False)
+            by_submitter_priority = (
+                preview_df.groupby("submitter", as_index=False)
+                .agg(
+                    immaculate_name_count=("immaculate_name", lambda s: int(s.sum())),
+                    non_immaculate_name_count=("immaculate_name", lambda s: int((~s).sum())),
+                    total=("immaculate_name", "size"),
+                )
+                .sort_values(["immaculate_name_count", "total", "submitter"], ascending=[False, False, True])
+            )
+            diagnostics["Images_counts_by_submitter_name_priority"] = by_submitter_priority.to_dict(orient="records")
 
             if preview_only:
                 results["Images (preview only)"] = len(preview_df)
@@ -484,6 +495,7 @@ def render_refresh_tab() -> None:
                             st.session_state["images_preview"] = {
                                 "counts": diags.get("Images_counts_by_day", []),
                                 "total": diags.get("Images_total_in_range", 0),
+                                "by_submitter_name_priority": diags.get("Images_counts_by_submitter_name_priority", []),
                                 "range": (str(image_start_date), str(image_end_date)),
                             }
                         except Exception as exc:
@@ -607,13 +619,19 @@ def render_refresh_tab() -> None:
                             extra = ""
                             if current_date or current_submitter:
                                 extra = f" | {current_date or '?'} / {current_submitter or '?'}"
+                            filename_priority_tag = ""
+                            if image_path:
+                                is_immaculate_name = "immaculate" in Path(str(image_path)).name.lower()
+                                filename_priority_tag = (
+                                    " | Immaculate filename" if is_immaculate_name else " | Non-Immaculate filename"
+                                )
                             stage_label = stage_labels.get(stage, stage or "")
                             stage_msg = f" | {stage_label}" if stage_label else ""
                             reason_msg = ""
                             if image_done and result_message:
                                 reason_msg = f" | {result_message}"
                             progress_text.write(
-                                f"Processing images {done}/{total} ({pct*100:.1f}%){extra}{stage_msg}{reason_msg}"
+                                f"Processing images {done}/{total} ({pct*100:.1f}%){extra}{filename_priority_tag}{stage_msg}{reason_msg}"
                             )
 
                             if not image_done:
@@ -673,15 +691,18 @@ def render_refresh_tab() -> None:
             if selected == "Images":
                 preview_counts = None
                 preview_total = None
+                preview_by_submitter_priority = None
                 preview_range = None
                 if diags.get("Images_counts_by_day") is not None:
                     preview_counts = diags.get("Images_counts_by_day")
                     preview_total = diags.get("Images_total_in_range", 0)
+                    preview_by_submitter_priority = diags.get("Images_counts_by_submitter_name_priority")
                     preview_range = (str(image_start_date), str(image_end_date))
                 elif st.session_state.get("images_preview"):
                     cached = st.session_state["images_preview"]
                     preview_counts = cached.get("counts")
                     preview_total = cached.get("total")
+                    preview_by_submitter_priority = cached.get("by_submitter_name_priority")
                     preview_range = cached.get("range")
 
                 if preview_counts is not None:
@@ -697,6 +718,11 @@ def render_refresh_tab() -> None:
                         st.info(f"Images in selected date range: {preview_total}")
                     if preview_range:
                         st.caption(f"Preview range: {preview_range}")
+                    if preview_by_submitter_priority is not None:
+                        st.subheader("Filename Priority Preview by Submitter")
+                        st.caption("Processing prioritizes filenames containing `Immaculate`; non-`Immaculate` files are still processed afterward.")
+                        priority_df = pd.DataFrame(preview_by_submitter_priority)
+                        st.dataframe(priority_df, use_container_width=True, hide_index=True)
 
             if diags.get("Texts"):
                 diag = diags["Texts"]
