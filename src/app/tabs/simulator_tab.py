@@ -9,14 +9,19 @@ from typing import Optional, Tuple
 import pandas as pd
 import streamlit as st
 from pathlib import Path
+from app.services.data_loaders import load_image_metadata_df
 from scripts.build_baseball_cache import build_cache
-from utils.constants import FRANCHID_MODERN_ALIGNMENT, TEAM_LIST, canonicalize_franchid
+from scripts.build_career_war_cache import build_career_war_cache
+from config.constants import FRANCHID_MODERN_ALIGNMENT, GRID_PLAYERS, TEAM_LIST, canonicalize_franchid
 
 
 @st.cache_data(show_spinner=True)
 def _load_cached_baseball(cache_dir: Path) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     teams = pd.read_csv(cache_dir / "teams.csv")
-    players = pd.read_csv(cache_dir / "players.csv")
+    players = pd.read_csv(cache_dir / "People.csv")
+    players = players[["playerID", "nameFirst", "nameLast"]].rename(
+        columns={"playerID": "key_bbref", "nameFirst": "name_first", "nameLast": "name_last"}
+    )
     appearances = pd.read_csv(cache_dir / "appearances.csv")
     return teams, players, appearances
 
@@ -273,6 +278,7 @@ def _sample_reverse_grid_puzzle(
     selectable_codes: list[str],
     player_franch_map: dict[str, set[str]],
     player_lookup_df: pd.DataFrame,
+    allowed_player_ids: set[str] | None = None,
     max_attempts: int = 300,
 ) -> dict[str, object] | None:
     """
@@ -292,12 +298,23 @@ def _sample_reverse_grid_puzzle(
         .to_dict()
     )
 
-    all_player_ids = [pid for pid, teams in player_franch_map.items() if teams]
+    allowed_ids = {str(pid) for pid in allowed_player_ids} if allowed_player_ids else set()
+    all_player_ids = [
+        str(pid)
+        for pid, teams in player_franch_map.items()
+        if teams and (not allowed_ids or str(pid) in allowed_ids)
+    ]
     if len(all_player_ids) < 9:
         return None
 
     def _candidate_ids(required: set[str]) -> list[str]:
-        return [pid for pid, teams in player_franch_map.items() if required.issubset(teams) and pid in id_to_name]
+        return [
+            str(pid)
+            for pid, teams in player_franch_map.items()
+            if required.issubset(teams)
+            and str(pid) in id_to_name
+            and (not allowed_ids or str(pid) in allowed_ids)
+        ]
 
     def _pick_unique(cells: list[tuple[str, str, list[str]]]) -> dict[tuple[str, str], str] | None:
         # Backtracking over smallest candidate sets first.
@@ -396,6 +413,42 @@ def _build_player_franchise_lookup(
     return players.reset_index(drop=True), franch_map
 
 
+def _build_used_player_id_set(
+    images_df: pd.DataFrame,
+    players_df: pd.DataFrame,
+    submitters: list[str] | None = None,
+) -> set[str]:
+    if images_df is None or images_df.empty or players_df is None or players_df.empty:
+        return set()
+    if submitters is not None:
+        allowed = {str(s).strip() for s in submitters}
+        images_df = images_df[images_df["submitter"].astype(str).isin(allowed)]
+        if images_df.empty:
+            return set()
+
+    players = players_df.copy()
+    players["full_name_norm"] = players["full_name"].astype(str).str.strip().str.lower().str.replace(r"\s+", " ", regex=True)
+    players = players[players["full_name_norm"] != ""]
+    name_to_id = dict(zip(players["full_name_norm"], players["key_bbref"].astype(str)))
+
+    used_names: set[str] = set()
+    for _, row in images_df.iterrows():
+        responses = row.get("responses")
+        if not isinstance(responses, dict):
+            continue
+        for val in responses.values():
+            name = str(val or "").strip().lower()
+            name = re.sub(r"\s+", " ", name)
+            if name:
+                used_names.add(name)
+
+    used_ids: set[str] = set()
+    for nm in used_names:
+        if nm in name_to_id:
+            used_ids.add(name_to_id[nm])
+    return used_ids
+
+
 def _closest_player_matches_by_query(
     players_df: pd.DataFrame,
     query: str,
@@ -470,13 +523,6 @@ def _validate_fuzzy_answer(
     }
 
 
-def _parse_step_message(message: str) -> tuple[int, int]:
-    match = re.match(r"^\[(\d+)/(\d+)\]", str(message).strip())
-    if not match:
-        return 0, 0
-    return int(match.group(1)), int(match.group(2))
-
-
 def _format_dt(ts: float) -> str:
     return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -518,6 +564,23 @@ def _csv_attrs(path: Path) -> dict[str, str]:
     }
 
 
+def _style_yes_no_columns(df: pd.DataFrame, columns: list[str]):
+    def _cell_style(value: object) -> str:
+        v = str(value).strip().lower()
+        if v == "yes":
+            return "background-color: #d1fae5; color: #065f46; font-weight: 700;"
+        if v == "no":
+            return "background-color: #fee2e2; color: #991b1b; font-weight: 700;"
+        return ""
+
+    if df is None or df.empty:
+        return df
+    valid_cols = [c for c in columns if c in df.columns]
+    if not valid_cols:
+        return df
+    return df.style.map(_cell_style, subset=valid_cols)
+
+
 def _render_cache_viewer(cache_dir: Path) -> None:
     st.caption(f"Cache directory: `{cache_dir}`")
     meta_path = cache_dir / "cache_meta.csv"
@@ -534,7 +597,7 @@ def _render_cache_viewer(cache_dir: Path) -> None:
 
     file_rows = [
         _csv_attrs(cache_dir / "teams.csv"),
-        _csv_attrs(cache_dir / "players.csv"),
+        _csv_attrs(cache_dir / "People.csv"),
         _csv_attrs(cache_dir / "appearances.csv"),
     ]
     st.write("Required cache files")
@@ -544,7 +607,6 @@ def _render_cache_viewer(cache_dir: Path) -> None:
 def _render_data_explorer(cache_dir: Path) -> None:
     st.caption(f"Source directory: `{cache_dir}`")
     people_path = cache_dir / "People.csv"
-    players_path = cache_dir / "players.csv"
     appearances_path = cache_dir / "appearances.csv"
     teams_cache_path = cache_dir / "teams.csv"
 
@@ -556,12 +618,6 @@ def _render_data_explorer(cache_dir: Path) -> None:
             source_name = "People.csv"
         except Exception as exc:
             st.warning(f"Could not read People.csv: {exc}")
-    elif players_path.exists():
-        try:
-            df = pd.read_csv(players_path)
-            source_name = "players.csv"
-        except Exception as exc:
-            st.warning(f"Could not read players.csv: {exc}")
 
     if df.empty:
         st.info("No player dataset found. Build/rebuild cache first.")
@@ -571,9 +627,6 @@ def _render_data_explorer(cache_dir: Path) -> None:
     if {"playerID", "nameFirst", "nameLast"}.issubset(df.columns):
         catalog = df[["playerID", "nameFirst", "nameLast"]].drop_duplicates(subset=["playerID"]).copy()
         catalog = catalog.rename(columns={"playerID": "player_id", "nameFirst": "name_first", "nameLast": "name_last"})
-    elif {"key_bbref", "name_first", "name_last"}.issubset(df.columns):
-        catalog = df[["key_bbref", "name_first", "name_last"]].drop_duplicates(subset=["key_bbref"]).copy()
-        catalog = catalog.rename(columns={"key_bbref": "player_id"})
     else:
         st.warning("No searchable player columns were found in this dataset.")
         return
@@ -616,8 +669,6 @@ def _render_data_explorer(cache_dir: Path) -> None:
     selected_mask = pd.Series(False, index=df.index)
     if "playerID" in df.columns:
         selected_mask = selected_mask | (df["playerID"].astype(str) == selected_player_id)
-    if "key_bbref" in df.columns:
-        selected_mask = selected_mask | (df["key_bbref"].astype(str) == selected_player_id)
     selected_row = df[selected_mask].head(1)
     if selected_row.empty:
         selected_row = pd.DataFrame([option_rows.loc[selected_idx, ["player_id", "name_first", "name_last"]].to_dict()])
@@ -698,118 +749,50 @@ def render_simulator_tab() -> None:
     st.write("Manage baseball-reference cache data and run team-intersection simulator checks.")
 
     local_cache_dir = Path("bin/baseball_cache").resolve()
-    required_files = ["teams.csv", "players.csv", "appearances.csv"]
+    required_files = ["teams.csv", "People.csv", "appearances.csv"]
     missing_files = [name for name in required_files if not (local_cache_dir / name).exists()]
-    data_mgmt_tab, run_simulator_tab, instructions_tab = st.tabs(
-        ["Baseball Reference Data Management", "Mini Games", "Instructions"]
+    run_simulator_tab, cache_tools_tab, instructions_tab = st.tabs(
+        ["🎮 Play", "🧾 Cache Tools", "📘 Instructions"]
     )
 
-    with data_mgmt_tab:
-        builder_tab, metadata_tab, explorer_tab = st.tabs(["Cache Builder", "Metadata", "Data Explorer"])
-
-        with builder_tab:
-            st.markdown("### Cache setup")
-            st.caption("Build/rebuild cache and monitor each step live in the Streamlit console below.")
-            build_clicked = st.button("Build/Rebuild cache", type="primary")
-
-            if "sim_build_logs" not in st.session_state:
-                st.session_state["sim_build_logs"] = []
-
-            progress_bar = st.progress(0.0)
-            status_placeholder = st.empty()
-            build_log_placeholder = st.empty()
-            if st.session_state["sim_build_logs"]:
-                last = st.session_state["sim_build_logs"][-1]
-                status_placeholder.write(f"Latest: `{last}`")
-                build_log_placeholder.code("\n".join(st.session_state["sim_build_logs"][-80:]), language="text")
-                step, total = _parse_step_message(last)
-                if total > 0:
-                    progress_bar.progress(min(1.0, step / total))
-
-            if build_clicked:
-                try:
-                    st.session_state["sim_build_logs"] = []
-
-                    def _ui_progress(message: str) -> None:
-                        st.session_state["sim_build_logs"].append(message)
-                        status_placeholder.write(f"Current: `{message}`")
-                        build_log_placeholder.code("\n".join(st.session_state["sim_build_logs"][-80:]), language="text")
-                        step, total = _parse_step_message(message)
-                        if total > 0:
-                            progress_bar.progress(min(1.0, step / total))
-
-                    with st.spinner("Building baseball cache... this can take a few minutes."):
-                        default_max_year = max(datetime.now().year - 1, 1876)
-                        build_cache(
-                            local_cache_dir,
-                            max_year=int(default_max_year),
-                            lahman_zip_path=None,
-                            lahman_url=None,
-                            progress_cb=_ui_progress,
-                        )
-                    _load_cached_baseball.clear()
-                    progress_bar.progress(1.0)
-                    status_placeholder.write("Current: `Build complete`")
-                    st.success(f"Cache built at `{local_cache_dir}`.")
-                    missing_files = [name for name in required_files if not (local_cache_dir / name).exists()]
-                    if missing_files:
-                        st.warning("Build finished, but some files are still missing: " + ", ".join(missing_files))
-                except Exception as exc:
-                    status_placeholder.write(f"Current: `Build failed: {exc}`")
-                    st.error(f"Cache build failed: {exc}")
-                    st.info(
-                        "If Lahman download fails, run from terminal with a specific source:\n"
-                        "- `python src/scripts/build_baseball_cache.py --lahman-url <working_lahman_zip_url>`\n"
-                        "- `python src/scripts/build_baseball_cache.py --lahman-zip /absolute/path/to/lahman.zip`"
-                    )
-
+    with cache_tools_tab:
+        metadata_tab, explorer_tab = st.tabs(["🧾 Metadata", "🔎 Data Explorer"])
         with metadata_tab:
             _render_cache_viewer(local_cache_dir)
-
         with explorer_tab:
             _render_data_explorer(local_cache_dir)
 
     with run_simulator_tab:
         st.write("Check if a player fits a team intersection using locally cached Lahman data.")
         team_master = player_master = appearances = None
-        if "simulator_ready" not in st.session_state:
-            st.session_state["simulator_ready"] = False
-        start_clicked = st.button("Start simulator")
-        if start_clicked:
-            st.session_state["simulator_ready"] = True
-        load_clicked = st.session_state["simulator_ready"]
-
-        if load_clicked:
-            missing_files = [name for name in required_files if not (local_cache_dir / name).exists()]
-            if missing_files:
-                st.error(
-                    "Local baseball cache is incomplete. Missing: "
-                    + ", ".join(f"`{name}`" for name in missing_files)
-                )
-                st.info(
-                    "Run the cache builder from a terminal that can access pybaseball:\n"
-                    "`python src/scripts/build_baseball_cache.py`\n\n"
-                    "If `appearances.csv` keeps failing, try one of these:\n"
-                    "- `python src/scripts/build_baseball_cache.py --lahman-url <working_lahman_zip_url>`\n"
-                    "- `python src/scripts/build_baseball_cache.py --lahman-zip /absolute/path/to/lahman.zip`"
-                )
-                st.session_state["simulator_ready"] = False
-                st.stop()
-            try:
-                team_master, player_master, appearances = _load_cached_baseball(local_cache_dir)
-                st.success(
-                    f"Loaded local baseball cache: teams={len(team_master):,}, "
-                    f"players={len(player_master):,}, appearances={len(appearances):,}"
-                )
-                with st.expander("Preview cached data", expanded=False):
-                    st.write("Teams (head):", team_master.head())
-                    st.write("Players (head):", player_master.head())
-                    st.write("Appearances (head):", appearances.head())
-            except Exception as exc:
-                st.error(f"Failed to load local baseball cache: {exc}")
-                st.info("Rebuild the cache with: `python src/scripts/build_baseball_cache.py`")
-                st.session_state["simulator_ready"] = False
-                st.stop()
+        missing_files = [name for name in required_files if not (local_cache_dir / name).exists()]
+        if missing_files:
+            st.error(
+                "Local baseball cache is incomplete. Missing: "
+                + ", ".join(f"`{name}`" for name in missing_files)
+            )
+            st.info(
+                "Run the cache builder from a terminal that can access pybaseball:\n"
+                "`python src/scripts/build_baseball_cache.py`\n\n"
+                "If `appearances.csv` keeps failing, try one of these:\n"
+                "- `python src/scripts/build_baseball_cache.py --lahman-url <working_lahman_zip_url>`\n"
+                "- `python src/scripts/build_baseball_cache.py --lahman-zip /absolute/path/to/lahman.zip`"
+            )
+            st.stop()
+        try:
+            team_master, player_master, appearances = _load_cached_baseball(local_cache_dir)
+            st.success(
+                f"Loaded local baseball cache: teams={len(team_master):,}, "
+                f"players={len(player_master):,}, appearances={len(appearances):,}"
+            )
+            with st.expander("Preview cached data", expanded=False):
+                st.write("Teams (head):", team_master.head())
+                st.write("Players (head):", player_master.head())
+                st.write("Appearances (head):", appearances.head())
+        except Exception as exc:
+            st.error(f"Failed to load local baseball cache: {exc}")
+            st.info("Rebuild the cache with: `python src/scripts/build_baseball_cache.py`")
+            st.stop()
 
         # If data not loaded, don't render the rest
         if team_master is None or player_master is None or appearances is None:
@@ -840,7 +823,7 @@ def render_simulator_tab() -> None:
             st.session_state["sim_team2"] = t2
 
         sim_mode_tab, study_mode_tab, random_grid_tab, random_cube_tab, reverse_grid_tab = st.tabs(
-            ["Intersection Checker", "Study Guide", "Random Immaculate Grid", "Random Immaculate Cube", "Reverse Immaculate Grid"]
+            ["✅ Intersection Checker", "📚 Study Guide", "🎲 Random Immaculate Grid", "🧊 Random Immaculate Cube", "🔁 Reverse Immaculate Grid"]
         )
 
         with sim_mode_tab:
@@ -850,7 +833,6 @@ def render_simulator_tab() -> None:
                 team1 = st.selectbox(
                     "Team A",
                     options=selectable_team_codes,
-                    index=selectable_team_codes.index(st.session_state["sim_team1"]),
                     key="sim_team1",
                     format_func=lambda code: f"{team_code_to_name.get(code, code)} ({code})",
                 )
@@ -858,7 +840,6 @@ def render_simulator_tab() -> None:
                 team2 = st.selectbox(
                     "Team B",
                     options=selectable_team_codes,
-                    index=selectable_team_codes.index(st.session_state["sim_team2"]),
                     key="sim_team2",
                     format_func=lambda code: f"{team_code_to_name.get(code, code)} ({code})",
                 )
@@ -973,6 +954,7 @@ def render_simulator_tab() -> None:
 
         player_sets = _build_player_franchise_sets(team_master, appearances)
         player_lookup_df, player_franch_map = _build_player_franchise_lookup(player_master, team_master, appearances)
+        images_df = load_image_metadata_df()
 
         with random_grid_tab:
             st.markdown("### Random Immaculate Grid (3x3)")
@@ -1033,7 +1015,8 @@ def render_simulator_tab() -> None:
                         st.success("Puzzle solved.")
                     else:
                         st.warning("Puzzle not fully solved yet.")
-                    st.dataframe(pd.DataFrame(result_rows), use_container_width=True)
+                    result_df = pd.DataFrame(result_rows)
+                    st.dataframe(_style_yes_no_columns(result_df, ["ok"]), use_container_width=True)
 
         with random_cube_tab:
             st.markdown("### Random Immaculate Cube (3x3x3)")
@@ -1109,50 +1092,111 @@ def render_simulator_tab() -> None:
                         st.success("Cube solved.")
                     else:
                         st.warning("Cube not fully solved yet.")
-                    st.dataframe(pd.DataFrame(result_rows), use_container_width=True)
+                    result_df = pd.DataFrame(result_rows)
+                    st.dataframe(_style_yes_no_columns(result_df, ["ok"]), use_container_width=True)
 
         with reverse_grid_tab:
-            st.markdown("### Reverse Immaculate Grid (Players -> Grid)")
+            st.markdown("### Reverse Immaculate Grid (Guess Axes)")
             st.caption(
-                "Generates 9 players that can fill a valid 3x3 team-team immaculate grid. "
-                "Use the player list to solve the hidden grid."
+                "A 3x3 player grid is pre-filled. Your job is to guess the hidden row and column teams "
+                "that make every cell valid."
             )
+            all_submitters = sorted({str(s) for s in images_df.get("submitter", pd.Series(dtype=str)).dropna().unique().tolist()})
+            default_submitters = sorted(
+                [
+                    name
+                    for name, details in GRID_PLAYERS.items()
+                    if str(details.get("restricted", "")).lower() != "true" and name in all_submitters
+                ]
+            )
+            selected_submitters = st.multiselect(
+                "Include submissions from",
+                options=all_submitters,
+                default=default_submitters,
+                key="sim_reverse_submitter_filter",
+            )
+            used_player_ids = _build_used_player_id_set(images_df, player_lookup_df, selected_submitters)
+            st.caption(f"Eligible players from selected submitters: {len(used_player_ids):,}")
             if st.button("Generate reverse 3x3 puzzle", key="sim_generate_reverse_grid"):
                 reverse_puzzle = _sample_reverse_grid_puzzle(
                     selectable_team_codes,
                     player_franch_map,
                     player_lookup_df,
+                    allowed_player_ids=used_player_ids,
                 )
                 st.session_state["sim_reverse_grid_puzzle"] = reverse_puzzle
 
             reverse_puzzle = st.session_state.get("sim_reverse_grid_puzzle")
-            if not reverse_puzzle:
+            if not selected_submitters:
+                st.info("Select at least one submitter to generate a reverse puzzle.")
+            elif not reverse_puzzle:
                 st.info("Click generate to create a reverse puzzle with guaranteed solutions.")
             else:
                 row_codes = reverse_puzzle["row_codes"]
                 col_codes = reverse_puzzle["col_codes"]
-                counts = reverse_puzzle["counts"]
-                cards_df = pd.DataFrame(reverse_puzzle["player_cards"])
-
-                st.write("Player bank (9 players)")
-                st.dataframe(cards_df, use_container_width=True)
-
-                st.write("Team grid to solve")
-                puzzle_df = pd.DataFrame(
-                    counts,
-                    index=[f"{team_code_to_name.get(c, c)} ({c})" for c in row_codes],
-                    columns=[f"{team_code_to_name.get(c, c)} ({c})" for c in col_codes],
+                player_grid_df = pd.DataFrame(
+                    reverse_puzzle["solution_grid_names"],
+                    index=["Row 1", "Row 2", "Row 3"],
+                    columns=["Col 1", "Col 2", "Col 3"],
                 )
-                st.dataframe(puzzle_df, use_container_width=True)
-                st.success("All 9 cells have at least one valid solution.")
+                st.write("Puzzle grid (players)")
+                st.dataframe(player_grid_df, use_container_width=True)
 
-                if st.button("Reveal one valid solution", key="sim_reveal_reverse_grid"):
+                st.markdown("#### Guess Row Axes")
+                guessed_rows = []
+                row_cols = st.columns(3)
+                for i in range(3):
+                    with row_cols[i]:
+                        guessed_rows.append(
+                            st.selectbox(
+                                f"Row {i+1} team",
+                                options=selectable_team_codes,
+                                key=f"sim_reverse_row_guess_{i}",
+                                format_func=lambda code: f"{team_code_to_name.get(code, code)} ({code})",
+                            )
+                        )
+
+                st.markdown("#### Guess Column Axes")
+                guessed_cols = []
+                col_cols = st.columns(3)
+                for i in range(3):
+                    with col_cols[i]:
+                        guessed_cols.append(
+                            st.selectbox(
+                                f"Col {i+1} team",
+                                options=selectable_team_codes,
+                                key=f"sim_reverse_col_guess_{i}",
+                                format_func=lambda code: f"{team_code_to_name.get(code, code)} ({code})",
+                            )
+                        )
+
+                if st.button("Check axes", key="sim_check_reverse_axes"):
+                    row_hits = sum(1 for i in range(3) if guessed_rows[i] == row_codes[i])
+                    col_hits = sum(1 for i in range(3) if guessed_cols[i] == col_codes[i])
+                    total_hits = row_hits + col_hits
+                    st.write(f"Axis score: **{total_hits}/6** (rows: {row_hits}/3, cols: {col_hits}/3)")
+
+                    axes_result = pd.DataFrame(
+                        {
+                            "axis": [f"Row {i+1}" for i in range(3)] + [f"Col {i+1}" for i in range(3)],
+                            "guess": guessed_rows + guessed_cols,
+                            "answer": row_codes + col_codes,
+                            "correct": [
+                                "yes" if guessed_rows[i] == row_codes[i] else "no" for i in range(3)
+                            ] + [
+                                "yes" if guessed_cols[i] == col_codes[i] else "no" for i in range(3)
+                            ],
+                        }
+                    )
+                    st.dataframe(_style_yes_no_columns(axes_result, ["correct"]), use_container_width=True)
+
+                if st.button("Reveal answer axes", key="sim_reveal_reverse_grid_axes"):
                     solved_df = pd.DataFrame(
                         reverse_puzzle["solution_grid_names"],
-                        index=[f"{team_code_to_name.get(c, c)} ({c})" for c in row_codes],
-                        columns=[f"{team_code_to_name.get(c, c)} ({c})" for c in col_codes],
+                        index=[f"{team_code_to_name.get(code, code)} ({code})" for code in row_codes],
+                        columns=[f"{team_code_to_name.get(code, code)} ({code})" for code in col_codes],
                     )
-                    st.write("One valid 3x3 fill")
+                    st.write("Solved grid (answer axes + player cells)")
                     st.dataframe(solved_df, use_container_width=True)
 
     with instructions_tab:
@@ -1164,15 +1208,15 @@ def render_simulator_tab() -> None:
             ### Required local data
             This tab reads three local cache files from `bin/baseball_cache/`:
             - `teams.csv`
-            - `players.csv`
+            - `People.csv`
             - `appearances.csv`
 
             If these files are missing, build them with:
             `python src/scripts/build_baseball_cache.py`
 
             ### How to use
-            1. Open `Baseball Reference Data Management` and click **Build/Rebuild cache**.
-            2. Open `Mini Games` and click **Start simulator**.
+            1. Open **Add / Update Data**, select **MLB Player Cache**, and click **Build/Rebuild cache**.
+            2. Open `Play`.
             3. Pick **Team A** and **Team B** (or use **Random teams**).
             4. Enter player first and last name.
             5. Click **Confirm player and check** to verify if the player matches the intersection.

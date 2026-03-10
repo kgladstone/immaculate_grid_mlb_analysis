@@ -438,6 +438,56 @@
     "category": "Players & Favorites"
   },
   {
+    "title": "Player Search",
+    "func": "dynamic_player_search_view",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images"
+    ],
+    "category": "Real Player Data"
+  },
+  {
+    "title": "Tableau Mosaic",
+    "func": "dynamic_tableau_mosaic_view",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images"
+    ],
+    "category": "Real Player Data"
+  },
+  {
+    "title": "Median Year Histogram by User (Usage Weighted)",
+    "func": "dynamic_median_year_hist_view",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images"
+    ],
+    "category": "Real Player Data"
+  },
+  {
+    "title": "Career WAR Distribution by User",
+    "func": "dynamic_war_hist_view",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images"
+    ],
+    "category": "Real Player Data"
+  },
+  {
+    "title": "Avg Career WAR vs Grid Rarity (Scatter)",
+    "func": "dynamic_war_rarity_scatter_view",
+    "needs_person": false,
+    "type": "table",
+    "args": [
+      "images"
+    ],
+    "category": "Real Player Data"
+  },
+  {
     "title": "Raw Prompts",
     "func": "raw_prompts",
     "needs_person": false,

@@ -3,9 +3,9 @@ import pandas as pd
 import os
 import datetime
 
-from data.loader import Loader
+from data.io.loader import Loader
 from utils.grid_utils import ImmaculateGridUtils
-from utils.constants import GRID_PLAYERS
+from config.constants import GRID_PLAYERS
 
 class MessagesLoader(Loader):
     def __init__(self, db_path, cache_path):

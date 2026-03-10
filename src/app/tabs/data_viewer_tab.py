@@ -10,7 +10,7 @@ import streamlit as st
 from PIL import Image
 from PIL import UnidentifiedImageError
 
-from utils.constants import (
+from config.constants import (
     GRID_PLAYERS,
     GRID_PLAYERS_RESTRICTED,
     IMAGES_PATH,
@@ -18,7 +18,7 @@ from utils.constants import (
     PROMPTS_CSV_PATH,
 )
 from utils.grid_utils import ImmaculateGridUtils
-from app.operations.data_loaders import resolve_path
+from app.services.data_loaders import resolve_path
 
 try:
     import pillow_heif

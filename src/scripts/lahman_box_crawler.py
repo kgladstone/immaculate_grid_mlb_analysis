@@ -57,6 +57,40 @@ def _normalize_candidate_url(url: str, base_url: str = "https://sabr.org") -> st
     return u
 
 
+def _canonical_source_url(url: str) -> str:
+    u = (url or "").strip()
+    if not u:
+        return ""
+    parsed = urlparse(u)
+    low = u.lower()
+    if "box.com/s/" in low:
+        token_match = re.search(r"/s/([A-Za-z0-9]+)", parsed.path or "")
+        if token_match:
+            token = token_match.group(1)
+            file_match = re.search(r"/file/(\d+)", parsed.path or "")
+            if file_match:
+                return f"https://app.box.com/s/{token}/file/{file_match.group(1)}"
+            return f"https://app.box.com/s/{token}"
+    return u
+
+
+def _source_sort_key(url: str) -> tuple[int, int, str]:
+    low = url.lower()
+    if "box.com/s/" in low and "/file/" in low:
+        kind = 0
+    elif "box.com/s/" in low:
+        kind = 1
+    elif low.endswith(".zip") or ".zip?" in low:
+        kind = 2
+    elif low.endswith(".csv") or ".csv?" in low:
+        kind = 3
+    else:
+        kind = 4
+
+    trusted_host = 0 if ("app.box.com" in low or "sabr.app.box.com" in low or "sabr.org" in low) else 1
+    return (kind, trusted_host, low)
+
+
 def _extract_candidate_urls_from_html(html: str, base_url: str = "https://sabr.org") -> list[str]:
     urls = re.findall(r"""href=["']([^"']+)["']""", html or "", flags=re.IGNORECASE)
     candidates: list[str] = []
@@ -123,10 +157,13 @@ class LahmanBoxCrawler:
                 resp.raise_for_status()
                 if "sabr.org/lahman-database" in page.lower():
                     comma_urls = _extract_comma_delimited_urls(resp.text)
-                    urls = comma_urls + _extract_candidate_urls_from_html(resp.text)
+                    html_urls = _extract_candidate_urls_from_html(resp.text)
+                    # Prefer links from the "comma-delimited version" section; it is the
+                    # most stable source for Lahman shared links.
+                    urls = comma_urls if comma_urls else html_urls
                     self._emit(
                         f"[crawler] Found {len(comma_urls)} comma-delimited candidate link(s), "
-                        f"{len(urls)} total candidate link(s)"
+                        f"{len(html_urls)} total candidate link(s)"
                     )
                 else:
                     urls = _extract_candidate_urls_from_html(resp.text)
@@ -138,8 +175,10 @@ class LahmanBoxCrawler:
                 self._emit(f"[crawler] Discovery failed for {page}: {exc}")
         deduped: list[str] = []
         for u in discovered:
-            if u not in deduped:
-                deduped.append(u)
+            canonical = _canonical_source_url(u)
+            if canonical and canonical not in deduped:
+                deduped.append(canonical)
+        deduped = sorted(deduped, key=_source_sort_key)
         self._emit(f"[crawler] Discovery produced {len(deduped)} unique candidate URL(s)")
         return deduped
 
@@ -504,7 +543,7 @@ class LahmanBoxCrawler:
 
         shared_token = token_match.group(1)
         host = parsed.netloc or "sabr.app.box.com"
-        if ".app.box.com" not in host and host.endswith(".box.com"):
+        if host != "app.box.com" and ".app.box.com" not in host and host.endswith(".box.com"):
             host = host.replace(".box.com", ".app.box.com")
         # Box API is most reliable with app.box.com shared_link format, even when
         # links are branded under sabr.app.box.com or sabr.box.com.
@@ -736,12 +775,14 @@ class LahmanBoxCrawler:
 
         sources: list[str] = []
         if candidate_urls:
-            sources.extend([u for u in candidate_urls if u])
+            sources.extend([_canonical_source_url(u) for u in candidate_urls if u])
         sources.extend(self._discover_urls(discovery_pages or DEFAULT_DISCOVERY_PAGES))
 
         deduped_sources: list[str] = []
         seen_box_tokens: set[str] = set()
         for url in sources:
+            if not url:
+                continue
             low = url.lower()
             if "box.com/s/" in low:
                 m = re.search(r"/s/([A-Za-z0-9]+)", url)
@@ -752,6 +793,10 @@ class LahmanBoxCrawler:
                     seen_box_tokens.add(token)
             if url not in deduped_sources:
                 deduped_sources.append(url)
+        deduped_sources = sorted(deduped_sources, key=_source_sort_key)
+        self._emit(f"[crawler] Candidate attempt order ({len(deduped_sources)} URL(s)):")
+        for idx, source in enumerate(deduped_sources, start=1):
+            self._emit(f"[crawler]   source[{idx}]: {source}")
 
         for url in deduped_sources:
             if not missing:

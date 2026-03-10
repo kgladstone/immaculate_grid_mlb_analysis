@@ -11,7 +11,7 @@ SRC_DIR = Path(__file__).resolve().parents[1]
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from utils.constants import APPLE_TEXTS_DB_PATH
+from config.constants import APPLE_TEXTS_DB_PATH
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".heic", ".gif", ".heif"}
 
@@ -35,7 +35,7 @@ def copy_chat_db(src: Path, dest: Path) -> Path:
 
 def copy_chat_db_with_wal(
     src_dir: Path | None = None,
-    dest_dir: Path = Path(__file__).resolve().parents[2] / "chat_snapshot",
+    dest_dir: Path = Path(__file__).resolve().parents[2] / "bin" / "chat_snapshot",
 ) -> Path:
     """
     Copy chat.db, chat.db-wal, and chat.db-shm to a snapshot folder.
@@ -158,7 +158,7 @@ def main(progress_cb=None, src_dir: Path | None = None):
     t0 = time.time()
     if src_dir is None:
         src_dir = Path(APPLE_TEXTS_DB_PATH).expanduser().parent
-    dest_dir = Path(__file__).resolve().parents[2] / "chat_snapshot"
+    dest_dir = Path(__file__).resolve().parents[2] / "bin" / "chat_snapshot"
     print("[start] copy_chat_db.py")
     print(f"[start] Source directory: {src_dir}")
     print(f"[start] Destination directory: {dest_dir}")
@@ -169,7 +169,7 @@ def main(progress_cb=None, src_dir: Path | None = None):
     print("[step 1/4] Copying chat.db + WAL/SHM...")
     dest_path = copy_chat_db_with_wal(src_dir=src_dir, dest_dir=dest_dir)
 
-    # Step 2: create a stable backup from the copied chat.db to chat_snapshot/chat_backup.db
+    # Step 2: create a stable backup from the copied chat.db to bin/chat_snapshot/chat_backup.db
     if progress_cb:
         progress_cb(0.35, "Creating backup snapshot")
     print("[step 2/4] Creating stable SQLite backup...")
@@ -188,7 +188,7 @@ def main(progress_cb=None, src_dir: Path | None = None):
         except Exception as exc:
             summaries.append(f"{label}: validation failed: {exc}")
 
-    # Step 4: copy image attachments into chat_snapshot/Attachments
+    # Step 4: copy image attachments into bin/chat_snapshot/Attachments
     attachments_src = src_dir / "Attachments"
     attachments_dest = dest_dir / "Attachments"
     try:
@@ -208,7 +208,7 @@ def main(progress_cb=None, src_dir: Path | None = None):
     print(f"Snapshot folder: {dest_dir}")
     print("\n".join(summaries))
     print(f"[done] Total elapsed: {time.time()-t0:.1f}s")
-    print("Use chat_snapshot/chat_backup.db for Streamlit 'Messages DB path' (stable snapshot).")
+    print("Use bin/chat_snapshot/chat_backup.db for Streamlit 'Messages DB path' (stable snapshot).")
 
 
 if __name__ == "__main__":

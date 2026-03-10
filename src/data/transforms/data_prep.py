@@ -9,7 +9,7 @@ from collections import Counter
 from sklearn.cluster import DBSCAN
 import difflib
 
-from utils.constants import TEAM_LIST, CATEGORY_LIST, TEAM_ALIASES
+from config.constants import TEAM_LIST, CATEGORY_LIST, TEAM_ALIASES
 from utils.grid_utils import ImmaculateGridUtils
 
 

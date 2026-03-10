@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import List, Dict, Any, Callable
-from utils.constants import GRID_PLAYERS_RESTRICTED
+from config.constants import GRID_PLAYERS_RESTRICTED
 
 from analytics.analysis import (
     analyze_everyone_missed,
@@ -40,7 +40,7 @@ from analytics.analysis import (
     analyze_prediction_future_grid,
 )
 
-REPORT_BANK_PATH = Path(__file__).resolve().parent / "report_bank_data.json"
+REPORT_BANK_PATH = Path(__file__).resolve().parents[3] / "bin" / "json" / "report_bank_data.json"
 
 
 FUNCTIONS: Dict[str, Callable] = {
@@ -76,6 +76,14 @@ FUNCTIONS: Dict[str, Callable] = {
     "analyze_novelties": analyze_novelties,
     "analyze_grid_overlap_submitters": analyze_grid_overlap_submitters,
     "analyze_prediction_future_grid": analyze_prediction_future_grid,
+    # Dynamic analysis views are rendered inline in analytics_tab via forced view mapping.
+    # Keep these registered so report bank entries validate and can be selected.
+    "dynamic_player_search_view": lambda images: images,
+    "dynamic_tableau_mosaic_view": lambda images: images,
+    "dynamic_median_year_hist_view": lambda images: images,
+    "dynamic_war_hist_view": lambda images: images,
+    "dynamic_war_rarity_scatter_view": lambda images: images,
+    "dynamic_median_year_hist_unique_view": lambda images: images,
     "raw_prompts": lambda prompts: prompts,
     "raw_results": lambda texts_raw: texts_raw,
     "raw_images_metadata": lambda images_raw: images_raw,

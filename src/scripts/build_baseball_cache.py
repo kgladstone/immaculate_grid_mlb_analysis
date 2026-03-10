@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Callable
 
 import pandas as pd
-import unidecode
 
 try:
     from scripts.lahman_box_crawler import (
@@ -22,7 +21,7 @@ except ImportError:  # pragma: no cover - allows running as direct script
         TEAMS_REQUIRED_COLUMNS,
         LahmanBoxCrawler,
     )
-from utils.constants import canonicalize_franchid
+from config.constants import canonicalize_franchid
 
 
 ProgressCb = Callable[[str], None]
@@ -89,16 +88,12 @@ def build_cache(
     teams = teams.drop_duplicates()
     teams.to_csv(cache_dir / "teams.csv", index=False)
 
-    players = people_raw.loc[:, ["nameLast", "nameFirst", "playerID"]].copy()
-    players = players.rename(columns={"nameLast": "name_last", "nameFirst": "name_first", "playerID": "key_bbref"})
-    players["name_last"] = players["name_last"].apply(lambda x: unidecode.unidecode(str(x)))
-    players["name_first"] = players["name_first"].apply(lambda x: unidecode.unidecode(str(x)))
-    players = players.drop_duplicates()
-    players.to_csv(cache_dir / "players.csv", index=False)
+    people = people_raw.drop_duplicates()
+    people.to_csv(cache_dir / "People.csv", index=False)
 
     appearances.to_csv(cache_dir / "appearances.csv", index=False)
     _emit(
-        f"[3/4] Wrote: teams.csv={len(teams):,}, players.csv={len(players):,}, appearances.csv={len(appearances):,}",
+        f"[3/4] Wrote: teams.csv={len(teams):,}, People.csv={len(people):,}, appearances.csv={len(appearances):,}",
         progress_cb,
     )
 
@@ -109,7 +104,7 @@ def build_cache(
                 "generated_at": datetime.now().isoformat(timespec="seconds"),
                 "max_year": max_year,
                 "teams_rows": len(teams),
-                "players_rows": len(players),
+                "people_rows": len(people),
                 "appearances_rows": len(appearances),
             }
         ]

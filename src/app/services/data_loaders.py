@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from utils.constants import (
+from config.constants import (
     IMAGES_METADATA_PATH,
     MESSAGES_CSV_PATH,
     PROMPTS_CSV_PATH,

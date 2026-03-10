@@ -3,8 +3,8 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 
-from data.loader import Loader
-from data.data_prep import normalize_team_aliases
+from data.io.loader import Loader
+from data.transforms.data_prep import normalize_team_aliases
 from utils.grid_utils import ImmaculateGridUtils
 
 class PromptsLoader(Loader):

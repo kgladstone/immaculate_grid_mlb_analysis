@@ -3,6 +3,7 @@ import re
 import os
 import ast
 import json
+from pathlib import Path
 from itertools import combinations
 import numpy as np
 import pandas as pd
@@ -16,9 +17,9 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from typing import Optional, Any, Dict, Tuple
 from PIL import Image
-from data.image_processor import ImageProcessor
+from data.vision.image_processor import ImageProcessor
 
-from data.data_prep import (
+from data.transforms.data_prep import (
     format_record,
     to_percent,
     make_texts_melted,
@@ -34,7 +35,7 @@ from data.data_prep import (
     get_team_name_without_city,
     get_supercategory,
 )
-from utils.constants import (
+from config.constants import (
     TEAM_LIST,
     GRID_PLAYERS,
     GRID_PLAYERS_RESTRICTED,
@@ -43,6 +44,7 @@ from utils.constants import (
     APPLE_TEXTS_DB_PATH,
     IMAGES_METADATA_PATH,
 )
+from data.io.mlb_reference import clean_name
 
 # Helpers for grid/date mapping and week buckets
 _IMM_START_DT = datetime.strptime(IMM_GRID_START_DATE, "%Y-%m-%d")

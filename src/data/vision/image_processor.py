@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 
-from utils.constants import (
+from config.constants import (
     GRID_PLAYERS, 
     MY_NAME, 
     LOGO_DARK_PATH, 
@@ -26,8 +26,8 @@ from utils.constants import (
     MESSAGES_CSV_PATH,
 )
 from utils.grid_utils import ImmaculateGridUtils
-from data.messages_loader import MessagesLoader
-from data.data_prep import (
+from data.io.messages_loader import MessagesLoader
+from data.transforms.data_prep import (
     matrix_string_to_flat_list, 
     compare_flat_matrix_with_flat_image_responses
 )
@@ -38,7 +38,7 @@ class ImageProcessor():
         self.cache_path = cache_path
         self.image_directory = image_directory
         self.attachments_source_root = Path(APPLE_IMAGES_PATH).expanduser()
-        snapshot_cache = Path.cwd() / "chat_snapshot" / "Attachments"
+        snapshot_cache = Path.cwd() / "bin" / "chat_snapshot" / "Attachments"
         # Keep attachments alongside the DB snapshot if possible so the app can read them without FDA
         if snapshot_cache.parent.exists():
             self.attachments_cache_root = snapshot_cache
@@ -75,7 +75,7 @@ class ImageProcessor():
         if not os.access(expanded_path, os.R_OK):
             raise PermissionError(
                 f"Messages database not readable at {expanded_path}. "
-                "Grant Full Disk Access to your terminal/IDE or provide a readable copy (e.g., chat_snapshot/chat_backup.db)."
+                "Grant Full Disk Access to your terminal/IDE or provide a readable copy (e.g., bin/chat_snapshot/chat_backup.db)."
             )
 
         conn = sqlite3.connect(expanded_path)
@@ -172,7 +172,7 @@ class ImageProcessor():
     def _resolve_attachment_path(self, raw_path: str) -> str:
         """
         Resolve an attachment path to something readable, falling back to a local cache.
-        If the source is unreadable (macOS FDA), encourage syncing Attachments to chat_snapshot.
+        If the source is unreadable (macOS FDA), encourage syncing Attachments to bin/chat_snapshot.
         """
         expanded = Path(os.path.expanduser(raw_path))
 

@@ -14,12 +14,12 @@ from PIL import UnidentifiedImageError
 
 import tempfile
 
-from utils.constants import GRID_PLAYERS
-from app.operations.report_bank import load_report_bank, run_report
-from data.data_prep import preprocess_data_into_texts_structure, make_color_map, build_category_structure
-from data.mlb_reference import correct_typos_with_fuzzy_matching
+from config.constants import GRID_PLAYERS, IMAGES_METADATA_FUZZY_LOG_PATH
+from scripts.build_career_war_cache import build_career_war_cache
+from app.services.report_bank import load_report_bank, run_report
+from data.transforms.data_prep import preprocess_data_into_texts_structure, make_color_map, build_category_structure
+from data.io.mlb_reference import correct_typos_with_fuzzy_matching
 from app.tabs.player_data_tab import render_player_data_analytics
-from utils.constants import PLAYER_HISTORY_CSV_PATH
 
 ANALYTICS_CACHE_DIR = Path(".cache")
 EXCEL_REPORT_TITLES = {
@@ -122,11 +122,11 @@ def _build_analytics_context(
     prompts_df: pd.DataFrame,
     texts_df: pd.DataFrame,
     images_df: pd.DataFrame,
-    fix_typos: bool,
     progress_cb=None,
     phase_cb=None,
 ):
-    total_steps = 5 if fix_typos else 4
+    total_steps = 5
+    typo_log = pd.DataFrame()
 
     if phase_cb:
         phase_cb(1, total_steps, "Loading submitter color map")
@@ -140,18 +140,15 @@ def _build_analytics_context(
         phase_cb(3, total_steps, "Building category structure")
     categories = build_category_structure(texts_struct, prompts_df)
 
-    if fix_typos:
-        if phase_cb:
-            phase_cb(4, total_steps, "Correcting image response names")
-        with contextlib.redirect_stdout(io.StringIO()):
-            image_metadata, _ = correct_typos_with_fuzzy_matching(
-                images_df,
-                "responses",
-                progress_callback=progress_cb,
-                verbose=False,
-            )
-    else:
-        image_metadata = images_df
+    if phase_cb:
+        phase_cb(4, total_steps, "Normalizing image response names (always) for analytics")
+    with contextlib.redirect_stdout(io.StringIO()):
+        image_metadata, typo_log = correct_typos_with_fuzzy_matching(
+            images_df,
+            "responses",
+            progress_callback=progress_cb,
+            verbose=False,
+        )
 
     if phase_cb:
         phase_cb(total_steps, total_steps, "Finalizing analytics context")
@@ -164,12 +161,20 @@ def _build_analytics_context(
         "prompts": prompts_df,
         "images": image_metadata,
         "images_raw": images_df,
+        "typo_log": typo_log,
     }
 
 
-def _analytics_cache_path(fix_typos: bool) -> Path:
-    label = "typos" if fix_typos else "raw"
-    return ANALYTICS_CACHE_DIR / f"analytics_ctx_{label}.pkl"
+def _write_fuzzy_log_csv(ctx: dict) -> None:
+    typo_log = ctx.get("typo_log")
+    if not isinstance(typo_log, pd.DataFrame):
+        return
+    IMAGES_METADATA_FUZZY_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    typo_log.to_csv(IMAGES_METADATA_FUZZY_LOG_PATH, index=False)
+
+
+def _analytics_cache_path() -> Path:
+    return ANALYTICS_CACHE_DIR / "analytics_ctx.pkl"
 
 
 def _load_analytics_cache(path: Path):
@@ -181,9 +186,32 @@ def _load_analytics_cache(path: Path):
         return None
 
 
+def _rehydrate_analytics_ctx(ctx: dict):
+    """
+    Ensure cached ctx has runtime-only objects that may not be pickle-safe.
+    """
+    if not isinstance(ctx, dict):
+        return ctx
+    if "texts" not in ctx or ctx.get("texts") is None:
+        texts_raw = ctx.get("texts_raw", pd.DataFrame())
+        prompts = ctx.get("prompts", pd.DataFrame())
+        texts_struct = preprocess_data_into_texts_structure(texts_raw)
+        ctx["texts"] = texts_struct
+        if "categories" not in ctx or ctx.get("categories") is None:
+            ctx["categories"] = build_category_structure(texts_struct, prompts)
+    return ctx
+
+
 def _save_analytics_cache(ctx: dict, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    pd.to_pickle(ctx, path)
+    try:
+        pd.to_pickle(ctx, path)
+    except Exception:
+        # Some runtime objects (e.g., custom grid result classes) can fail to pickle.
+        # Persist a pickle-safe subset and rehydrate on load.
+        safe_ctx = dict(ctx)
+        safe_ctx["texts"] = None
+        pd.to_pickle(safe_ctx, path)
 
 def _write_excel_reports(reports, ctx, excel_path: Path, status_text=None, progress_bar=None) -> None:
     if status_text:
@@ -227,12 +255,11 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
     if prompts_df.empty or texts_df.empty:
         st.info("Prompts or texts data is missing; analytics cannot be generated.")
         return
-    st.markdown("Prepare analytics data (typo correction is expensive; cached locally).")
-    cache_path = None
-    fix_typos = st.checkbox("Apply typo correction to image responses (slow)", value=False)
-    if fix_typos:
-        st.caption("Typo correction can increase overlap metrics by normalizing OCR misspellings.")
-    cache_path = _analytics_cache_path(fix_typos)
+    st.markdown(
+        "Prepare analytics data (image metadata is normalized via fuzzy correction; cached locally). "
+        "Rebuilding the cache now also downloads the latest Baseball-Reference WAR ZIP (first link alphabetically, Z→A) to refresh `bin/baseball_cache/war.csv`."
+    )
+    cache_path = _analytics_cache_path()
     cached_ctx = _load_analytics_cache(cache_path)
     cache_ready = cached_ctx is not None
     status_emoji = "🟢" if cache_ready else "🔴"
@@ -242,13 +269,15 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
     if build_clicked:
         progress_bar = st.progress(0.0)
         status_text = st.empty()
-        total_steps = 5 if fix_typos else 4
+        total_steps = 5
 
         def _phase_cb(step, total, label, done=None, done_total=None):
             suffix = ""
             if done is not None and done_total:
                 suffix = f" ({done}/{done_total} assets built)"
-            status_text.write(f"Building analytics cache... Step {step}/{total}: {label}{suffix}")
+            status_text.write(
+                f"({step} of {total}) : Building analytics cache... Step {step}/{total}: {label}{suffix}"
+            )
 
             # Smooth progress across phases; if in-phase counts exist, use them.
             phase_start = (step - 1) / max(total, 1)
@@ -259,39 +288,57 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
                 in_phase = 1.0 if step == total else 0.0
             progress_bar.progress(min(1.0, phase_start + in_phase * phase_width))
 
-        def _cb(done, total):
-            if total > 0:
-                _phase_cb(4, total_steps, "Correcting image response names", done, total)
-
         with st.spinner("Building analytics cache..."):
             ctx = _build_analytics_context(
                 prompts_df,
                 texts_df,
                 images_df,
-                fix_typos,
-                progress_cb=_cb,
                 phase_cb=_phase_cb,
             )
             _save_analytics_cache(ctx, cache_path)
+            _write_fuzzy_log_csv(ctx)
         _phase_cb(total_steps, total_steps, "Complete")
-        st.success("Cache built.")
+        st.success(
+            f"Cache built. Fuzzy log updated at `{IMAGES_METADATA_FUZZY_LOG_PATH}` "
+            f"({len(ctx.get('typo_log', pd.DataFrame()))} changes)."
+        )
+        try:
+            war_status = st.empty()
+
+            def _war_progress(message: str) -> None:
+                war_status.write(f"WAR cache: `{message}`")
+
+            build_career_war_cache(
+                None,
+                None,
+                Path("bin/baseball_cache"),
+                auto_download=True,
+                progress_cb=_war_progress,
+            )
+            st.success("Career WAR cache saved to `bin/baseball_cache/war.csv`.")
+        except Exception as exc:
+            st.warning(f"Could not refresh career WAR cache: {exc}")
         cache_ready = True
         cached_ctx = ctx
     if not cache_ready:
         st.info("Build the analytics cache first.")
         return
 
-    ctx = cached_ctx if cached_ctx is not None else _build_analytics_context(prompts_df, texts_df, images_df, fix_typos)
+    ctx = cached_ctx if cached_ctx is not None else _build_analytics_context(prompts_df, texts_df, images_df)
+    ctx = _rehydrate_analytics_ctx(ctx)
 
     all_reports = load_report_bank()
-    report_tab, dynamic_analysis_tab, export_tab = st.tabs(
-        ["Report Preview", "Dynamic Analysis", "Report Export Selection"]
+    report_tab, export_tab = st.tabs(
+        ["📄 Report Preview", "📤 Report Export Selection"]
     )
 
     with report_tab:
         categories = sorted({r.get("category", "Misc") for r in all_reports})
         if "analytics_category" not in st.session_state:
             st.session_state["analytics_category"] = categories[0] if categories else ""
+        elif categories and st.session_state["analytics_category"] not in categories:
+            # Handle renamed/removed categories in persisted session state.
+            st.session_state["analytics_category"] = categories[0]
         selected_category = st.selectbox(
             "Report category",
             options=categories,
@@ -303,17 +350,20 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
 
         reports = [r for r in all_reports if r.get("category", "Misc") == st.session_state["analytics_category"]]
         report_titles = [r["title"] for r in reports]
+        report_titles_sorted = sorted(report_titles, key=lambda t: str(t).lower())
         if "analytics_report_idx" not in st.session_state:
             st.session_state["analytics_report_idx"] = 0
         if st.session_state["analytics_report_idx"] >= len(report_titles):
             st.session_state["analytics_report_idx"] = 0
 
+        current_title = report_titles[st.session_state["analytics_report_idx"]] if report_titles else None
+        go_to_index = report_titles_sorted.index(current_title) if current_title in report_titles_sorted else 0
         go_to_title = st.selectbox(
             "Go to report",
-            options=report_titles,
-            index=st.session_state["analytics_report_idx"] if report_titles else 0,
+            options=report_titles_sorted,
+            index=go_to_index if report_titles_sorted else 0,
             key="analytics_go_to",
-        ) if report_titles else None
+        ) if report_titles_sorted else None
         if go_to_title:
             st.session_state["analytics_report_idx"] = report_titles.index(go_to_title)
 
@@ -339,66 +389,75 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
             if selected_report["needs_person"]:
                 selected_person = st.selectbox("Select submitter", options=sorted(GRID_PLAYERS.keys()))
 
-            # Auto-generate current report
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                output = run_report(selected_report, ctx, selected_person)
-            if isinstance(output, dict) and "__error__" in output:
-                st.error(f"Failed to render report: {output['__error__']}")
-            elif selected_report["type"] == "chart":
-                fig = output
-                if fig is None:
-                    fig = plt.gcf()
-                st.pyplot(fig)
+            dynamic_func_to_view = {
+                "dynamic_player_search_view": "Player Search",
+                "dynamic_tableau_mosaic_view": "Tableau Mosaic",
+                "dynamic_median_year_hist_view": "Median Year Histogram by User (Usage Weighted)",
+                "dynamic_war_hist_view": "Career WAR Distribution by User",
+                "dynamic_war_rarity_scatter_view": "Avg Career WAR vs Grid Rarity (Scatter)",
+            }
+            dynamic_view = dynamic_func_to_view.get(selected_report.get("func"))
+            if dynamic_view is not None:
+                st.caption(
+                    "Median-year histograms link the refreshed responses in `bin/csv/images_metadata.csv` to Lahman appearances cached in `bin/baseball_cache` (keep it up-to-date with `python src/scripts/build_baseball_cache.py`)."
+                )
+                render_player_data_analytics(
+                    ctx["images"],
+                    forced_analysis=dynamic_view,
+                )
             else:
-                if output is None:
-                    st.info("No data.")
-                elif isinstance(output, pd.DataFrame):
-                    df_out = output.reset_index(drop=True)
-                    if selected_report.get("func") == "analyze_grid_overlap_submitters":
-                        df_show = df_out.copy()
-                        if {"grid_number", "submitter_1", "submitter_2"}.issubset(df_show.columns):
-                            st.dataframe(df_show, use_container_width=True)
-                            st.markdown("#### Drill Down")
-                            drill_idx = st.selectbox(
-                                "Select a row",
-                                options=list(df_show.index),
-                                format_func=lambda i: (
-                                    f"Grid {int(df_show.loc[i, 'grid_number'])} | "
-                                    f"{df_show.loc[i, 'submitter_1']} vs {df_show.loc[i, 'submitter_2']} | "
-                                    f"{df_show.loc[i, 'overlap_cells']}"
-                                ),
-                                key="overlap_drill_row_idx",
-                            )
-                            if st.button("Show Drill Down", key="overlap_show_drilldown"):
-                                st.session_state["overlap_drilldown_selection"] = int(drill_idx)
-                            selected_idx = st.session_state.get("overlap_drilldown_selection")
-                            if selected_idx is not None and selected_idx in df_show.index:
-                                sel = df_show.loc[selected_idx]
-                                _render_overlap_drilldown(
-                                    ctx,
-                                    int(sel["grid_number"]),
-                                    str(sel["submitter_1"]),
-                                    str(sel["submitter_2"]),
-                                )
-                        else:
-                            st.dataframe(df_show, use_container_width=True)
-                    else:
-                        st.dataframe(df_out)
+                # Auto-generate current report
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    output = run_report(selected_report, ctx, selected_person)
+                if isinstance(output, dict) and "__error__" in output:
+                    st.error(f"Failed to render report: {output['__error__']}")
+                elif selected_report["type"] == "chart":
+                    fig = output
+                    if fig is None:
+                        fig = plt.gcf()
+                    st.pyplot(fig)
                 else:
-                    st.text(output)
-            log_text = buf.getvalue()
-            if log_text:
-                with st.expander("Logs", expanded=False):
-                    st.text(log_text)
-
-    with dynamic_analysis_tab:
-        st.markdown("### Dynamic Analysis")
-        st.caption(
-            "For historical player fields (teams/years/positions/awards), build the CSV with: "
-            "`python src/scripts/build_player_history_database.py`"
-        )
-        render_player_data_analytics(ctx["images"], Path(PLAYER_HISTORY_CSV_PATH))
+                    if output is None:
+                        st.info("No data.")
+                    elif isinstance(output, pd.DataFrame):
+                        df_out = output.reset_index(drop=True)
+                        if selected_report.get("func") == "analyze_grid_overlap_submitters":
+                            df_show = df_out.copy()
+                            if {"grid_number", "submitter_1", "submitter_2"}.issubset(df_show.columns):
+                                st.dataframe(df_show, use_container_width=True)
+                                st.markdown("#### Drill Down")
+                                drill_idx = st.selectbox(
+                                    "Select a row",
+                                    options=list(df_show.index),
+                                    format_func=lambda i: (
+                                        f"Grid {int(df_show.loc[i, 'grid_number'])} | "
+                                        f"{df_show.loc[i, 'submitter_1']} vs {df_show.loc[i, 'submitter_2']} | "
+                                        f"{df_show.loc[i, 'overlap_cells']}"
+                                    ),
+                                    key="overlap_drill_row_idx",
+                                )
+                                if st.button("Show Drill Down", key="overlap_show_drilldown"):
+                                    st.session_state["overlap_drilldown_selection"] = int(drill_idx)
+                                selected_idx = st.session_state.get("overlap_drilldown_selection")
+                                if selected_idx is not None and selected_idx in df_show.index:
+                                    sel = df_show.loc[selected_idx]
+                                    _render_overlap_drilldown(
+                                        ctx,
+                                        int(sel["grid_number"]),
+                                        str(sel["submitter_1"]),
+                                        str(sel["submitter_2"]),
+                                    )
+                            else:
+                                st.dataframe(df_show, use_container_width=True)
+                        else:
+                            st.dataframe(df_out)
+                    else:
+                        st.text(output)
+                log_text = buf.getvalue()
+                if log_text:
+                    with st.expander("Logs", expanded=False):
+                        st.text(log_text)
 
     with export_tab:
         st.markdown("### Report export selection")

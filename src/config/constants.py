@@ -40,12 +40,12 @@ Example config.json:
 
 current_file = Path(__file__).resolve()  # Get the absolute path of the current script
 root_dir = current_file.parent.parent.parent  # Move up to the root directory
-csv_dir = root_dir / "csv/"  # Target the 'csv' folder in the root directory
 bin_dir = root_dir / "bin/"
+json_dir = bin_dir / "json/"
+csv_dir = bin_dir / "csv/"  # CSV files now live under bin/csv
 
-CONFIG_PATH = bin_dir / 'config.json'  # Path to the configuration file
-TEAM_LIST_PATH = root_dir / "src" / "utils" / "team_list.json"
-FRANCHID_MODERN_ALIGNMENT_PATH = root_dir / "src" / "utils" / "franchid_modern_alignment.json"
+CONFIG_PATH = json_dir / 'config.json'  # Path to the configuration file
+TEAMS_CONFIG_PATH = json_dir / "teams.json"
 # Load configuration from a separate JSON file
 with open(CONFIG_PATH, 'r') as config_file:
     config = json.load(config_file)
@@ -53,17 +53,16 @@ with open(CONFIG_PATH, 'r') as config_file:
 USER_HOME = Path(config.get("USER_HOME", str(Path.home())))
 APPLE_TEXTS_DB_PATH = str(USER_HOME / "Library/Messages/chat.db")  # Path to the Apple Messages database
 APPLE_IMAGES_PATH = str(USER_HOME / "Library/Messages/Attachments/")
-MESSAGES_CSV_PATH = csv_dir / "results.csv"
+MESSAGES_CSV_PATH = csv_dir / "text_message_responses.csv"
 PROMPTS_CSV_PATH = csv_dir / "prompts.csv"
-PLAYER_HISTORY_CSV_PATH = csv_dir / "mlb_player_history.csv"
 IMAGES_PATH = root_dir / "images/"  # Path to the images folder
-IMAGES_METADATA_PATH = bin_dir / "images_metadata.json"  # Path to the images metadata file
-IMAGES_METADATA_CSV_PATH = bin_dir / "images_metadata.csv"  # Path to the images metadata CSV file
-IMAGES_METADATA_FUZZY_LOG_PATH = bin_dir / "images_metadata_fuzzy_log.csv"  # Path to the fuzzy matching log file
-IMAGES_PARSER_PATH = bin_dir / "images_parser.json"  # Path to the images parser output file
+IMAGES_METADATA_PATH = json_dir / "images_metadata.json"  # Path to the images metadata file
+IMAGES_METADATA_CSV_PATH = csv_dir / "images_metadata.csv"  # Path to the images metadata CSV file
+IMAGES_METADATA_FUZZY_LOG_PATH = csv_dir / "images_metadata_fuzzy_log.csv"  # Path to the fuzzy matching log file
+IMAGES_PARSER_PATH = json_dir / "images_parser.json"  # Path to the images parser output file
 PDF_FILENAME = bin_dir / "immaculate_grid_report.pdf"  # Path for the PDF output file
-LOGO_DARK_PATH = bin_dir / "logo_dark.png"  # Path to the dark logo image
-LOGO_LIGHT_PATH = bin_dir / "logo_light.png"  # Path to the light logo image
+LOGO_DARK_PATH = bin_dir / "logos" / "logo_dark.png"  # Path to the dark logo image
+LOGO_LIGHT_PATH = bin_dir / "logos" / "logo_light.png"  # Path to the light logo image
 
 # --------------------------------------------------------------------------------------------------
 # Global Variables
@@ -75,33 +74,30 @@ GRID_PLAYERS_RESTRICTED = {player: GRID_PLAYERS[player] for player in GRID_PLAYE
 # --------------------------------------------------------------------------------------------------
 # Immutables
 
-def _load_team_list(path: Path) -> dict:
+def _load_teams_config(path: Path) -> tuple[dict, dict, dict]:
     with path.open("r") as f:
         data = json.load(f)
     if not isinstance(data, dict):
-        raise ValueError(f"TEAM_LIST JSON must be an object mapping names to codes: {path}")
-    return data
+        raise ValueError(f"Teams config JSON must be an object: {path}")
+
+    team_list = data.get("team_list", {})
+    modern_alignment = data.get("franchid_modern_alignment", {})
+    equivalents = data.get("franchid_equivalents", {})
+
+    if not isinstance(team_list, dict):
+        raise ValueError(f"`team_list` must be an object in: {path}")
+    if not isinstance(modern_alignment, dict):
+        raise ValueError(f"`franchid_modern_alignment` must be an object in: {path}")
+    if not isinstance(equivalents, dict):
+        raise ValueError(f"`franchid_equivalents` must be an object in: {path}")
+
+    team_list = {str(k): str(v).upper() for k, v in team_list.items()}
+    modern_alignment = {str(k).upper(): v for k, v in modern_alignment.items()}
+    equivalents = {str(k).upper(): str(v).upper() for k, v in equivalents.items()}
+    return team_list, modern_alignment, equivalents
 
 
-TEAM_LIST = _load_team_list(TEAM_LIST_PATH)
-
-
-def _load_franchid_alignment(path: Path) -> dict:
-    with path.open("r") as f:
-        data = json.load(f)
-    if not isinstance(data, dict):
-        raise ValueError(f"Franchise alignment JSON must be an object keyed by franchID: {path}")
-    return data
-
-
-FRANCHID_MODERN_ALIGNMENT = _load_franchid_alignment(FRANCHID_MODERN_ALIGNMENT_PATH)
-
-# Normalize legacy/current franchise codes to a canonical representation.
-# Example: Oakland appears as OAK historically and ATH in modern data.
-FRANCHID_EQUIVALENTS = {
-    "OAK": "ATH",
-    "ATH": "ATH",
-}
+TEAM_LIST, FRANCHID_MODERN_ALIGNMENT, FRANCHID_EQUIVALENTS = _load_teams_config(TEAMS_CONFIG_PATH)
 
 
 def canonicalize_franchid(value) -> str:

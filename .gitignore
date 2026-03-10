@@ -8,8 +8,13 @@
 
 # Ignore csv files and backups
 *.csv
-csv/
 backups/
+
+# Exceptions
+# !bin/csv/images_metadata.csv
+# !bin/csv/prompts.csv
+# !bin/csv/text_message_responses.csv
+# !bin/csv/images_metadata_fuzzy_log.csv
 
 # Ignore DS Store
 *.DS_Store

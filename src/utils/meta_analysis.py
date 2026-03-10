@@ -6,7 +6,7 @@
 import pandas as pd
 import json
 
-from utils.constants import (
+from config.constants import (
     MESSAGES_CSV_PATH,
     IMAGES_METADATA_PATH,
     IMAGES_PARSER_PATH,

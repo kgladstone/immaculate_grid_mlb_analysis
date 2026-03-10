@@ -16,13 +16,13 @@ from typing import Dict, Iterable, Tuple
 import pandas as pd
 import streamlit as st
 
-from data.data_prep import create_disaggregated_results_df
-from data.image_processor import ImageProcessor
-from data.messages_loader import MessagesLoader
-from data.mlb_reference import correct_typos_with_fuzzy_matching
-from data.prompts_loader import PromptsLoader
+from data.transforms.data_prep import create_disaggregated_results_df
+from data.vision.image_processor import ImageProcessor
+from data.io.messages_loader import MessagesLoader
+from data.io.mlb_reference import correct_typos_with_fuzzy_matching
+from data.io.prompts_loader import PromptsLoader
 from utils.grid_utils import ImmaculateGridUtils
-from utils.constants import (
+from config.constants import (
     APPLE_TEXTS_DB_PATH,
     IMAGES_METADATA_CSV_PATH,
     IMAGES_METADATA_FUZZY_LOG_PATH,
@@ -32,7 +32,9 @@ from utils.constants import (
     PROMPTS_CSV_PATH,
     GRID_PLAYERS,
 )
-from app.operations.data_loaders import load_image_metadata_df, resolve_path
+from scripts.build_baseball_cache import build_cache
+from scripts.build_career_war_cache import build_career_war_cache
+from app.services.data_loaders import load_image_metadata_df, resolve_path
 
 UPLOAD_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".heic"}
 
@@ -175,6 +177,77 @@ def _resolve_entry_image_path(entry: pd.Series | dict) -> Path | None:
     return None
 
 
+def _parse_step_message(message: str) -> tuple[int, int]:
+    match = re.match(r"^\[(\d+)/(\d+)\]", str(message).strip())
+    if not match:
+        return 0, 0
+    return int(match.group(1)), int(match.group(2))
+
+
+def _render_mlb_player_cache_builder(cache_dir: Path) -> None:
+    st.markdown("### MLB Player Cache")
+    st.caption("Rebuild the Lahman-derived cache and refresh career WAR automatically (WAR ZIP auto-downloads alphabetically descending).")
+    if "mlb_cache_build_logs" not in st.session_state:
+        st.session_state["mlb_cache_build_logs"] = []
+
+    build_clicked = st.button("Build/Rebuild cache", type="primary", key="mlb_cache_builder")
+    progress_bar = st.progress(0.0)
+    status_placeholder = st.empty()
+    log_placeholder = st.empty()
+
+    if st.session_state["mlb_cache_build_logs"]:
+        last = st.session_state["mlb_cache_build_logs"][-1]
+        status_placeholder.write(f"Latest: `{last}`")
+        log_placeholder.code("\n".join(st.session_state["mlb_cache_build_logs"][-80:]), language="text")
+        step, total = _parse_step_message(last)
+        if total > 0:
+            progress_bar.progress(min(1.0, step / total))
+    else:
+        log_placeholder.code("No builds yet.", language="text")
+
+    if build_clicked:
+        try:
+            st.session_state["mlb_cache_build_logs"] = []
+
+            def _ui_progress(message: str) -> None:
+                st.session_state["mlb_cache_build_logs"].append(message)
+                status_placeholder.write(f"Current: `{message}`")
+                log_placeholder.code("\n".join(st.session_state["mlb_cache_build_logs"][-80:]), language="text")
+                step, total = _parse_step_message(message)
+                if total > 0:
+                    progress_bar.progress(min(1.0, step / total))
+
+            with st.spinner("Building baseball cache... this can take a few minutes."):
+                default_max_year = max(datetime.now().year - 1, 1876)
+                build_cache(
+                    cache_dir,
+                    max_year=int(default_max_year),
+                    lahman_zip_path=None,
+                    lahman_url=None,
+                    progress_cb=_ui_progress,
+                )
+                build_career_war_cache(
+                    None,
+                    None,
+                    cache_dir,
+                    auto_download=True,
+                    progress_cb=_ui_progress,
+                )
+            st.cache_data.clear()
+            progress_bar.progress(1.0)
+            status_placeholder.write("Current: `Build complete`")
+            st.success(f"Cache built at `{cache_dir}`.")
+            missing_files = [name for name in ("teams.csv", "People.csv", "appearances.csv") if not (cache_dir / name).exists()]
+            if missing_files:
+                st.warning("Build finished, but some files are still missing: " + ", ".join(missing_files))
+        except Exception as exc:
+            status_placeholder.write(f"Current: `Build failed: {exc}`")
+            st.error(f"Cache build failed: {exc}")
+            st.info(
+                "If Lahman download fails, run from terminal with a specific source:\n"
+                "- `python src/scripts/build_baseball_cache.py --lahman-url <working_lahman_zip_url>`\n"
+                "- `python src/scripts/build_baseball_cache.py --lahman-zip /absolute/path/to/lahman.zip`"
+            )
 def _unique_path(path: Path) -> Path:
     if not path.exists():
         return path
@@ -196,8 +269,8 @@ def _default_messages_db_path() -> Path:
     """
     cwd = Path.cwd()
     for candidate in [
-        cwd / "chat_snapshot" / "chat_backup.db",
-        cwd / "chat_snapshot" / "chat.db",
+        cwd / "bin" / "chat_snapshot" / "chat_backup.db",
+        cwd / "bin" / "chat_snapshot" / "chat.db",
         cwd / "chat.db",
         resolve_path(APPLE_TEXTS_DB_PATH),
     ]:
@@ -349,7 +422,7 @@ def refresh_selected_data(
 def render_refresh_tab() -> None:
     st.subheader("Add / Update Data")
     main_tab, upload_tab, assign_tab, manual_tab = st.tabs(
-        ["Refresh Data", "Upload & Register Image", "Assign Users", "Manual Data Entry"]
+        ["🔄 Refresh Data", "📤 Upload & Register Image", "👤 Assign Users", "✍️ Manual Data Entry"]
     )
 
     # --- Main refresh tab ---
@@ -357,293 +430,299 @@ def render_refresh_tab() -> None:
         st.write(
             "Select a dataset to refresh. Images will also rebuild the derived CSV and fuzzy matching log when metadata is available."
         )
-        buf = io.StringIO()
-        results: Dict[str, int] = {}
-        errors: list[str] = []
-        diags: Dict[str, dict] = {}
 
-        choices = ["Prompts", "Texts", "Images"]
+        local_cache_dir = Path("bin/baseball_cache").resolve()
+        choices = ["Prompts", "Texts", "Images", "MLB Player Cache"]
         selected = st.radio("Dataset to refresh", options=choices, index=0)
-        texts_db_input = None
-        image_start_date = None
-        image_end_date = None
-        if selected in ("Texts", "Images"):
-            default_path = str(_default_messages_db_path())
-            texts_db_input = st.text_input(
-                "Messages DB path",
-                value=default_path,
-                help="Absolute path to chat.db; must be readable (Full Disk Access on macOS).",
-            )
-        if selected == "Images":
-            image_start_date = st.date_input("Image start date (optional)", value=None)
-            image_end_date = st.date_input("Image end date (optional)", value=None)
-            st.markdown("**Images workflow:** Preview counts, then process.")
 
-        if selected == "Images":
-            col1, col2 = st.columns(2)
-            with col1:
-                preview_clicked = st.button("Show image preview", key="preview_images")
-            with col2:
-                process_clicked = st.button("Process images", key="process_images")
+        if selected == "MLB Player Cache":
+            _render_mlb_player_cache_builder(local_cache_dir)
+        else:
+            buf = io.StringIO()
+            results: Dict[str, int] = {}
+            errors: list[str] = []
+            diags: Dict[str, dict] = {}
 
-            if preview_clicked:
-                with st.spinner("Computing image preview..."):
-                    try:
-                        with contextlib.redirect_stdout(buf):
-                            results, errors, diags = refresh_selected_data(
-                                [selected],
-                                texts_db_path=texts_db_input,
-                                image_date_range=(image_start_date, image_end_date),
-                                preview_only=True,
-                                progress_cb=None,
-                            )
-                        st.session_state["images_preview"] = {
-                            "counts": diags.get("Images_counts_by_day", []),
-                            "total": diags.get("Images_total_in_range", 0),
-                            "range": (str(image_start_date), str(image_end_date)),
-                        }
-                    except Exception as exc:
-                        errors.append(f"Preview failed: {exc}\n{traceback.format_exc()}")
-                    finally:
-                        st.cache_data.clear()
+            texts_db_input = None
+            image_start_date = None
+            image_end_date = None
+            if selected in ("Texts", "Images"):
+                default_path = str(_default_messages_db_path())
+                texts_db_input = st.text_input(
+                    "Messages DB path",
+                    value=default_path,
+                    help="Absolute path to chat.db; must be readable (Full Disk Access on macOS).",
+                )
+            if selected == "Images":
+                image_start_date = st.date_input("Image start date (optional)", value=None)
+                image_end_date = st.date_input("Image end date (optional)", value=None)
+                st.markdown("**Images workflow:** Preview counts, then process.")
 
-            if process_clicked:
-                preview = st.session_state.get("images_preview")
-                expected_range = (str(image_start_date), str(image_end_date))
-                if not preview or preview.get("range") != expected_range:
-                    errors.append("Please run a preview for the current date range before processing.")
-                else:
-                    progress_text = st.empty()
-                    progress_bar = st.progress(0.0)
-                    checklist_box = st.empty()
-                    prev_parse_box = st.empty()
-                    checklist_state = {
-                        "image_key": None,
-                        "hash_checked": False,
-                        "grid_identified": False,
-                        "grid_number": None,
-                        "parsing_started": False,
-                    }
-                    prev_success = {
-                        "responses": None,
-                        "meta": "",
-                    }
+            if selected == "Images":
+                col1, col2 = st.columns(2)
+                with col1:
+                    preview_clicked = st.button("Show image preview", key="preview_images")
+                with col2:
+                    process_clicked = st.button("Process images", key="process_images")
 
-                    def _responses_to_text_grid(responses_obj) -> str:
-                        if not isinstance(responses_obj, dict):
-                            return "No parsed responses."
-                        order = [
-                            "top_left", "top_center", "top_right",
-                            "middle_left", "middle_center", "middle_right",
-                            "bottom_left", "bottom_center", "bottom_right",
-                        ]
-                        vals = []
-                        for key in order:
-                            v = str(responses_obj.get(key, "")).strip()
-                            vals.append(v if v else "X")
-                        rows = [vals[0:3], vals[3:6], vals[6:9]]
-                        # simple fixed-width text table for easy visual scanning
-                        width = 18
-                        lines = []
-                        for row in rows:
-                            lines.append(" | ".join(s[:width].ljust(width) for s in row))
-                        return "\n".join(lines)
-
-                    def _render_prev_success():
-                        if isinstance(prev_success["responses"], dict):
-                            grid_txt = _responses_to_text_grid(prev_success["responses"])
-                            prev_parse_box.markdown(
-                                "**Previous successful parse (3x3)**  \n"
-                                f"{prev_success['meta']}\n"
-                                f"```text\n{grid_txt}\n```"
-                            )
-
-                    def _render_checklist(current_date, current_submitter):
-                        grid_label = checklist_state["grid_number"] if checklist_state["grid_number"] is not None else "?"
-                        lines = [
-                            f"**Current image:** `{current_date or '?'} / {current_submitter or '?'}`",
-                            f"- [{'x' if checklist_state['hash_checked'] else ' '}] Check hash",
-                            f"- [{'x' if checklist_state['grid_identified'] else ' '}] Identify grid ID",
-                            f"- [{'x' if checklist_state['parsing_started'] else ' '}] Parse grid (grid: `{grid_label}`)",
-                        ]
-                        checklist_box.markdown("\n".join(lines))
-
-                    def _progress_cb(
-                        done,
-                        total,
-                        current_date=None,
-                        current_submitter=None,
-                        stage=None,
-                        grid_number=None,
-                        image_path=None,
-                        image_done=False,
-                        result_message=None,
-                        parsed_responses=None,
-                    ):
-                        stage_labels = {
-                            "start": "Start",
-                            "hash_check_start": "Checking hash",
-                            "hash_checked": "Hash checked",
-                            "hash_failed": "Hash failed",
-                            "skip_existing_path": "Skipped (existing parser path)",
-                            "skip_hash_match_parser": "Skipped (exact hash in parser)",
-                            "skip_hash_match": "Skipped (exact hash in metadata)",
-                            "grid_identify_start": "Identifying grid",
-                            "grid_identified": "Grid identified",
-                            "grid_not_found": "Grid not found",
-                            "skip_grid_submitter_exists": "Skipped (grid+submitter exists)",
-                            "parsing_start": "Parsing",
-                            "parsing_success": "Parsed successfully",
-                            "parsing_finished": "Parsing finished",
-                            "missing_text_matrix": "Missing text matrix",
-                            "image_complete": "Image complete",
-                        }
-                        image_key = f"{current_date}|{current_submitter}|{image_path}"
-                        if checklist_state["image_key"] != image_key and not image_done:
-                            checklist_state["image_key"] = image_key
-                            checklist_state["hash_checked"] = False
-                            checklist_state["grid_identified"] = False
-                            checklist_state["grid_number"] = None
-                            checklist_state["parsing_started"] = False
-
-                        if stage in {"hash_checked"}:
-                            checklist_state["hash_checked"] = True
-                        if stage in {"grid_identified"}:
-                            checklist_state["grid_identified"] = True
-                            checklist_state["grid_number"] = grid_number
-                        if stage in {"parsing_start", "parsing_success", "parsing_finished"}:
-                            checklist_state["parsing_started"] = True
-                            if grid_number is not None:
-                                checklist_state["grid_number"] = grid_number
-
-                        if total <= 0:
-                            return
-                        pct = done / total
-                        progress_bar.progress(min(1.0, pct))
-                        extra = ""
-                        if current_date or current_submitter:
-                            extra = f" | {current_date or '?'} / {current_submitter or '?'}"
-                        stage_label = stage_labels.get(stage, stage or "")
-                        stage_msg = f" | {stage_label}" if stage_label else ""
-                        reason_msg = ""
-                        if image_done and result_message:
-                            reason_msg = f" | {result_message}"
-                        progress_text.write(
-                            f"Processing images {done}/{total} ({pct*100:.1f}%){extra}{stage_msg}{reason_msg}"
-                        )
-
-                        if not image_done:
-                            _render_checklist(current_date, current_submitter)
-                            _render_prev_success()
-                        else:
-                            checklist_box.empty()
-                            if isinstance(parsed_responses, dict) and len(parsed_responses) > 0:
-                                prev_success["responses"] = parsed_responses
-                                prev_success["meta"] = (
-                                    f"`{current_date or '?'} / {current_submitter or '?'} / "
-                                    f"grid {grid_number if grid_number is not None else '?'} / Success`"
-                                )
-                            _render_prev_success()
-
-                    with st.spinner("Processing images..."):
+                if preview_clicked:
+                    with st.spinner("Computing image preview..."):
                         try:
                             with contextlib.redirect_stdout(buf):
                                 results, errors, diags = refresh_selected_data(
                                     [selected],
                                     texts_db_path=texts_db_input,
                                     image_date_range=(image_start_date, image_end_date),
-                                    preview_only=False,
-                                    progress_cb=_progress_cb,
+                                    preview_only=True,
+                                    progress_cb=None,
                                 )
+                            st.session_state["images_preview"] = {
+                                "counts": diags.get("Images_counts_by_day", []),
+                                "total": diags.get("Images_total_in_range", 0),
+                                "range": (str(image_start_date), str(image_end_date)),
+                            }
                         except Exception as exc:
-                            errors.append(f"Processing failed: {exc}\n{traceback.format_exc()}")
+                            errors.append(f"Preview failed: {exc}\n{traceback.format_exc()}")
                         finally:
                             st.cache_data.clear()
 
-        else:
-            if st.button("Run refresh"):
-                with st.spinner(f"Refreshing {selected}..."):
-                    try:
-                        with contextlib.redirect_stdout(buf):
-                            results, errors, diags = refresh_selected_data([selected], texts_db_path=texts_db_input)
-                    except Exception as exc:
-                        errors.append(f"Refresh failed: {exc}\n{traceback.format_exc()}")
-                    finally:
-                        st.cache_data.clear()
+                if process_clicked:
+                    preview = st.session_state.get("images_preview")
+                    expected_range = (str(image_start_date), str(image_end_date))
+                    if not preview or preview.get("range") != expected_range:
+                        errors.append("Please run a preview for the current date range before processing.")
+                    else:
+                        progress_text = st.empty()
+                        progress_bar = st.progress(0.0)
+                        checklist_box = st.empty()
+                        prev_parse_box = st.empty()
+                        checklist_state = {
+                            "image_key": None,
+                            "hash_checked": False,
+                            "grid_identified": False,
+                            "grid_number": None,
+                            "parsing_started": False,
+                        }
+                        prev_success = {
+                            "responses": None,
+                            "meta": "",
+                        }
 
-        if results:
-            for label, count in results.items():
-                st.success(f"{label} refreshed ({count} rows).")
-        if errors:
-            for message in errors:
-                st.error(message)
-        # Offer a quick rerun so Data Viewer picks up new metadata immediately
-        if selected == "Images" and results:
-            st.info("Reload the app to see updated images in the Data Viewer tab.")
-            st.button("Reload app", on_click=lambda: st.session_state.update({"_reload_flag": True}))
-            if st.session_state.get("_reload_flag"):
-                st.session_state["_reload_flag"] = False
-                st.rerun()
+                        def _responses_to_text_grid(responses_obj) -> str:
+                            if not isinstance(responses_obj, dict):
+                                return "No parsed responses."
+                            order = [
+                                "top_left", "top_center", "top_right",
+                                "middle_left", "middle_center", "middle_right",
+                                "bottom_left", "bottom_center", "bottom_right",
+                            ]
+                            vals = []
+                            for key in order:
+                                v = str(responses_obj.get(key, "")).strip()
+                                vals.append(v if v else "X")
+                            rows = [vals[0:3], vals[3:6], vals[6:9]]
+                            # simple fixed-width text table for easy visual scanning
+                            width = 18
+                            lines = []
+                            for row in rows:
+                                lines.append(" | ".join(s[:width].ljust(width) for s in row))
+                            return "\n".join(lines)
 
-        # Single preview table for Images (current run or cached)
-        if selected == "Images":
-            preview_counts = None
-            preview_total = None
-            preview_range = None
-            if diags.get("Images_counts_by_day") is not None:
-                preview_counts = diags.get("Images_counts_by_day")
-                preview_total = diags.get("Images_total_in_range", 0)
-                preview_range = (str(image_start_date), str(image_end_date))
-            elif st.session_state.get("images_preview"):
-                cached = st.session_state["images_preview"]
-                preview_counts = cached.get("counts")
-                preview_total = cached.get("total")
-                preview_range = cached.get("range")
+                        def _render_prev_success():
+                            if isinstance(prev_success["responses"], dict):
+                                grid_txt = _responses_to_text_grid(prev_success["responses"])
+                                prev_parse_box.markdown(
+                                    "**Previous successful parse (3x3)**  \n"
+                                    f"{prev_success['meta']}\n"
+                                    f"```text\n{grid_txt}\n```"
+                                )
 
-            if preview_counts is not None:
-                st.subheader("Images preview (counts by day and sender)")
-                counts_df = pd.DataFrame(preview_counts)
-                if not counts_df.empty:
-                    if "image_date" in counts_df.columns:
-                        counts_df = counts_df.rename(columns={"image_date": "date"})
-                    if "date" in counts_df.columns:
-                        counts_df = counts_df.sort_values(by="date", ascending=False)
-                st.dataframe(counts_df, height=min(400, 30 * len(counts_df) + 40))
-                if preview_total is not None:
-                    st.info(f"Images in selected date range: {preview_total}")
-                if preview_range:
-                    st.caption(f"Preview range: {preview_range}")
+                        def _render_checklist(current_date, current_submitter):
+                            grid_label = checklist_state["grid_number"] if checklist_state["grid_number"] is not None else "?"
+                            lines = [
+                                f"**Current image:** `{current_date or '?'} / {current_submitter or '?'}`",
+                                f"- [{'x' if checklist_state['hash_checked'] else ' '}] Check hash",
+                                f"- [{'x' if checklist_state['grid_identified'] else ' '}] Identify grid ID",
+                                f"- [{'x' if checklist_state['parsing_started'] else ' '}] Parse grid (grid: `{grid_label}`)",
+                            ]
+                            checklist_box.markdown("\n".join(lines))
 
-        if diags.get("Texts"):
-            diag = diags["Texts"]
-            st.subheader("Texts diagnostics (last 90 days)")
-            st.write(f"Cutoff: {diag.get('cutoff')}")
-            if diag.get("counts_recent"):
-                st.markdown("**Counts by date and sender**")
-                counts_df = pd.DataFrame(diag["counts_recent"])
-                if not counts_df.empty:
-                    pivot = counts_df.pivot_table(index="date_str", columns="name", values="count", fill_value=0)
-                    pivot = pivot.sort_index(ascending=False)
+                        def _progress_cb(
+                            done,
+                            total,
+                            current_date=None,
+                            current_submitter=None,
+                            stage=None,
+                            grid_number=None,
+                            image_path=None,
+                            image_done=False,
+                            result_message=None,
+                            parsed_responses=None,
+                        ):
+                            stage_labels = {
+                                "start": "Start",
+                                "hash_check_start": "Checking hash",
+                                "hash_checked": "Hash checked",
+                                "hash_failed": "Hash failed",
+                                "skip_existing_path": "Skipped (existing parser path)",
+                                "skip_hash_match_parser": "Skipped (exact hash in parser)",
+                                "skip_hash_match": "Skipped (exact hash in metadata)",
+                                "grid_identify_start": "Identifying grid",
+                                "grid_identified": "Grid identified",
+                                "grid_not_found": "Grid not found",
+                                "skip_grid_submitter_exists": "Skipped (grid+submitter exists)",
+                                "parsing_start": "Parsing",
+                                "parsing_success": "Parsed successfully",
+                                "parsing_finished": "Parsing finished",
+                                "missing_text_matrix": "Missing text matrix",
+                                "image_complete": "Image complete",
+                            }
+                            image_key = f"{current_date}|{current_submitter}|{image_path}"
+                            if checklist_state["image_key"] != image_key and not image_done:
+                                checklist_state["image_key"] = image_key
+                                checklist_state["hash_checked"] = False
+                                checklist_state["grid_identified"] = False
+                                checklist_state["grid_number"] = None
+                                checklist_state["parsing_started"] = False
 
-                    def emoji_square(val):
-                        if val >= 2:
-                            return "🟦"
-                        if val >= 1:
-                            return "🟩"
-                        return "⬜"
+                            if stage in {"hash_checked"}:
+                                checklist_state["hash_checked"] = True
+                            if stage in {"grid_identified"}:
+                                checklist_state["grid_identified"] = True
+                                checklist_state["grid_number"] = grid_number
+                            if stage in {"parsing_start", "parsing_success", "parsing_finished"}:
+                                checklist_state["parsing_started"] = True
+                                if grid_number is not None:
+                                    checklist_state["grid_number"] = grid_number
 
-                    emoji_df = pivot.applymap(emoji_square)
-                st.dataframe(emoji_df, height=min(600, 30 * len(pivot) + 40))
-        if diags.get("Images_source_hash_backfill"):
-            hdiag = diags["Images_source_hash_backfill"]
-            st.caption(
-                "Image hash backfill: "
-                f"updated {hdiag.get('updated_rows', 0)} row(s), "
-                f"missing image files for {hdiag.get('missing_image_rows', 0)} row(s)."
-            )
-        if buf.getvalue():
-            with st.expander("Console output", expanded=False):
-                st.text_area("stdout", value=buf.getvalue(), height=260)
+                            if total <= 0:
+                                return
+                            pct = done / total
+                            progress_bar.progress(min(1.0, pct))
+                            extra = ""
+                            if current_date or current_submitter:
+                                extra = f" | {current_date or '?'} / {current_submitter or '?'}"
+                            stage_label = stage_labels.get(stage, stage or "")
+                            stage_msg = f" | {stage_label}" if stage_label else ""
+                            reason_msg = ""
+                            if image_done and result_message:
+                                reason_msg = f" | {result_message}"
+                            progress_text.write(
+                                f"Processing images {done}/{total} ({pct*100:.1f}%){extra}{stage_msg}{reason_msg}"
+                            )
+
+                            if not image_done:
+                                _render_checklist(current_date, current_submitter)
+                                _render_prev_success()
+                            else:
+                                checklist_box.empty()
+                                if isinstance(parsed_responses, dict) and len(parsed_responses) > 0:
+                                    prev_success["responses"] = parsed_responses
+                                    prev_success["meta"] = (
+                                        f"`{current_date or '?'} / {current_submitter or '?'} / "
+                                        f"grid {grid_number if grid_number is not None else '?'} / Success`"
+                                    )
+                                _render_prev_success()
+
+                        with st.spinner("Processing images..."):
+                            try:
+                                with contextlib.redirect_stdout(buf):
+                                    results, errors, diags = refresh_selected_data(
+                                        [selected],
+                                        texts_db_path=texts_db_input,
+                                        image_date_range=(image_start_date, image_end_date),
+                                        preview_only=False,
+                                        progress_cb=_progress_cb,
+                                    )
+                            except Exception as exc:
+                                errors.append(f"Processing failed: {exc}\n{traceback.format_exc()}")
+                            finally:
+                                st.cache_data.clear()
+
+            else:
+                if st.button("Run refresh"):
+                    with st.spinner(f"Refreshing {selected}..."):
+                        try:
+                            with contextlib.redirect_stdout(buf):
+                                results, errors, diags = refresh_selected_data([selected], texts_db_path=texts_db_input)
+                        except Exception as exc:
+                            errors.append(f"Refresh failed: {exc}\n{traceback.format_exc()}")
+                        finally:
+                            st.cache_data.clear()
+
+            if results:
+                for label, count in results.items():
+                    st.success(f"{label} refreshed ({count} rows).")
+            if errors:
+                for message in errors:
+                    st.error(message)
+            # Offer a quick rerun so Data Viewer picks up new metadata immediately
+            if selected == "Images" and results:
+                st.info("Reload the app to see updated images in the Data Viewer tab.")
+                st.button("Reload app", on_click=lambda: st.session_state.update({"_reload_flag": True}))
+                if st.session_state.get("_reload_flag"):
+                    st.session_state["_reload_flag"] = False
+                    st.rerun()
+
+            # Single preview table for Images (current run or cached)
+            if selected == "Images":
+                preview_counts = None
+                preview_total = None
+                preview_range = None
+                if diags.get("Images_counts_by_day") is not None:
+                    preview_counts = diags.get("Images_counts_by_day")
+                    preview_total = diags.get("Images_total_in_range", 0)
+                    preview_range = (str(image_start_date), str(image_end_date))
+                elif st.session_state.get("images_preview"):
+                    cached = st.session_state["images_preview"]
+                    preview_counts = cached.get("counts")
+                    preview_total = cached.get("total")
+                    preview_range = cached.get("range")
+
+                if preview_counts is not None:
+                    st.subheader("Images preview (counts by day and sender)")
+                    counts_df = pd.DataFrame(preview_counts)
+                    if not counts_df.empty:
+                        if "image_date" in counts_df.columns:
+                            counts_df = counts_df.rename(columns={"image_date": "date"})
+                        if "date" in counts_df.columns:
+                            counts_df = counts_df.sort_values(by="date", ascending=False)
+                    st.dataframe(counts_df, height=min(400, 30 * len(counts_df) + 40))
+                    if preview_total is not None:
+                        st.info(f"Images in selected date range: {preview_total}")
+                    if preview_range:
+                        st.caption(f"Preview range: {preview_range}")
+
+            if diags.get("Texts"):
+                diag = diags["Texts"]
+                st.subheader("Texts diagnostics (last 90 days)")
+                st.write(f"Cutoff: {diag.get('cutoff')}")
+                if diag.get("counts_recent"):
+                    st.markdown("**Counts by date and sender**")
+                    counts_df = pd.DataFrame(diag["counts_recent"])
+                    if not counts_df.empty:
+                        pivot = counts_df.pivot_table(index="date_str", columns="name", values="count", fill_value=0)
+                        pivot = pivot.sort_index(ascending=False)
+
+                        def emoji_square(val):
+                            if val >= 2:
+                                return "🟦"
+                            if val >= 1:
+                                return "🟩"
+                            return "⬜"
+
+                        emoji_df = pivot.applymap(emoji_square)
+                    st.dataframe(emoji_df, height=min(600, 30 * len(pivot) + 40))
+            if diags.get("Images_source_hash_backfill"):
+                hdiag = diags["Images_source_hash_backfill"]
+                st.caption(
+                    "Image hash backfill: "
+                    f"updated {hdiag.get('updated_rows', 0)} row(s), "
+                    f"missing image files for {hdiag.get('missing_image_rows', 0)} row(s)."
+                )
+            if buf.getvalue():
+                with st.expander("Console output", expanded=False):
+                    st.text_area("stdout", value=buf.getvalue(), height=260)
 
     # --- Upload/registry tab ---
     with upload_tab:
@@ -1063,7 +1142,7 @@ def render_refresh_tab() -> None:
 
     # --- Manual entry tab ---
     with manual_tab:
-        st.write("Add a manual result entry directly to results.csv.")
+        st.write("Add a manual result entry directly to text_message_responses.csv.")
         results_path = resolve_path(MESSAGES_CSV_PATH)
         results_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1096,7 +1175,7 @@ def render_refresh_tab() -> None:
             )
             st.number_input("Score", min_value=0, step=1, key="manual_score")
             col_submit, col_reset = st.columns(2)
-            add_clicked = col_submit.form_submit_button("Add entry to results.csv")
+            add_clicked = col_submit.form_submit_button("Add entry to text_message_responses.csv")
             reset_clicked = col_reset.form_submit_button("Reset matrix")
 
         if reset_clicked:

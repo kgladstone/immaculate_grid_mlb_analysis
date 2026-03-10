@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from app.operations.data_loaders import load_image_metadata_df, load_prompts_df, load_texts_df, resolve_path
+from app.services.data_loaders import load_image_metadata_df, load_prompts_df, load_texts_df, resolve_path
 from app.tabs.refresh_tab import render_refresh_tab
 from app.tabs.data_viewer_tab import (
     render_image_metadata,
@@ -12,7 +12,7 @@ from app.tabs.data_viewer_tab import (
 )
 from app.tabs.analytics_tab import render_analytics
 from app.tabs.simulator_tab import render_simulator_tab
-from utils.constants import IMAGES_METADATA_PATH
+from config.constants import IMAGES_METADATA_PATH
 
 
 def main():
@@ -36,7 +36,7 @@ def main():
             st.session_state[shared_grid_key] = None
 
         scores_tab, availability_tab, grid_tab = st.tabs(
-            ["Scores Matrix", "Data Availability", "Grid-Specific"]
+            ["📈 Scores Matrix", "📊 Data Availability", "🧩 Grid-Specific"]
         )
 
         with scores_tab:
@@ -68,7 +68,7 @@ def main():
                 )
                 st.session_state[shared_grid_key] = selected_grid
 
-                masked_tab, full_tab = st.tabs(["Masked", "Full"])
+                masked_tab, full_tab = st.tabs(["🎭 Masked", "🖼️ Full"])
 
                 with masked_tab:
                     st.write("Prompts alongside everyone’s results for a selected grid.")
