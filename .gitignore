@@ -9,7 +9,7 @@
 # Ignore csv files and backups
 *.csv
 backups/
-*chat_snapshot/*
+bin/chat_snapshot/*
 
 # Exceptions
 # !bin/csv/images_metadata.csv
