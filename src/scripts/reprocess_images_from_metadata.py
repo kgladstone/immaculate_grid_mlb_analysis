@@ -62,6 +62,21 @@ def _load_metadata_rows(path: Path) -> list[dict]:
     return rows
 
 
+def _is_bad_responses(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, dict):
+        return False
+    text = str(value).strip().lower()
+    return text in {"", "nan", "none", "null"}
+
+
+def _count_bad_responses(path: Path) -> tuple[int, int]:
+    rows = _load_metadata_rows(path)
+    bad = sum(1 for r in rows if _is_bad_responses(r.get("responses")))
+    return bad, len(rows)
+
+
 def _load_messages_lookup(path: Path) -> dict[tuple[str, str], str]:
     if not path.exists():
         return {}
@@ -170,10 +185,20 @@ def main() -> int:
     if args.dry_run:
         return 0
 
+    backups_dir = meta_path.parent / "backups"
+    backups_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+    guard_backup_path = backups_dir / f"{meta_path.stem}.guard_backup.{timestamp}.json"
+    shutil.copy2(meta_path, guard_backup_path)
+    print(f"Guard backup written: {guard_backup_path}")
+
     if args.backup:
-        backup_path = meta_path.with_name(f"{meta_path.stem}.backup.{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.json")
+        backup_path = backups_dir / f"{meta_path.stem}.backup.{timestamp}.json"
         shutil.copy2(meta_path, backup_path)
         print(f"Backup written: {backup_path}")
+
+    bad_before, total_before = _count_bad_responses(meta_path)
+    print(f"Response quality before run: bad={bad_before} / total={total_before}")
 
     messages_lookup = _load_messages_lookup(Path(MESSAGES_CSV_PATH))
     ip = ImageProcessor(str(_default_messages_db_path()), str(IMAGES_METADATA_PATH), str(IMAGES_PATH))
@@ -248,6 +273,16 @@ def main() -> int:
 
     print(f"Done. success={success} failed={failed} skipped={skipped}")
 
+    bad_after, total_after = _count_bad_responses(meta_path)
+    print(f"Response quality after run: bad={bad_after} / total={total_after}")
+    if bad_after > bad_before:
+        shutil.copy2(guard_backup_path, meta_path)
+        print(
+            "Guard triggered: bad response count increased. "
+            f"Restored metadata from {guard_backup_path}."
+        )
+        return 3
+
     if args.rebuild_derivatives:
         ok, msg = _rebuild_derivatives()
         if ok:
@@ -260,4 +295,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

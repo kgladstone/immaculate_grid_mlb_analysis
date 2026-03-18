@@ -497,6 +497,16 @@ def _load_career_position_fraction_table(cache_dir: str = "bin/baseball_cache") 
 
 def _render_fudged_position_usage(usage_df: pd.DataFrame) -> None:
     st.markdown("### Fudged Position Usage")
+    st.caption(
+        "How this is calculated: "
+        "`fractional_appearance = career_position_games / career_total_games` "
+        "(for `OF`, position games are `LF + CF + RF`), "
+        "`log_fractional_appearance = ln(fractional_appearance)`, "
+        "`fudge_score = grid_uses / fractional_appearance` (higher = more fudged), "
+        "and submitter rollup uses "
+        "`weighted_mean_log_fractional_appearance = weighted_mean(log_fractional_appearance, weights=grid_uses)` "
+        "with `submitter_fudge_index = -weighted_mean_log_fractional_appearance`."
+    )
     if usage_df.empty:
         st.info("No parsed player responses available.")
         return
@@ -566,7 +576,11 @@ def _render_fudged_position_usage(usage_df: pd.DataFrame) -> None:
         merged["grid_uses"] / merged["fractional_appearance"],
         np.inf,
     )
+    merged["log_fractional_appearance"] = np.log(merged["fractional_appearance"])
     merged["fractional_appearance"] = merged["fractional_appearance"].round(4)
+    merged["log_fractional_appearance"] = pd.to_numeric(
+        merged["log_fractional_appearance"], errors="coerce"
+    ).round(4)
     merged = merged.sort_values(
         ["fudge_score", "grid_uses", "submitter", "mlb_player", "position"],
         ascending=[False, False, True, True, True],
@@ -578,31 +592,37 @@ def _render_fudged_position_usage(usage_df: pd.DataFrame) -> None:
         .agg(
             grid_uses_total=("grid_uses", "sum"),
             unique_player_positions=("position", "size"),
-            submitter_fudge_score=("fudge_score", "sum"),
-            weighted_fractional_appearance=(
-                "fractional_appearance",
+            weighted_mean_log_fractional_appearance=(
+                "log_fractional_appearance",
                 lambda s: np.average(s, weights=merged.loc[s.index, "grid_uses"]) if len(s) else np.nan,
             ),
+            mean_fractional_appearance=("fractional_appearance", "mean"),
         )
     )
-    submitter_agg["submitter_fudge_score"] = pd.to_numeric(
-        submitter_agg["submitter_fudge_score"], errors="coerce"
-    ).round(2)
-    submitter_agg["weighted_fractional_appearance"] = pd.to_numeric(
-        submitter_agg["weighted_fractional_appearance"], errors="coerce"
+    # Higher "fudge index" means more fudgy usage behavior.
+    submitter_agg["submitter_fudge_index"] = -submitter_agg["weighted_mean_log_fractional_appearance"]
+    submitter_agg["weighted_mean_log_fractional_appearance"] = pd.to_numeric(
+        submitter_agg["weighted_mean_log_fractional_appearance"], errors="coerce"
+    ).round(4)
+    submitter_agg["mean_fractional_appearance"] = pd.to_numeric(
+        submitter_agg["mean_fractional_appearance"], errors="coerce"
+    ).round(4)
+    submitter_agg["submitter_fudge_index"] = pd.to_numeric(
+        submitter_agg["submitter_fudge_index"], errors="coerce"
     ).round(4)
     submitter_agg = submitter_agg.sort_values(
-        ["submitter_fudge_score", "grid_uses_total", "submitter"],
+        ["submitter_fudge_index", "grid_uses_total", "submitter"],
         ascending=[False, False, True],
     ).reset_index(drop=True)
     submitter_agg["cheat_rank"] = np.arange(1, len(submitter_agg) + 1)
     submitter_agg["saint_rank"] = (
-        submitter_agg["submitter_fudge_score"].rank(method="min", ascending=True).astype(int)
+        submitter_agg["submitter_fudge_index"].rank(method="min", ascending=True).astype(int)
     )
 
     st.markdown("#### Submitter Rollup")
     st.caption(
-        "`cheat_rank` ranks higher aggregate fudge first; `saint_rank` ranks lower aggregate fudge first."
+        "Aggregate is usage-weighted: weighted_mean(log(fractional_appearance), weights=grid_uses). "
+        "`submitter_fudge_index = -weighted_mean_log_fractional_appearance`."
     )
     st.dataframe(
         submitter_agg[
@@ -610,8 +630,9 @@ def _render_fudged_position_usage(usage_df: pd.DataFrame) -> None:
                 "cheat_rank",
                 "saint_rank",
                 "submitter",
-                "submitter_fudge_score",
-                "weighted_fractional_appearance",
+                "submitter_fudge_index",
+                "weighted_mean_log_fractional_appearance",
+                "mean_fractional_appearance",
                 "grid_uses_total",
                 "unique_player_positions",
             ]
@@ -622,7 +643,19 @@ def _render_fudged_position_usage(usage_df: pd.DataFrame) -> None:
 
     st.markdown("#### Submitter | Player | Position Detail")
     st.dataframe(
-        merged[["rank", "submitter", "mlb_player", "position", "fractional_appearance", "grid_uses", "grid_ids", "fudge_score"]],
+        merged[
+            [
+                "rank",
+                "submitter",
+                "mlb_player",
+                "position",
+                "fractional_appearance",
+                "log_fractional_appearance",
+                "grid_uses",
+                "grid_ids",
+                "fudge_score",
+            ]
+        ],
         use_container_width=True,
         hide_index=True,
     )

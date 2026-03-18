@@ -270,6 +270,7 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
         progress_bar = st.progress(0.0)
         status_text = st.empty()
         total_steps = 5
+        step4_label = "Normalizing image response names (always) for analytics"
 
         def _phase_cb(step, total, label, done=None, done_total=None):
             suffix = ""
@@ -288,11 +289,15 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
                 in_phase = 1.0 if step == total else 0.0
             progress_bar.progress(min(1.0, phase_start + in_phase * phase_width))
 
+        def _step4_progress(done, done_total):
+            _phase_cb(4, total_steps, step4_label, done=done, done_total=done_total)
+
         with st.spinner("Building analytics cache..."):
             ctx = _build_analytics_context(
                 prompts_df,
                 texts_df,
                 images_df,
+                progress_cb=_step4_progress,
                 phase_cb=_phase_cb,
             )
             _save_analytics_cache(ctx, cache_path)

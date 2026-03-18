@@ -1368,7 +1368,12 @@ class ImageProcessor():
                 & (consolidated_metadata["submitter"] == metadata_new_entry["submitter"])
             )
             for key, value in metadata_new_entry.items():
-                consolidated_metadata.loc[mask, key] = value
+                # Assign mapping/list values as object scalars for each matching row;
+                # direct pandas assignment of dict can coerce to NaN via key-alignment.
+                if isinstance(value, (dict, list)):
+                    consolidated_metadata.loc[mask, key] = [value for _ in range(int(mask.sum()))]
+                else:
+                    consolidated_metadata.loc[mask, key] = value
             if "date" in consolidated_metadata.columns:
                 consolidated_metadata["date"] = consolidated_metadata["date"].astype(str)
             data_as_dicts = consolidated_metadata.to_dict(orient="records")
