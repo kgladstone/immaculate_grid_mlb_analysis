@@ -15,6 +15,7 @@ from PIL import UnidentifiedImageError
 import tempfile
 
 from config.constants import GRID_PLAYERS, IMAGES_METADATA_FUZZY_LOG_PATH
+from config.constants import IMAGES_METADATA_PATH, MESSAGES_CSV_PATH, PROMPTS_CSV_PATH
 from scripts.build_career_war_cache import build_career_war_cache
 from app.services.report_bank import load_report_bank, run_report
 from data.transforms.data_prep import preprocess_data_into_texts_structure, make_color_map, build_category_structure
@@ -177,13 +178,37 @@ def _analytics_cache_path() -> Path:
     return ANALYTICS_CACHE_DIR / "analytics_ctx.pkl"
 
 
+def _path_mtime_ns(path_like) -> int:
+    path = Path(path_like).expanduser()
+    return path.stat().st_mtime_ns if path.exists() else -1
+
+
+def _analytics_input_fingerprint() -> dict:
+    return {
+        "prompts_mtime_ns": _path_mtime_ns(PROMPTS_CSV_PATH),
+        "texts_mtime_ns": _path_mtime_ns(MESSAGES_CSV_PATH),
+        "images_mtime_ns": _path_mtime_ns(IMAGES_METADATA_PATH),
+    }
+
+
 def _load_analytics_cache(path: Path):
     if not path.exists():
         return None
     try:
-        return pd.read_pickle(path)
+        raw = pd.read_pickle(path)
+        if isinstance(raw, dict) and "__ctx__" in raw:
+            return raw
+        # Backward compatibility with legacy cache format (ctx-only payload).
+        return {"__ctx__": raw, "__fingerprint__": None}
     except Exception:
         return None
+
+
+def _cache_matches_inputs(cache_payload: dict | None, fingerprint: dict) -> bool:
+    if not isinstance(cache_payload, dict):
+        return False
+    cached_fp = cache_payload.get("__fingerprint__")
+    return isinstance(cached_fp, dict) and cached_fp == fingerprint
 
 
 def _rehydrate_analytics_ctx(ctx: dict):
@@ -202,16 +227,16 @@ def _rehydrate_analytics_ctx(ctx: dict):
     return ctx
 
 
-def _save_analytics_cache(ctx: dict, path: Path) -> None:
+def _save_analytics_cache(ctx: dict, path: Path, fingerprint: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        pd.to_pickle(ctx, path)
+        pd.to_pickle({"__ctx__": ctx, "__fingerprint__": fingerprint}, path)
     except Exception:
         # Some runtime objects (e.g., custom grid result classes) can fail to pickle.
         # Persist a pickle-safe subset and rehydrate on load.
         safe_ctx = dict(ctx)
         safe_ctx["texts"] = None
-        pd.to_pickle(safe_ctx, path)
+        pd.to_pickle({"__ctx__": safe_ctx, "__fingerprint__": fingerprint}, path)
 
 def _write_excel_reports(reports, ctx, excel_path: Path, status_text=None, progress_bar=None) -> None:
     if status_text:
@@ -260,10 +285,14 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
         "Rebuilding the cache now also downloads the latest Baseball-Reference WAR ZIP (first link alphabetically, Z→A) to refresh `bin/baseball_cache/war.csv`."
     )
     cache_path = _analytics_cache_path()
-    cached_ctx = _load_analytics_cache(cache_path)
-    cache_ready = cached_ctx is not None
+    input_fingerprint = _analytics_input_fingerprint()
+    cache_payload = _load_analytics_cache(cache_path)
+    cached_ctx = cache_payload.get("__ctx__") if isinstance(cache_payload, dict) else None
+    cache_ready = cached_ctx is not None and _cache_matches_inputs(cache_payload, input_fingerprint)
     status_emoji = "🟢" if cache_ready else "🔴"
     st.write(f"Cache status: {status_emoji} {'ready' if cache_ready else 'not ready'}")
+    if cached_ctx is not None and not cache_ready:
+        st.info("Cached analytics context is stale relative to current data files. Rebuild to refresh reports.")
 
     build_clicked = st.button("Build/refresh analytics cache")
     if build_clicked:
@@ -300,7 +329,7 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
                 progress_cb=_step4_progress,
                 phase_cb=_phase_cb,
             )
-            _save_analytics_cache(ctx, cache_path)
+            _save_analytics_cache(ctx, cache_path, _analytics_input_fingerprint())
             _write_fuzzy_log_csv(ctx)
         _phase_cb(total_steps, total_steps, "Complete")
         st.success(
