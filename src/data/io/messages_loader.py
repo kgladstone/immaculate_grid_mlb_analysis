@@ -2,6 +2,9 @@ import sqlite3
 import pandas as pd
 import os
 import datetime
+import shutil
+import tempfile
+from pathlib import Path
 
 from data.io.loader import Loader
 from utils.grid_utils import ImmaculateGridUtils
@@ -50,9 +53,19 @@ class MessagesLoader(Loader):
                 "On macOS grant Full Disk Access to the terminal/IDE process or provide a readable copy."
             )
 
-        conn = sqlite3.connect(expanded_path)
-        df = pd.read_sql_query(query, conn)
-        conn.close()
+        query_db_path, temp_dir_obj, snapshot_meta = self._prepare_query_db_path(expanded_path)
+        try:
+            print(
+                "Using messages DB snapshot mode: "
+                f"{snapshot_meta['mode']} (source={snapshot_meta['source']}, "
+                f"wal_present={snapshot_meta['wal_present']}, wal_copied={snapshot_meta['wal_copied']})"
+            )
+            conn = sqlite3.connect(f"file:{query_db_path}?mode=ro", uri=True)
+            df = pd.read_sql_query(query, conn)
+            conn.close()
+        finally:
+            if temp_dir_obj is not None:
+                temp_dir_obj.cleanup()
 
         # Extract name using phone number and "is_from_me" parameters
         print("Extracting usernames...")
@@ -135,6 +148,61 @@ class MessagesLoader(Loader):
         
         print("Data extraction and transformation complete!")
         return df
+
+    def _prepare_query_db_path(self, db_path: str) -> tuple[str, tempfile.TemporaryDirectory | None, dict]:
+        """
+        Build a queryable SQLite path. If source is chat.db and WAL exists, copy
+        chat.db + sidecars into a temp directory so reads include recent WAL writes.
+        """
+        source_path = Path(db_path).expanduser()
+        wal_path = source_path.with_name("chat.db-wal")
+        shm_path = source_path.with_name("chat.db-shm")
+        wal_present = wal_path.exists()
+
+        if source_path.name != "chat.db":
+            return str(source_path), None, {
+                "mode": "direct",
+                "source": str(source_path),
+                "wal_present": wal_present,
+                "wal_copied": False,
+            }
+
+        if not wal_present:
+            return str(source_path), None, {
+                "mode": "direct_no_wal",
+                "source": str(source_path),
+                "wal_present": False,
+                "wal_copied": False,
+            }
+
+        temp_dir_obj = tempfile.TemporaryDirectory(prefix="messages_loader_")
+        temp_dir = Path(temp_dir_obj.name)
+        temp_db_path = temp_dir / "chat.db"
+        shutil.copy2(source_path, temp_db_path)
+
+        wal_copied = False
+        if os.access(wal_path, os.R_OK):
+            shutil.copy2(wal_path, temp_dir / "chat.db-wal")
+            wal_copied = True
+        if shm_path.exists() and os.access(shm_path, os.R_OK):
+            shutil.copy2(shm_path, temp_dir / "chat.db-shm")
+
+        if wal_copied:
+            mode = "temp_snapshot_with_wal"
+            query_path = temp_db_path
+        else:
+            # Keep behavior resilient if WAL is not readable but DB is.
+            temp_dir_obj.cleanup()
+            temp_dir_obj = None
+            mode = "direct_wal_unreadable"
+            query_path = source_path
+
+        return str(query_path), temp_dir_obj, {
+            "mode": mode,
+            "source": str(source_path),
+            "wal_present": wal_present,
+            "wal_copied": wal_copied,
+        }
     
 
     def _validate_messages(self, df):
