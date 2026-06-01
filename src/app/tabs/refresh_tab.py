@@ -438,7 +438,13 @@ def refresh_selected_data(
 def render_refresh_tab() -> None:
     st.subheader("Add / Update Data")
     main_tab, upload_tab, assign_tab, manual_tab, edit_tab = st.tabs(
-        ["🔄 Refresh Data", "📤 Upload & Register Image", "👤 Assign Users", "✍️ Manual Data Entry", "🛠️ Edit Data"]
+        [
+            "🔄 Refresh Data",
+            "📤 Upload & Register Image",
+            "👤 Assign Users",
+            "✍️ Manual Data Entry",
+            "🛠️ Edit Data",
+        ]
     )
 
     # --- Main refresh tab ---

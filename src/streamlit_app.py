@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import streamlit as st
 
-from app.services.data_loaders import load_image_metadata_df, load_prompts_df, load_texts_df, resolve_path
+from app.services.data_loaders import (
+    load_image_metadata_df,
+    load_prompts_df,
+    load_rule5_full_bans_df,
+    load_texts_df,
+    resolve_path,
+)
 from app.tabs.refresh_tab import render_refresh_tab
 from app.tabs.data_viewer_tab import (
     render_image_metadata,
+    render_rule5_bans,
     render_prompts_and_texts,
     render_data_availability,
     render_scores_matrix,
@@ -24,6 +31,7 @@ def main():
     prompts_df = load_prompts_df()
     texts_df = load_texts_df()
     images_df = load_image_metadata_df()
+    rule5_df = load_rule5_full_bans_df()
 
     data_tab, refresh_tab, analytics_tab, simulator_tab = st.tabs(
         ["🗂 Data Viewer", "➕ Add / Update Data", "📊 Analytics", "🎮 Mini Games"]
@@ -35,8 +43,8 @@ def main():
         if shared_grid_key not in st.session_state:
             st.session_state[shared_grid_key] = None
 
-        scores_tab, availability_tab, grid_tab = st.tabs(
-            ["📈 Scores Matrix", "📊 Data Availability", "🧩 Grid-Specific"]
+        scores_tab, availability_tab, rule5_tab, grid_tab = st.tabs(
+            ["📈 Scores Matrix", "📊 Data Availability", "🚫 Rule 5 Bans", "🧩 Grid-Specific"]
         )
 
         with scores_tab:
@@ -46,6 +54,9 @@ def main():
         with availability_tab:
             st.write("Coverage of texts and image metadata by grid and player.")
             render_data_availability(prompts_df, texts_df, images_df)
+
+        with rule5_tab:
+            render_rule5_bans(rule5_df, prompts_df, images_df)
 
         with grid_tab:
             all_grids = sorted(
@@ -86,6 +97,7 @@ def main():
                         images_df,
                         resolve_path(IMAGES_METADATA_PATH),
                         texts_df=texts_df,
+                        rule5_df=rule5_df,
                         selected_grid=st.session_state[shared_grid_key],
                         on_select=lambda gid: st.session_state.update({shared_grid_key: gid}),
                         show_selector=False,

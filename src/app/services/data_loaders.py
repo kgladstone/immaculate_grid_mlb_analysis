@@ -10,6 +10,7 @@ from config.constants import (
     IMAGES_METADATA_PATH,
     MESSAGES_CSV_PATH,
     PROMPTS_CSV_PATH,
+    RULE5_FULL_BANS_CSV_PATH,
 )
 
 
@@ -67,3 +68,20 @@ def load_image_metadata_df() -> pd.DataFrame:
     path = resolve_path(IMAGES_METADATA_PATH)
     mtime_ns = path.stat().st_mtime_ns if path.exists() else -1
     return _load_image_metadata_df_cached(str(path), mtime_ns)
+
+
+@st.cache_data(show_spinner=False)
+def _load_rule5_full_bans_df_cached(path_str: str, mtime_ns: int) -> pd.DataFrame:
+    path = Path(path_str)
+    if not path.exists():
+        return pd.DataFrame()
+    df = pd.read_csv(path)
+    if "grid_number" in df.columns:
+        df["grid_number"] = df["grid_number"].astype(str).str.strip().str.removesuffix(".0")
+    return df
+
+
+def load_rule5_full_bans_df() -> pd.DataFrame:
+    path = resolve_path(RULE5_FULL_BANS_CSV_PATH)
+    mtime_ns = path.stat().st_mtime_ns if path.exists() else -1
+    return _load_rule5_full_bans_df_cached(str(path), mtime_ns)

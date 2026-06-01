@@ -12,6 +12,7 @@ backups/
 bin/chat_snapshot/*
 
 # Exceptions
+!bin/csv/rule5_full_bans.csv
 # !bin/csv/images_metadata.csv
 # !bin/csv/prompts.csv
 # !bin/csv/text_message_responses.csv

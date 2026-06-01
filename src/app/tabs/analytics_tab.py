@@ -14,8 +14,8 @@ from PIL import UnidentifiedImageError
 
 import tempfile
 
-from config.constants import GRID_PLAYERS, IMAGES_METADATA_FUZZY_LOG_PATH
-from config.constants import IMAGES_METADATA_PATH, MESSAGES_CSV_PATH, PROMPTS_CSV_PATH
+from config.constants import GRID_PLAYERS, GRID_PLAYERS_RESTRICTED, IMAGES_METADATA_FUZZY_LOG_PATH
+from config.constants import IMAGES_METADATA_PATH, IMAGES_PATH, MESSAGES_CSV_PATH, PROMPTS_CSV_PATH, RULE5_FULL_BANS_CSV_PATH
 from scripts.build_career_war_cache import build_career_war_cache
 from app.services.report_bank import load_report_bank, run_report
 from data.transforms.data_prep import preprocess_data_into_texts_structure, make_color_map, build_category_structure
@@ -263,6 +263,229 @@ def _write_excel_reports(reports, ctx, excel_path: Path, status_text=None, progr
             else:
                 df = pd.DataFrame([{"value": str(result)}])
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+
+def _format_pdf_cell_value(value: object) -> str:
+    if isinstance(value, Number) and not isinstance(value, bool):
+        if float(value).is_integer():
+            return str(int(value))
+        rounded = round(float(value), 3)
+        return f"{rounded:.3f}".rstrip("0").rstrip(".")
+    return str(value)
+
+
+def _wrap_pdf_cell(value: object, wrap_width: int = 28) -> str:
+    if pd.isna(value):
+        return ""
+    text = _format_pdf_cell_value(value)
+    wrapped_lines = []
+    for line in text.splitlines() or [""]:
+        if line == "":
+            wrapped_lines.append("")
+        else:
+            wrapped_lines.extend(textwrap.wrap(line, width=wrap_width))
+    return "\n".join(wrapped_lines)
+
+
+def _pdf_line_count(value: object) -> int:
+    return len(str(value).splitlines() or [""])
+
+
+def _pdf_max_line_len(value: object) -> int:
+    return max((len(line) for line in str(value).splitlines()), default=0)
+
+
+def _pdf_column_widths(frame: pd.DataFrame, max_total_width: float = 0.98) -> list[float]:
+    col_lens = []
+    for col in frame.columns:
+        max_cell = max((_pdf_max_line_len(v) for v in frame[col].astype(str)), default=0)
+        col_lens.append(max(len(str(col)), max_cell, 1))
+    total = sum(col_lens) or 1
+    widths = [max_total_width * (length / total) for length in col_lens]
+    widths = [min(max(w, 0.06), 0.24) for w in widths]
+    scale = (max_total_width / sum(widths)) if sum(widths) > 0 else 1.0
+    return [w * scale for w in widths]
+
+
+def _pdf_row_heights(frame: pd.DataFrame, max_total_height: float = 0.9) -> list[float]:
+    header_lines = max((_pdf_line_count(c) for c in frame.columns), default=1)
+    row_weights = [header_lines]
+    for _, row in frame.iterrows():
+        row_weights.append(max((_pdf_line_count(value) for value in row.astype(str)), default=1))
+    total = sum(row_weights) or 1
+    base = max_total_height / total
+    return [base * w for w in row_weights]
+
+
+def _paginate_pdf_table(frame: pd.DataFrame, max_lines_per_page: int) -> list[pd.DataFrame]:
+    header_lines = max((_pdf_line_count(c) for c in frame.columns), default=1)
+    pages: list[pd.DataFrame] = []
+    start_idx = 0
+    current_lines = header_lines
+    for i, (_, row) in enumerate(frame.iterrows()):
+        row_lines = max((_pdf_line_count(value) for value in row.astype(str)), default=1)
+        if current_lines + row_lines > max_lines_per_page and i > start_idx:
+            pages.append(frame.iloc[start_idx:i])
+            start_idx = i
+            current_lines = header_lines + row_lines
+        else:
+            current_lines += row_lines
+    if start_idx < len(frame):
+        pages.append(frame.iloc[start_idx:])
+    return pages
+
+
+def _save_pdf_table(pdf: PdfPages, title: str, df: pd.DataFrame, max_pages: int | None = None) -> int:
+    base_df = df.reset_index(drop=True)
+    df_wrapped = base_df.map(_wrap_pdf_cell) if hasattr(base_df, "map") else base_df.applymap(_wrap_pdf_cell)
+    wide = df_wrapped.shape[1] > 8
+    page_slices = _paginate_pdf_table(df_wrapped, 28 if wide else 36)
+    if max_pages is not None:
+        page_slices = page_slices[:max_pages]
+    total_pages = len(page_slices)
+    for page, slice_df in enumerate(page_slices, start=1):
+        fig_size = (11, 8.5) if wide else (8.5, 11)
+        fig, ax = plt.subplots(figsize=fig_size)
+        ax.axis("off")
+        suffix = f" (Page {page}/{total_pages})" if total_pages > 1 else ""
+        ax.text(0.5, 0.97, f"{title}{suffix}", ha="center", va="top", fontsize=12, fontweight="bold")
+        table = ax.table(
+            cellText=slice_df.values,
+            colLabels=slice_df.columns,
+            cellLoc="left",
+            colWidths=_pdf_column_widths(slice_df),
+            bbox=[0, 0, 1, 0.9],
+        )
+        table.auto_set_font_size(False)
+        table.set_fontsize(7 if wide else 8)
+        numeric_cols = {idx for idx, col in enumerate(df.columns) if pd.api.types.is_numeric_dtype(df[col])}
+        row_heights = _pdf_row_heights(slice_df)
+        for (r, c), cell in table.get_celld().items():
+            cell.get_text().set_fontfamily("DejaVu Sans Mono")
+            if r == 0:
+                cell.set_facecolor("#f0f0f0")
+                cell.set_fontsize(8 if wide else 9)
+                cell.get_text().set_ha("center")
+            else:
+                cell.get_text().set_ha("right" if c in numeric_cols else "left")
+            if r < len(row_heights):
+                cell.set_height(row_heights[r])
+        pdf.savefig(fig)
+        plt.close(fig)
+    return total_pages
+
+
+def _load_rule5_bans_for_pdf() -> pd.DataFrame:
+    if not RULE5_FULL_BANS_CSV_PATH.exists():
+        return pd.DataFrame(columns=["player", "grid_number", "response"])
+    df = pd.read_csv(RULE5_FULL_BANS_CSV_PATH, dtype=str)
+    for col in ["player", "grid_number", "response"]:
+        if col not in df.columns:
+            df[col] = ""
+    df = df[["player", "grid_number", "response"]].copy()
+    df["grid_number"] = df["grid_number"].astype(str).str.strip().str.removesuffix(".0")
+    df["grid_sort"] = pd.to_numeric(df["grid_number"], errors="coerce")
+    return df.sort_values(["grid_sort", "player"], ascending=[False, True]).drop(columns=["grid_sort"])
+
+
+def _image_path_from_row(row: pd.Series) -> Path | None:
+    path_val = str(row.get("path") or "").strip()
+    if path_val and path_val.lower() != "nan":
+        path = Path(path_val)
+        if path.exists():
+            return path
+    filename = str(row.get("image_filename") or "").strip()
+    if filename and filename.lower() != "nan":
+        path = Path(IMAGES_PATH) / filename
+        if path.exists():
+            return path
+    return None
+
+
+def _write_basic_rule5_pages(pdf: PdfPages, images_df: pd.DataFrame) -> int:
+    rule5_df = _load_rule5_bans_for_pdf()
+    if rule5_df.empty:
+        fig, ax = plt.subplots(figsize=(8.5, 11))
+        ax.axis("off")
+        ax.text(0.5, 0.5, "No Rule 5 bans found.", ha="center", va="center")
+        pdf.savefig(fig)
+        plt.close(fig)
+        return 1
+
+    pages = _save_pdf_table(pdf, "Rule 5 Bans", rule5_df.rename(columns={"response": "intersection"}))
+    if images_df is None or images_df.empty or "grid_number" not in images_df.columns:
+        return pages
+
+    review_submitters = sorted(GRID_PLAYERS_RESTRICTED.keys())
+    images = images_df.copy()
+    images["grid_norm"] = images["grid_number"].astype(str).str.strip().str.removesuffix(".0")
+    images["submitter"] = images["submitter"].astype(str)
+
+    for grid_id, grid_bans in rule5_df.groupby("grid_number", sort=False):
+        grid_id = str(grid_id)
+        subset = images[
+            (images["grid_norm"] == grid_id)
+            & (images["submitter"].isin(review_submitters))
+        ].copy()
+        if subset.empty:
+            continue
+        subset["submitter_order"] = subset["submitter"].map({name: idx for idx, name in enumerate(review_submitters)})
+        subset = subset.sort_values(["submitter_order", "submitter"]).head(4)
+
+        fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))
+        axes_flat = axes.flatten()
+        ban_lines = [f"{row.player}: {row.response}" for row in grid_bans.itertuples(index=False)]
+        title = f"Grid {grid_id}: " + " | ".join(ban_lines)
+        fig.suptitle("\n".join(textwrap.wrap(title, width=110)), fontsize=11, fontweight="bold")
+        for ax in axes_flat:
+            ax.axis("off")
+        for ax, (_, row) in zip(axes_flat, subset.iterrows()):
+            img_path = _image_path_from_row(row)
+            ax.set_title(str(row.get("submitter", "")), fontsize=10)
+            if img_path is None:
+                ax.text(0.5, 0.5, "Image not found", ha="center", va="center")
+                continue
+            img, err = _safe_open_image(img_path)
+            if img is None:
+                ax.text(0.5, 0.5, f"Could not render image:\n{err}", ha="center", va="center", wrap=True)
+                continue
+            img.thumbnail((900, 900))
+            ax.imshow(img)
+        fig.tight_layout(rect=[0, 0, 1, 0.95])
+        pdf.savefig(fig)
+        plt.close(fig)
+        pages += 1
+    return pages
+
+
+def _write_pdf_report_result(pdf: PdfPages, report: dict, result, max_pages: int | None = None) -> int:
+    if isinstance(result, dict) and "__error__" in result:
+        fig, ax = plt.subplots(figsize=(8.5, 11))
+        ax.axis("off")
+        ax.text(0.5, 0.5, f"{report['title']} failed:\n{result['__error__']}", ha="center", va="center", wrap=True)
+        pdf.savefig(fig)
+        plt.close(fig)
+        return 1
+    if report["type"] == "chart":
+        fig = result if result is not None else plt.gcf()
+        pdf.savefig(fig)
+        plt.close(fig)
+        return 1
+    if result is None:
+        fig, ax = plt.subplots(figsize=(8.5, 11))
+        ax.axis("off")
+        ax.text(0.5, 0.5, f"{report['title']}: No data.", ha="center", va="center")
+        pdf.savefig(fig)
+        plt.close(fig)
+        return 1
+    if isinstance(result, pd.DataFrame):
+        return _save_pdf_table(pdf, report["title"], result.reset_index(drop=True), max_pages=max_pages)
+    fig, ax = plt.subplots(figsize=(8.5, 11))
+    ax.axis("off")
+    ax.text(0.5, 0.5, str(result), ha="center", va="center", wrap=True)
+    pdf.savefig(fig)
+    plt.close(fig)
+    return 1
 
 
 def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df: pd.DataFrame) -> None:
@@ -550,11 +773,54 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
             else:
                 st.session_state["export_excel_titles"].discard(title)
 
+        st.markdown("### Presets")
+        st.caption(
+            "Basic Export Mode includes the Rule 5 bans table, relevant ban screenshots, "
+            "and all non-Excel analyses capped at 5 pages each."
+        )
+        generate_basic_pdf = st.button("Generate Basic Export Mode PDF")
+
         export_col_pdf, export_col_excel = st.columns(2)
         with export_col_pdf:
             generate_pdf = st.button("Generate PDF 📄")
         with export_col_excel:
             generate_excel = st.button("Generate Excel 📊")
+
+    if generate_basic_pdf:
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        pdf_path = Path(tmp.name)
+        tmp.close()
+        basic_reports = [r for r in all_reports if r.get("title") not in EXCEL_REPORT_TITLES]
+        total_steps = len(basic_reports) + 1
+        progress_bar = st.progress(0.0)
+        status_text = st.empty()
+        with st.spinner("Generating Basic Export Mode PDF..."):
+            with PdfPages(pdf_path) as pdf:
+                fig, ax = plt.subplots(figsize=(8.5, 11))
+                ax.axis("off")
+                ax.text(0.5, 0.7, "Immaculate Grid Basic Export", ha="center", va="center", fontsize=24, fontweight="bold")
+                ax.text(0.5, 0.62, "Rule 5 bans, relevant screenshots, and capped analytics", ha="center", va="center", fontsize=12)
+                ax.text(0.5, 0.56, pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"), ha="center", va="center", fontsize=10)
+                pdf.savefig(fig)
+                plt.close(fig)
+
+                status_text.write("Generating Basic Export: Rule 5 bans and screenshots")
+                _write_basic_rule5_pages(pdf, images_df)
+                progress_bar.progress(1 / max(total_steps, 1))
+
+                for idx, report in enumerate(basic_reports, start=1):
+                    status_text.write(f"Generating Basic Export {idx}/{len(basic_reports)}: {report['title']}")
+                    result = run_report(report, ctx, None)
+                    _write_pdf_report_result(pdf, report, result, max_pages=5)
+                    progress_bar.progress(min(1.0, (idx + 1) / max(total_steps, 1)))
+        status_text.write("Completed Basic Export Mode PDF.")
+        with open(pdf_path, "rb") as f:
+            st.download_button(
+                "Download Basic Export Mode PDF",
+                data=f,
+                file_name="basic_export_mode.pdf",
+                mime="application/pdf",
+            )
 
     if generate_pdf:
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")

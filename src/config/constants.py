@@ -60,6 +60,7 @@ IMAGES_METADATA_PATH = json_dir / "images_metadata.json"  # Path to the images m
 IMAGES_METADATA_CSV_PATH = csv_dir / "images_metadata.csv"  # Path to the images metadata CSV file
 IMAGES_METADATA_FUZZY_LOG_PATH = csv_dir / "images_metadata_fuzzy_log.csv"  # Path to the fuzzy matching log file
 IMAGES_PARSER_PATH = json_dir / "images_parser.json"  # Path to the images parser output file
+RULE5_FULL_BANS_CSV_PATH = csv_dir / "rule5_full_bans.csv"  # Manual Rule 5 full-ban table
 PDF_FILENAME = bin_dir / "immaculate_grid_report.pdf"  # Path for the PDF output file
 LOGO_DARK_PATH = bin_dir / "logos" / "logo_dark.png"  # Path to the dark logo image
 LOGO_LIGHT_PATH = bin_dir / "logos" / "logo_light.png"  # Path to the light logo image
