@@ -985,7 +985,7 @@ def render_data_availability(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, i
 
 
 def render_scores_matrix(texts_df: pd.DataFrame) -> None:
-    st.caption("Scores by player and grid (blank means missing).")
+    st.caption("Scores by player, grid, and date (blank means missing).")
     if texts_df.empty:
         st.info("No text results available.")
         return
@@ -997,7 +997,19 @@ def render_scores_matrix(texts_df: pd.DataFrame) -> None:
         texts_df.pivot_table(index="grid_number", columns="name", values="score", aggfunc="first")
         .sort_index(ascending=False)
     )
-    matrix_df = matrix_df.reindex(columns=sorted(GRID_PLAYERS.keys()))
-    styler = matrix_df.style.background_gradient(cmap="RdYlGn_r", axis=None)
-    styler = styler.format(lambda val: "" if pd.isna(val) else f"{int(val)}")
+    player_columns = sorted(GRID_PLAYERS.keys())
+    matrix_df = matrix_df.reindex(columns=player_columns)
+
+    def _date_from_grid(grid_number) -> str:
+        try:
+            return str(ImmaculateGridUtils._fixed_date_from_grid_number(int(grid_number)))
+        except Exception:
+            return ""
+
+    matrix_df.insert(0, "date", [_date_from_grid(grid_number) for grid_number in matrix_df.index])
+    styler = matrix_df.style.background_gradient(cmap="RdYlGn_r", axis=None, subset=player_columns)
+    styler = styler.format(
+        {column: (lambda val: "" if pd.isna(val) else f"{int(val)}") for column in player_columns}
+        | {"date": lambda val: val}
+    )
     st.dataframe(styler, height=min(600, 30 * len(matrix_df) + 40), use_container_width=True)

@@ -2,6 +2,7 @@ import sqlite3
 import pandas as pd
 import os
 import datetime
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -31,6 +32,7 @@ class MessagesLoader(Loader):
             message.rowid, 
             message.handle_id, 
             message.text, 
+            message.attributedBody,
             message.date, 
             message.is_from_me, 
             handle.id as phone_number
@@ -42,6 +44,10 @@ class MessagesLoader(Loader):
             message.handle_id = handle.rowid
         WHERE
             message.text LIKE '%Immaculate%'
+            OR (
+                message.attributedBody IS NOT NULL
+                AND instr(message.attributedBody, 'Immaculate') > 0
+            )
         '''
 
         expanded_path = os.path.expanduser(db_path)
@@ -66,6 +72,8 @@ class MessagesLoader(Loader):
         finally:
             if temp_dir_obj is not None:
                 temp_dir_obj.cleanup()
+
+        df["text"] = df.apply(self._coalesce_message_text, axis=1)
 
         # Extract name using phone number and "is_from_me" parameters
         print("Extracting usernames...")
@@ -148,6 +156,36 @@ class MessagesLoader(Loader):
         
         print("Data extraction and transformation complete!")
         return df
+
+    @staticmethod
+    def _coalesce_message_text(row) -> str | None:
+        text = row.get("text")
+        if isinstance(text, str) and text.strip():
+            return text
+        return MessagesLoader._extract_text_from_attributed_body(row.get("attributedBody"))
+
+    @staticmethod
+    def _extract_text_from_attributed_body(value) -> str | None:
+        if value is None:
+            return None
+        try:
+            decoded = bytes(value).decode("utf-8", errors="ignore")
+        except Exception:
+            return None
+
+        start = decoded.find("Immaculate Grid ")
+        if start < 0:
+            return None
+        decoded = decoded[start:]
+
+        # Apple archives attributed strings with binary metadata after the visible text.
+        # The marker below appears immediately after the message body in current samples.
+        marker = decoded.find("\x02iI")
+        if marker >= 0:
+            decoded = decoded[:marker]
+
+        decoded = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]+", "", decoded)
+        return decoded.strip() or None
 
     def _prepare_query_db_path(self, db_path: str) -> tuple[str, tempfile.TemporaryDirectory | None, dict]:
         """
