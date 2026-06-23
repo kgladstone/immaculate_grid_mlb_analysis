@@ -536,7 +536,7 @@ def _render_dataset_refresh_panel(selected: str, local_cache_dir: Path) -> None:
                     vals = []
                     for key in order:
                         v = str(responses_obj.get(key, "")).strip()
-                        vals.append(v if v else "X")
+                        vals.append(v if v else "{}")
                     rows = [vals[0:3], vals[3:6], vals[6:9]]
                     width = 18
                     lines = []

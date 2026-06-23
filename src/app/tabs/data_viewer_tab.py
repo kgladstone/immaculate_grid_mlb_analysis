@@ -16,6 +16,7 @@ from config.constants import (
     GRID_PLAYERS,
     GRID_PLAYERS_RESTRICTED,
     IMAGES_PATH,
+    IMAGES_METADATA_CSV_PATH,
     MESSAGES_CSV_PATH,
     MY_NAME,
     PROMPTS_CSV_PATH,
@@ -23,6 +24,7 @@ from config.constants import (
 )
 from utils.grid_utils import ImmaculateGridUtils
 from app.services.data_loaders import resolve_path
+from app.services.player_links import player_link_html, player_link_html_table
 
 try:
     import pillow_heif
@@ -366,10 +368,10 @@ def render_responses_grid(responses) -> None:
     ]
     for label, value in cells:
         value_str = str(value).strip()
-        if value_str in {"", "<Empty>"}:
-            safe_value = "<span style='color:#c0392b;font-weight:700;font-size:18px;'>X</span>"
+        if value_str in {"", "<Empty>", "nan", "NaN", "None"}:
+            safe_value = "<span style='color:#c0392b;font-weight:700;font-size:18px;'>{}</span>"
         else:
-            safe_value = value_str.replace("\n", "<br>")
+            safe_value = player_link_html(value_str).replace("\n", "<br>")
         html_parts.append(
             "<div style='border:1px solid #ddd;border-radius:6px;padding:8px;"
             "background:#fff;min-height:70px;display:flex;flex-direction:column;justify-content:center;'>"
@@ -421,7 +423,7 @@ def extract_player_positions(responses) -> List[tuple]:
 
 def _clean_display_player_name(value) -> str:
     """Normalize OCR/parser noise for UI display only; do not persist changes."""
-    if value is None:
+    if value is None or pd.isna(value):
         return "<Empty>"
     text = str(value).strip()
     if not text:
@@ -575,6 +577,39 @@ def render_image_metadata(
         texts_df = pd.DataFrame()
 
     images_dir = resolve_path(IMAGES_PATH)
+    derived_responses_df = pd.DataFrame()
+    derived_path = resolve_path(IMAGES_METADATA_CSV_PATH)
+    if derived_path.exists():
+        try:
+            derived_responses_df = pd.read_csv(
+                derived_path,
+                dtype={"grid_number": str, "submitter": str, "position": str, "response": str},
+            )
+            if {"grid_number", "submitter", "position", "response"}.issubset(derived_responses_df.columns):
+                derived_responses_df["grid_number"] = derived_responses_df["grid_number"].map(_norm_grid_id)
+                derived_responses_df["submitter"] = derived_responses_df["submitter"].astype(str)
+            else:
+                derived_responses_df = pd.DataFrame()
+        except Exception:
+            derived_responses_df = pd.DataFrame()
+
+    def _display_responses(entry: dict):
+        if derived_responses_df.empty:
+            return entry.get("responses")
+        grid_id = _norm_grid_id(entry.get("grid_number"))
+        submitter = str(entry.get("submitter", ""))
+        subset = derived_responses_df[
+            (derived_responses_df["grid_number"] == grid_id)
+            & (derived_responses_df["submitter"] == submitter)
+        ]
+        if subset.empty:
+            return entry.get("responses")
+        return {
+            str(row["position"]): "" if pd.isna(row.get("response")) else str(row.get("response", ""))
+            for _, row in subset.iterrows()
+            if str(row.get("position", "")).strip()
+        }
+
     grid_ids = sorted(df["grid_number"].dropna().map(_norm_grid_id).unique(), key=_grid_sort_key, reverse=True)
     if show_selector:
         default_index = 0
@@ -754,8 +789,8 @@ def render_image_metadata(
                 else:
                     st.warning(f"Image not found for entry (filename={filename}).")
 
-                st.caption("Parsed players (by position):")
-                render_responses_grid(entry.get("responses"))
+                st.caption("Parsed players (fuzzy-normalized for display):")
+                render_responses_grid(_display_responses(entry))
 
 
 def render_rule5_bans(rule5_df: pd.DataFrame, prompts_df: pd.DataFrame, images_df: pd.DataFrame) -> None:
@@ -839,7 +874,7 @@ def render_rule5_bans(rule5_df: pd.DataFrame, prompts_df: pd.DataFrame, images_d
         key=lambda col: pd.to_numeric(col, errors="coerce") if col.name == "grid_number" else col,
         ascending=[False, True],
     )
-    st.dataframe(display_df, use_container_width=True, hide_index=True, height=420)
+    st.markdown(player_link_html_table(display_df, max_height_px=420, dark=True), unsafe_allow_html=True)
 
     st.markdown("### Ban Screenshots")
     st.caption("Shows screenshots for the selected ban grid from the ban-review user set only.")

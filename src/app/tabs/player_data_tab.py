@@ -14,6 +14,7 @@ import streamlit as st
 
 from data.io.mlb_reference import MANUAL_ALIASES, clean_name, load_mlb_player_names
 from config.constants import MESSAGES_CSV_PATH, PROMPTS_CSV_PATH
+from app.services.player_links import player_link_html, player_link_html_table
 
 
 def _safe_lahman_table(table_name: str) -> pd.DataFrame:
@@ -642,23 +643,20 @@ def _render_fudged_position_usage(usage_df: pd.DataFrame) -> None:
     )
 
     st.markdown("#### Submitter | Player | Position Detail")
-    st.dataframe(
-        merged[
-            [
-                "rank",
-                "submitter",
-                "mlb_player",
-                "position",
-                "fractional_appearance",
-                "log_fractional_appearance",
-                "grid_uses",
-                "grid_ids",
-                "fudge_score",
-            ]
-        ],
-        use_container_width=True,
-        hide_index=True,
-    )
+    detail_df = merged[
+        [
+            "rank",
+            "submitter",
+            "mlb_player",
+            "position",
+            "fractional_appearance",
+            "log_fractional_appearance",
+            "grid_uses",
+            "grid_ids",
+            "fudge_score",
+        ]
+    ].copy()
+    st.markdown(player_link_html_table(detail_df, max_height_px=520), unsafe_allow_html=True)
 
 
 def _render_player_search_chart(usage_df: pd.DataFrame) -> None:
@@ -691,6 +689,9 @@ def _render_player_search_chart(usage_df: pd.DataFrame) -> None:
         options=candidates,
         key="player_search_select",
     )
+    linked_player = player_link_html(selected_player, on_dark=True)
+    if linked_player != selected_player:
+        st.markdown(f"Baseball Reference: {linked_player}", unsafe_allow_html=True)
 
     # Global usage summary for this player across all submitters.
     player_all_rows = usage_df[usage_df["player"] == selected_player].copy()

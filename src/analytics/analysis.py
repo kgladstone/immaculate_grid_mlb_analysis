@@ -43,8 +43,10 @@ from config.constants import (
     IMAGES_PATH,
     APPLE_TEXTS_DB_PATH,
     IMAGES_METADATA_PATH,
+    RULE5_FULL_BANS_CSV_PATH,
+    canonicalize_franchid,
 )
-from data.io.mlb_reference import clean_name
+from data.io.mlb_reference import clean_name, load_local_player_name_team_map
 
 # Helpers for grid/date mapping and week buckets
 _IMM_START_DT = datetime.strptime(IMM_GRID_START_DATE, "%Y-%m-%d")
@@ -57,6 +59,42 @@ def grid_to_date(grid_number: int) -> datetime:
 def week_start_from_grid(grid_number: int) -> datetime:
     grid_date = grid_to_date(grid_number)
     return grid_date - timedelta(days=grid_date.weekday())
+
+
+def _team_category_to_franchid(category: Any) -> str:
+    team_name = get_team_from_category(str(category))
+    if not team_name:
+        return ""
+    return canonicalize_franchid(TEAM_LIST.get(team_name, ""))
+
+
+def _filter_impossible_player_team_rows(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+
+    try:
+        _, name_to_franchids, _ = load_local_player_name_team_map()
+    except Exception:
+        return df.copy()
+
+    if not name_to_franchids:
+        return df.copy()
+
+    filtered = df.copy()
+    filtered["team_franchid"] = filtered["team"].apply(_team_category_to_franchid)
+
+    def has_valid_team(row: pd.Series) -> bool:
+        player = clean_name(row.get("player", ""))
+        team_franchid = row.get("team_franchid", "")
+        if not player or not team_franchid:
+            return True
+        known_franchids = name_to_franchids.get(player)
+        if not known_franchids:
+            return True
+        return team_franchid in known_franchids
+
+    filtered = filtered[filtered.apply(has_valid_team, axis=1)].copy()
+    return filtered.drop(columns=["team_franchid"])
 
 # Function to calculate smoothed metrics (score, correct, average_score_of_correct) from texts_melted
 def calculate_smoothed_metrics(texts, smoothness=28):
@@ -493,6 +531,12 @@ def analyze_most_successful_exact_intersections(texts, prompts, name):
 
     # Compute intersections for the given person
     intersections = build_intersection_structure_for_person(texts, prompts, name)
+    if not intersections:
+        print(f"Most Successful Exact Intersections for {name}", file=result)
+        print("No successful intersections available for this selection.", file=result)
+        result_string = result.getvalue()
+        result.close()
+        return result_string
 
     # Determine the maximum length of "{x} & {y}:" for alignment
     max_length = max(len(f"{x} & {y}:") for (x, y) in intersections.keys())
@@ -530,17 +574,31 @@ def analyze_empty_team_team_intersections(texts, prompts, name, categories):
     """
     result = StringIO()
 
-    # Compute existing intersections for the given person
+    # Compute existing intersections for the given person and compare by canonical
+    # team key. Raw category labels vary across prompt eras ("Tampa Bay" vs.
+    # "Tampa Bay Rays"), so exact display strings produce false missing pairs.
     intersections_for_person = build_intersection_structure_for_person(texts, prompts, name)
+    present_team_pairs = set()
+    for category_pair in intersections_for_person:
+        if len(category_pair) != 2:
+            continue
+        first, second = category_pair
+        if not (category_is_team(first) and category_is_team(second)):
+            continue
+        first_team = get_team_from_category(first)
+        second_team = get_team_from_category(second)
+        if first_team and second_team:
+            present_team_pairs.add(tuple(sorted((first_team, second_team))))
 
-    # Map team names to their full category names and vice versa
-    team_to_full_names = {}
-    full_names_to_team = {}
+    # Pick stable, readable labels for output without letting display strings drive
+    # the membership check.
+    team_display_names = {}
     for team in TEAM_LIST:
-        for category in categories:
-            if team in category:
-                team_to_full_names[team] = category
-                full_names_to_team[category] = team
+        candidates = sorted(
+            [category for category in categories if isinstance(category, str) and team in category],
+            key=lambda value: (-len(value), value),
+        )
+        team_display_names[team] = candidates[0] if candidates else team
 
     missing = 0
     present = 0
@@ -551,9 +609,9 @@ def analyze_empty_team_team_intersections(texts, prompts, name, categories):
     
     for i, team in enumerate(sorted(TEAM_LIST)):
         for other in sorted(TEAM_LIST)[i + 1:]:
-            team_1, team_2 = sorted((team_to_full_names[team], team_to_full_names[other]))
-            key = (team_1, team_2)
-            if key not in intersections_for_person:
+            key = tuple(sorted((team, other)))
+            team_1, team_2 = sorted((team_display_names[team], team_display_names[other]))
+            if key not in present_team_pairs:
                 # This intersection is missing from the person's game
                 print(f"Missing: {team_1} & {team_2}", file=result)
                 missing += 1
@@ -679,11 +737,10 @@ def get_teams_for_each_player_from_responses(image_metadata, prompts, grid_min=0
         grid_min, 
         grid_max)
     
-    filtered_df = df[df.apply(lambda row: category_is_team(row['category']), axis=1)]
-
+    filtered_df = df[df.apply(lambda row: category_is_team(row['category']), axis=1)].copy()
     filtered_df.rename(columns={'category':'team'}, inplace=True)
 
-    return filtered_df
+    return _filter_impossible_player_team_rows(filtered_df)
 
 
 def get_supercategory_for_each_player_from_responses(image_metadata, prompts, grid_min=0, grid_max=99999):
@@ -2144,12 +2201,59 @@ def analyze_full_week_usage(texts_df: pd.DataFrame, images_df: pd.DataFrame, per
 
 
 def analyze_shame_index(images_df: pd.DataFrame, person: Optional[str] = None) -> pd.DataFrame:
-    """Shame index: repeated use of players within a Mon-Sun week per submitter (by grid date)."""
+    """Shame index: weekly repeated players plus Rule 5 full-ban usage after ban grid."""
+    columns = [
+        "submitter",
+        "week_start",
+        "shame_index",
+        "repeated_players",
+        "repeated_count",
+        "rule5_banned_players",
+        "rule5_banned_count",
+        "total_uses",
+    ]
     if images_df.empty or "grid_number" not in images_df.columns:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=columns)
+
+    def _player_key(value: object) -> str:
+        cleaned = clean_name(value)
+        return re.sub(r"[^a-z0-9]+", "", str(cleaned or "").casefold())
+
+    def _rule5_ban_lookup() -> dict[str, dict]:
+        path = Path(RULE5_FULL_BANS_CSV_PATH)
+        if not path.exists():
+            return {}
+        try:
+            bans = pd.read_csv(path)
+        except Exception:
+            return {}
+        if bans.empty or not {"player", "grid_number"}.issubset(bans.columns):
+            return {}
+        bans = bans.copy()
+        bans["ban_grid"] = pd.to_numeric(bans["grid_number"], errors="coerce")
+        bans = bans.dropna(subset=["ban_grid", "player"])
+        lookup = {}
+        for _, row in bans.iterrows():
+            key = _player_key(row.get("player"))
+            if not key:
+                continue
+            ban_grid = int(row["ban_grid"])
+            existing = lookup.get(key)
+            if existing is None or ban_grid < existing["ban_grid"]:
+                lookup[key] = {
+                    "player": str(row.get("player", "")).strip(),
+                    "ban_grid": ban_grid,
+                }
+        return lookup
+
+    rule5_lookup = _rule5_ban_lookup()
     df = images_df.copy()
+    main_submitters = set(GRID_PLAYERS_RESTRICTED.keys())
+    df = df[df["submitter"].isin(main_submitters)]
     df["grid_number"] = pd.to_numeric(df["grid_number"], errors="coerce")
     if person:
+        if person not in main_submitters:
+            return pd.DataFrame(columns=columns)
         df = df[df["submitter"] == person]
     df = df.dropna(subset=["grid_number"])
     df["week_start"] = df["grid_number"].apply(week_start_from_grid).dt.strftime("%Y-%m-%d")
@@ -2165,23 +2269,47 @@ def analyze_shame_index(images_df: pd.DataFrame, person: Optional[str] = None) -
     rows = []
     for (sub, wk), group in df.groupby(["submitter", "week_start"]):
         counts = group["players"].value_counts()
-        shame = int(sum(max(c - 1, 0) for c in counts))
+        repeat_shame = int(sum(max(c - 1, 0) for c in counts))
         repeated = counts[counts > 1].index.tolist()
         repeated_fmt = []
         for player in repeated:
             grids = group.loc[group["players"] == player, "grid_number"].astype(int).unique().tolist()
             repeated_fmt.append(f"{player} ({', '.join(str(g) for g in sorted(grids))})")
+
+        rule5_fmt = []
+        rule5_count = 0
+        for player, player_group in group.groupby("players", dropna=False):
+            ban = rule5_lookup.get(_player_key(player))
+            if not ban:
+                continue
+            grids = sorted(
+                int(g)
+                for g in player_group["grid_number"].dropna().astype(int).unique().tolist()
+                if int(g) > int(ban["ban_grid"])
+            )
+            if not grids:
+                continue
+            rule5_count += len(grids)
+            rule5_fmt.append(
+                f"{ban['player']} (banned {ban['ban_grid']}; used {', '.join(str(g) for g in grids)})"
+            )
+
+        if not repeated_fmt and not rule5_fmt:
+            continue
+        shame = repeat_shame + rule5_count
         rows.append(
             {
                 "submitter": sub,
                 "week_start": wk,
                 "shame_index": shame,
-                "repeated_players": ", ".join(repeated_fmt),
+                "repeated_players": "\n".join(repeated_fmt),
                 "repeated_count": len(repeated_fmt),
+                "rule5_banned_players": "\n".join(rule5_fmt),
+                "rule5_banned_count": rule5_count,
                 "total_uses": int(counts.sum()),
             }
         )
-    return pd.DataFrame(rows).sort_values(by=["week_start", "submitter"], ascending=False)
+    return pd.DataFrame(rows, columns=columns).sort_values(by=["week_start", "submitter"], ascending=False)
 
 
 def analyze_adjusted_rarity(texts_df: pd.DataFrame, images_df: pd.DataFrame) -> pd.DataFrame:
@@ -2189,6 +2317,8 @@ def analyze_adjusted_rarity(texts_df: pd.DataFrame, images_df: pd.DataFrame) -> 
     if texts_df.empty or "date" not in texts_df.columns:
         return pd.DataFrame()
     texts = texts_df.copy()
+    main_submitters = set(GRID_PLAYERS_RESTRICTED.keys())
+    texts = texts[texts["name"].isin(main_submitters)]
     texts["date_dt"] = pd.to_datetime(texts["date"])
     texts["week_start"] = texts["date_dt"].apply(lambda d: d - timedelta(days=d.weekday())).dt.strftime("%Y-%m-%d")
     score_stats = (

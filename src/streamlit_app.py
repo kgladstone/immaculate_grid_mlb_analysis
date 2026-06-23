@@ -11,6 +11,8 @@ from app.services.data_loaders import (
 )
 from app.tabs.refresh_tab import render_refresh_tab
 from app.tabs.data_viewer_tab import (
+    _grid_sort_key,
+    _norm_grid_id,
     render_image_metadata,
     render_rule5_bans,
     render_prompts_and_texts,
@@ -25,7 +27,7 @@ from config.constants import IMAGES_METADATA_PATH
 def main():
     st.set_page_config(page_title="Immaculate Grid Data Viewer", layout="wide")
     st.title("Immaculate Grid Data Viewer")
-    st.caption("Browse cached datasets and trigger selective refreshes.")
+    st.caption("House-rule command center for refreshed grids, screenshots, bans, analytics, and games.")
 
     # Load shared data once
     prompts_df = load_prompts_df()
@@ -33,8 +35,8 @@ def main():
     images_df = load_image_metadata_df()
     rule5_df = load_rule5_full_bans_df()
 
-    data_tab, refresh_tab, analytics_tab, simulator_tab = st.tabs(
-        ["🗂 Data Viewer", "➕ Add / Update Data", "📊 Analytics", "🎮 Mini Games"]
+    data_tab, refresh_tab, analytics_tab = st.tabs(
+        ["🗂 Overview", "➕ Update Data", "📊 Analytics"]
     )
 
     with data_tab:
@@ -60,11 +62,13 @@ def main():
 
         with grid_tab:
             all_grids = sorted(
-                set(prompts_df.get("grid_id", []))
-                | set(texts_df.get("grid_number", []))
-                | set(images_df.get("grid_number", [])),
+                {_norm_grid_id(value) for value in prompts_df.get("grid_id", [])}
+                | {_norm_grid_id(value) for value in texts_df.get("grid_number", [])}
+                | {_norm_grid_id(value) for value in images_df.get("grid_number", [])},
+                key=_grid_sort_key,
                 reverse=True,
             )
+            all_grids = [grid_id for grid_id in all_grids if grid_id]
             if not all_grids:
                 st.info("No grids available to display.")
             else:
@@ -107,10 +111,11 @@ def main():
         render_refresh_tab()
 
     with analytics_tab:
-        render_analytics(prompts_df, texts_df, images_df)
-
-    with simulator_tab:
-        render_simulator_tab()
+        report_tab, mini_games_tab = st.tabs(["📋 Report", "🎮 Mini Games"])
+        with report_tab:
+            render_analytics(prompts_df, texts_df, images_df)
+        with mini_games_tab:
+            render_simulator_tab()
 
 
 if __name__ == "__main__":

@@ -7,6 +7,21 @@ from data.io.loader import Loader
 from data.transforms.data_prep import normalize_team_aliases
 from utils.grid_utils import ImmaculateGridUtils
 
+PROMPT_OVERRIDES = {
+    1073: {
+        "top_left": "('Pittsburgh Pirates', 'San Diego Padres')",
+        "top_center": "('Pittsburgh Pirates', 'Washington Nationals')",
+        "top_right": "('Pittsburgh Pirates', 'Played Third Base min. 1 game')",
+        "middle_left": "('Houston Astros', 'San Diego Padres')",
+        "middle_center": "('Houston Astros', 'Washington Nationals')",
+        "middle_right": "('Houston Astros', 'Played Third Base min. 1 game')",
+        "bottom_left": "('40+ WAR Career', 'San Diego Padres')",
+        "bottom_center": "('40+ WAR Career', 'Washington Nationals')",
+        "bottom_right": "('40+ WAR Career', 'Played Third Base min. 1 game')",
+    },
+}
+
+
 class PromptsLoader(Loader):
     def __init__(self, grid_storage_path):
         print("*"*20)
@@ -18,6 +33,26 @@ class PromptsLoader(Loader):
             fetch_function=self._fetch_new_prompts,
             validate_function=self._validate_prompts
         )
+
+    @staticmethod
+    def _apply_prompt_overrides(data):
+        if data is None or data.empty or "grid_id" not in data.columns:
+            return data
+
+        out = data.copy()
+        grid_ids = pd.to_numeric(out["grid_id"], errors="coerce")
+        for grid_id, overrides in PROMPT_OVERRIDES.items():
+            mask = grid_ids == grid_id
+            if not mask.any():
+                continue
+            for col, value in overrides.items():
+                if col in out.columns:
+                    out.loc[mask, col] = value
+        return out
+
+    def _load_from_cache(self):
+        data = super()._load_from_cache()
+        return self._apply_prompt_overrides(data)
 
     def _fetch_prompts_from_cache(self):
         """
@@ -141,7 +176,7 @@ class PromptsLoader(Loader):
 
         combined_data = pd.concat([data_previous, data_incremental], ignore_index=True)
 
-        return combined_data
+        return self._apply_prompt_overrides(combined_data)
 
     def _validate_prompts(self, data):
         """

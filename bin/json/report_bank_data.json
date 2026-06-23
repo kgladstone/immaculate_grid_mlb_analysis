@@ -441,7 +441,7 @@
     "title": "Player Search",
     "func": "dynamic_player_search_view",
     "needs_person": false,
-    "type": "table",
+    "type": "chart",
     "args": [
       "images"
     ],
@@ -451,7 +451,7 @@
     "title": "Tableau Mosaic",
     "func": "dynamic_tableau_mosaic_view",
     "needs_person": false,
-    "type": "table",
+    "type": "chart",
     "args": [
       "images"
     ],
@@ -461,7 +461,7 @@
     "title": "Median Year Histogram by User (Usage Weighted)",
     "func": "dynamic_median_year_hist_view",
     "needs_person": false,
-    "type": "table",
+    "type": "chart",
     "args": [
       "images"
     ],
@@ -471,7 +471,7 @@
     "title": "Career WAR Distribution by User",
     "func": "dynamic_war_hist_view",
     "needs_person": false,
-    "type": "table",
+    "type": "chart",
     "args": [
       "images"
     ],
@@ -481,7 +481,7 @@
     "title": "Avg Career WAR vs Grid Rarity (Scatter)",
     "func": "dynamic_war_rarity_scatter_view",
     "needs_person": false,
-    "type": "table",
+    "type": "chart",
     "args": [
       "images"
     ],

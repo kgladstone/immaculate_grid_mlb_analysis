@@ -73,21 +73,26 @@ def load_local_player_name_team_map(cache_dir: str = "bin/baseball_cache"):
     player_to_lgid = {}
     if teams_path.exists() and apps_path.exists():
         try:
-            teams = pd.read_csv(teams_path, usecols=["yearID", "teamID", "franchID", "lgID"])
-            apps = pd.read_csv(apps_path, usecols=["yearID", "teamID", "playerID"])
+            teams = pd.read_csv(teams_path, usecols=["yearID", "teamID", "franchID"])
+            apps_cols = ["yearID", "teamID", "playerID"]
+            apps_preview = pd.read_csv(apps_path, nrows=0)
+            if "lgID" in apps_preview.columns:
+                apps_cols.append("lgID")
+            apps = pd.read_csv(apps_path, usecols=apps_cols)
             teams["franchID"] = teams["franchID"].apply(canonicalize_franchid)
-            teams["lgID"] = teams["lgID"].astype(str).str.upper()
             merged = apps.merge(teams, on=["yearID", "teamID"], how="left")
             player_to_franch = (
                 merged.groupby("playerID", dropna=False)["franchID"]
                 .agg(lambda s: {str(v) for v in s.dropna().tolist()})
                 .to_dict()
             )
-            player_to_lgid = (
-                merged.groupby("playerID", dropna=False)["lgID"]
-                .agg(lambda s: {str(v) for v in s.dropna().tolist()})
-                .to_dict()
-            )
+            if "lgID" in merged.columns:
+                merged["lgID"] = merged["lgID"].astype(str).str.upper()
+                player_to_lgid = (
+                    merged.groupby("playerID", dropna=False)["lgID"]
+                    .agg(lambda s: {str(v) for v in s.dropna().tolist()})
+                    .to_dict()
+                )
         except Exception:
             player_to_franch = {}
             player_to_lgid = {}

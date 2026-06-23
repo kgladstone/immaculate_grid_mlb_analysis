@@ -5,6 +5,7 @@ import io
 from numbers import Number
 from pathlib import Path
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import streamlit as st
 import textwrap
@@ -17,12 +18,23 @@ import tempfile
 from config.constants import GRID_PLAYERS, GRID_PLAYERS_RESTRICTED, IMAGES_METADATA_FUZZY_LOG_PATH
 from config.constants import IMAGES_METADATA_PATH, IMAGES_PATH, MESSAGES_CSV_PATH, PROMPTS_CSV_PATH, RULE5_FULL_BANS_CSV_PATH
 from scripts.build_career_war_cache import build_career_war_cache
+from app.services.player_links import player_link_columns, player_link_html, player_link_html_table
 from app.services.report_bank import load_report_bank, run_report
 from data.transforms.data_prep import preprocess_data_into_texts_structure, make_color_map, build_category_structure
 from data.io.mlb_reference import correct_typos_with_fuzzy_matching
-from app.tabs.player_data_tab import render_player_data_analytics
+from app.tabs.player_data_tab import (
+    render_player_data_analytics,
+    _build_usage_df,
+    _load_career_position_fraction_table,
+    _load_career_war_lookup,
+    _load_grid_rarity_scores,
+    _load_median_year_lookup,
+    _load_prompt_position_lookup,
+    _normalize_grid_number,
+)
 
 ANALYTICS_CACHE_DIR = Path(".cache")
+PDF_PERSON_REPORT_SUBMITTERS = sorted(GRID_PLAYERS_RESTRICTED.keys())
 EXCEL_REPORT_TITLES = {
     "Full Week Usage",
     "Low Bit High Reward",
@@ -30,6 +42,20 @@ EXCEL_REPORT_TITLES = {
     "Raw Results",
     "Raw Images Metadata",
 }
+DYNAMIC_REPORT_FUNCS = {
+    "dynamic_player_search_view": "Player Search",
+    "dynamic_tableau_mosaic_view": "Tableau Mosaic",
+    "dynamic_median_year_hist_view": "Median Year Histogram by User (Usage Weighted)",
+    "dynamic_war_hist_view": "Career WAR Distribution by User",
+    "dynamic_war_rarity_scatter_view": "Avg Career WAR vs Grid Rarity (Scatter)",
+    "dynamic_fudged_position_usage_view": "Fudged Position Usage",
+    "dynamic_median_year_hist_unique_view": "Median Year Histogram by Submitter (Unique Players)",
+}
+PDF_DYNAMIC_REPORT_FUNCS = set(DYNAMIC_REPORT_FUNCS) - {
+    "dynamic_player_search_view",
+}
+RULE5_PDF_TITLE = "Rule 5 Bans + Screenshots"
+PDF_ONLY_SECTION_TITLES = {RULE5_PDF_TITLE}
 
 try:
     import pillow_heif
@@ -71,11 +97,27 @@ def _render_responses_preview(responses: object) -> None:
     if not isinstance(responses, dict):
         st.caption("No parsed responses.")
         return
-    lines = []
+    html_parts = ["<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:4px;'>"]
     for row in (ordered[0:3], ordered[3:6], ordered[6:9]):
-        vals = [str(responses.get(pos, "")).strip() for pos in row]
-        lines.append(" | ".join(vals))
-    st.code("\n".join(lines), language="text")
+        for pos in row:
+            value = str(responses.get(pos, "")).strip()
+            linked_value = player_link_html(value) if value else "{}"
+            html_parts.append(
+                "<div style='border:1px solid #ddd;border-radius:4px;padding:6px;"
+                "background:#fff;min-height:38px;font-size:12px;font-weight:600;'>"
+                f"{linked_value}"
+                "</div>"
+            )
+    html_parts.append("</div>")
+    st.markdown("".join(html_parts), unsafe_allow_html=True)
+
+
+def _render_dataframe_with_player_links(df: pd.DataFrame, **kwargs) -> None:
+    if player_link_columns(df):
+        height = kwargs.pop("height", 520)
+        st.markdown(player_link_html_table(df, max_height_px=height), unsafe_allow_html=True)
+    else:
+        st.dataframe(df, **kwargs)
 
 
 def _render_overlap_drilldown(ctx: dict, grid_number: int, submitter_1: str, submitter_2: str) -> None:
@@ -242,8 +284,9 @@ def _write_excel_reports(reports, ctx, excel_path: Path, status_text=None, progr
     if status_text:
         status_text.write("Building Excel workbook...")
     with pd.ExcelWriter(excel_path) as writer:
-        total = len(reports)
-        for idx, report in enumerate(reports, start=1):
+        exportable_reports = [r for r in reports if r.get("func") not in DYNAMIC_REPORT_FUNCS]
+        total = len(exportable_reports)
+        for idx, report in enumerate(exportable_reports, start=1):
             if status_text:
                 status_text.write(f"Building Excel {idx}/{total}: {report['title']}")
             if progress_bar:
@@ -287,6 +330,25 @@ def _wrap_pdf_cell(value: object, wrap_width: int = 28) -> str:
     return "\n".join(wrapped_lines)
 
 
+def _pdf_wrap_width_for_column(column: object, wide: bool) -> int:
+    name = str(column).lower()
+    if name == "rank":
+        return 6
+    if name in {"repeated_players", "players_used", "grid_ids", "submitter_positions", "position_prompts"}:
+        return 22 if wide else 26
+    if "players" in name or "positions" in name or "prompts" in name:
+        return 24 if wide else 28
+    return 18 if wide else 24
+
+
+def _wrap_pdf_frame(frame: pd.DataFrame, wide: bool) -> pd.DataFrame:
+    wrapped = pd.DataFrame(index=frame.index)
+    for col in frame.columns:
+        wrap_width = _pdf_wrap_width_for_column(col, wide)
+        wrapped[col] = frame[col].map(lambda value: _wrap_pdf_cell(value, wrap_width=wrap_width))
+    return wrapped[frame.columns]
+
+
 def _pdf_line_count(value: object) -> int:
     return len(str(value).splitlines() or [""])
 
@@ -295,16 +357,22 @@ def _pdf_max_line_len(value: object) -> int:
     return max((len(line) for line in str(value).splitlines()), default=0)
 
 
-def _pdf_column_widths(frame: pd.DataFrame, max_total_width: float = 0.98) -> list[float]:
-    col_lens = []
+def _pdf_column_widths(frame: pd.DataFrame, max_total_width: float = 0.92) -> list[float]:
+    widths = []
     for col in frame.columns:
+        name = str(col).lower()
+        if name == "rank":
+            widths.append(0.055)
+            continue
         max_cell = max((_pdf_max_line_len(v) for v in frame[col].astype(str)), default=0)
-        col_lens.append(max(len(str(col)), max_cell, 1))
-    total = sum(col_lens) or 1
-    widths = [max_total_width * (length / total) for length in col_lens]
-    widths = [min(max(w, 0.06), 0.24) for w in widths]
-    scale = (max_total_width / sum(widths)) if sum(widths) > 0 else 1.0
-    return [w * scale for w in widths]
+        target = 0.018 + min(max(max(len(str(col)), max_cell), 6), 28) * 0.006
+        widths.append(min(max(target, 0.075), 0.18))
+
+    total = sum(widths)
+    if total > max_total_width:
+        scale = max_total_width / total
+        widths = [w * scale for w in widths]
+    return widths
 
 
 def _pdf_row_heights(frame: pd.DataFrame, max_total_height: float = 0.9) -> list[float]:
@@ -337,9 +405,10 @@ def _paginate_pdf_table(frame: pd.DataFrame, max_lines_per_page: int) -> list[pd
 
 def _save_pdf_table(pdf: PdfPages, title: str, df: pd.DataFrame, max_pages: int | None = None) -> int:
     base_df = df.reset_index(drop=True)
-    df_wrapped = base_df.map(_wrap_pdf_cell) if hasattr(base_df, "map") else base_df.applymap(_wrap_pdf_cell)
-    wide = df_wrapped.shape[1] > 8
-    page_slices = _paginate_pdf_table(df_wrapped, 28 if wide else 36)
+    wide = base_df.shape[1] > 8
+    df_wrapped = _wrap_pdf_frame(base_df, wide=wide)
+    max_lines_per_page = 24 if wide else 30
+    page_slices = _paginate_pdf_table(df_wrapped, max_lines_per_page)
     if max_pages is not None:
         page_slices = page_slices[:max_pages]
     total_pages = len(page_slices)
@@ -357,7 +426,7 @@ def _save_pdf_table(pdf: PdfPages, title: str, df: pd.DataFrame, max_pages: int 
             bbox=[0, 0, 1, 0.9],
         )
         table.auto_set_font_size(False)
-        table.set_fontsize(7 if wide else 8)
+        table.set_fontsize(6.2 if wide else 7.2)
         numeric_cols = {idx for idx, col in enumerate(df.columns) if pd.api.types.is_numeric_dtype(df[col])}
         row_heights = _pdf_row_heights(slice_df)
         for (r, c), cell in table.get_celld().items():
@@ -458,6 +527,404 @@ def _write_basic_rule5_pages(pdf: PdfPages, images_df: pd.DataFrame) -> int:
     return pages
 
 
+def _write_pdf_message(pdf: PdfPages, title: str, message: str) -> int:
+    fig, ax = plt.subplots(figsize=(8.5, 11))
+    ax.axis("off")
+    ax.text(0.5, 0.58, title, ha="center", va="center", fontsize=16, fontweight="bold")
+    ax.text(0.5, 0.48, message, ha="center", va="center", wrap=True)
+    pdf.savefig(fig)
+    plt.close(fig)
+    return 1
+
+
+def _write_pdf_table_of_contents(pdf: PdfPages, title: str, entries: list[str]) -> int:
+    if not entries:
+        return 0
+    pages = 0
+    fig, ax = plt.subplots(figsize=(8.5, 11))
+    ax.axis("off")
+    ax.text(0.5, 0.95, title, ha="center", va="top", fontsize=18, fontweight="bold")
+    y = 0.9
+    line_height = 0.028
+    for i, entry in enumerate(entries, start=1):
+        lines = textwrap.wrap(f"{i}. {entry}", width=92) or [f"{i}. {entry}"]
+        if y - (len(lines) * line_height) < 0.05:
+            pdf.savefig(fig)
+            plt.close(fig)
+            pages += 1
+            fig, ax = plt.subplots(figsize=(8.5, 11))
+            ax.axis("off")
+            ax.text(0.5, 0.95, f"{title} (continued)", ha="center", va="top", fontsize=18, fontweight="bold")
+            y = 0.9
+        for line in lines:
+            ax.text(0.1, y, line, ha="left", va="top", fontsize=10)
+            y -= line_height
+        y -= 0.006
+    pdf.savefig(fig)
+    plt.close(fig)
+    return pages + 1
+
+
+def _write_pdf_text_table(pdf: PdfPages, title: str, df: pd.DataFrame, rows_per_page: int = 32, max_pages: int | None = None) -> int:
+    if df.empty:
+        return _write_pdf_message(pdf, title, "No data.")
+    pages = [
+        df.iloc[start : start + rows_per_page].copy()
+        for start in range(0, len(df), rows_per_page)
+    ]
+    if max_pages is not None:
+        pages = pages[:max_pages]
+    total_pages = len(pages)
+    for page_num, page_df in enumerate(pages, start=1):
+        fig, ax = plt.subplots(figsize=(11, 8.5))
+        ax.axis("off")
+        suffix = f" (Page {page_num}/{total_pages})" if total_pages > 1 else ""
+        ax.text(0.5, 0.96, f"{title}{suffix}", ha="center", va="top", fontsize=13, fontweight="bold")
+        text = page_df.to_string(index=False, max_colwidth=28)
+        text = text.encode("ascii", errors="replace").decode("ascii")
+        ax.text(
+            0.02,
+            0.90,
+            text,
+            ha="left",
+            va="top",
+            fontsize=7.5,
+            linespacing=1.25,
+        )
+        pdf.savefig(fig)
+        plt.close(fig)
+    return total_pages
+
+
+def _write_pdf_text_pages(pdf: PdfPages, title: str, text: str, max_pages: int | None = None) -> int:
+    lines: list[str] = []
+    for raw_line in str(text).splitlines() or [""]:
+        wrapped = textwrap.wrap(raw_line, width=105, replace_whitespace=False) if raw_line else [""]
+        lines.extend(wrapped)
+    lines_per_page = 44
+    pages = [
+        lines[start : start + lines_per_page]
+        for start in range(0, len(lines), lines_per_page)
+    ] or [[""]]
+    if max_pages is not None:
+        pages = pages[:max_pages]
+    total_pages = len(pages)
+    for page_num, page_lines in enumerate(pages, start=1):
+        fig, ax = plt.subplots(figsize=(8.5, 11))
+        ax.axis("off")
+        suffix = f" (Page {page_num}/{total_pages})" if total_pages > 1 else ""
+        ax.text(0.5, 0.97, f"{title}{suffix}", ha="center", va="top", fontsize=12, fontweight="bold")
+        y = 0.92
+        for line in page_lines:
+            safe_line = line.encode("ascii", errors="replace").decode("ascii")
+            ax.text(0.06, y, safe_line, ha="left", va="top", fontsize=8.5)
+            y -= 0.019
+        pdf.savefig(fig)
+        plt.close(fig)
+    return total_pages
+
+
+def _expanded_pdf_reports(reports: list[dict]) -> list[dict]:
+    expanded: list[dict] = []
+    for report in reports:
+        if report.get("needs_person"):
+            for person in PDF_PERSON_REPORT_SUBMITTERS:
+                report_for_person = dict(report)
+                report_for_person["person"] = person
+                report_for_person["title"] = f"{report['title']} - {person}"
+                expanded.append(report_for_person)
+        else:
+            expanded.append(report)
+    return expanded
+
+
+def _usage_for_pdf(ctx: dict) -> pd.DataFrame:
+    return _build_usage_df(ctx.get("images", pd.DataFrame()))
+
+
+def _write_pdf_tableau_mosaic(pdf: PdfPages, usage_df: pd.DataFrame) -> int:
+    submitters = sorted(usage_df["submitter"].dropna().astype(str).unique().tolist())
+    if not submitters:
+        return _write_pdf_message(pdf, "Tableau Mosaic", "No submitters available.")
+    cols = 2
+    rows = int(np.ceil(len(submitters) / cols)) or 1
+    fig, axes = plt.subplots(rows, cols, figsize=(11, max(4.0 * rows, 4.5)))
+    axes = np.array(axes).reshape(-1)
+    for idx, submitter in enumerate(submitters):
+        ax = axes[idx]
+        counts = usage_df.loc[usage_df["submitter"] == submitter, "player"].value_counts().head(12)
+        if counts.empty:
+            ax.set_visible(False)
+            continue
+        plot_counts = counts.sort_values(ascending=True)
+        labels = [textwrap.shorten(str(label), width=24, placeholder="...") for label in plot_counts.index]
+        y_pos = np.arange(len(labels))
+        ax.barh(y_pos, plot_counts.values, color="#4c78a8", alpha=0.9)
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(labels, fontsize=7)
+        ax.set_xlabel("Uses")
+        ax.grid(axis="x", alpha=0.2)
+        ax.set_title(f"{submitter}: Top Player Usage", fontsize=10, fontweight="bold")
+    for ax in axes[len(submitters):]:
+        ax.set_visible(False)
+    fig.suptitle("Tableau Mosaic: Top 12 Players by Submitter", y=0.995, fontsize=14, fontweight="bold")
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    pdf.savefig(fig)
+    plt.close(fig)
+    return 1
+
+
+def _write_pdf_median_year_histogram(pdf: PdfPages, usage_df: pd.DataFrame, unique_players: bool = False) -> int:
+    median_lookup = _load_median_year_lookup()
+    title = (
+        "Median Year Histogram by Submitter (Unique Players)"
+        if unique_players
+        else "Median Year Histogram by User (Usage Weighted)"
+    )
+    if not median_lookup:
+        return _write_pdf_message(pdf, title, "Median-year cache is missing. Run `python src/scripts/build_baseball_cache.py`.")
+    merged = usage_df.assign(median_year=usage_df["player_norm"].map(median_lookup))
+    if unique_players:
+        merged = merged.drop_duplicates(subset=["submitter", "player_norm"]).copy()
+    merged = merged.dropna(subset=["median_year"]).copy()
+    if merged.empty:
+        return _write_pdf_message(pdf, title, "No player usages could be mapped to median year.")
+    merged["median_year"] = merged["median_year"].astype(int)
+    submitters = sorted(merged["submitter"].unique().tolist())
+    cols = 2
+    rows = int(np.ceil(len(submitters) / cols)) or 1
+    fig, axes = plt.subplots(rows, cols, figsize=(11, max(3.8 * rows, 4.5)))
+    axes = np.array(axes).reshape(-1)
+    bins = np.arange(1870, 2031, 5)
+    color = "#2a9d8f" if unique_players else "#e76f51"
+    for idx, submitter in enumerate(submitters):
+        ax = axes[idx]
+        vals = merged.loc[merged["submitter"] == submitter, "median_year"]
+        weights = np.ones(len(vals)) * (100.0 / max(len(vals), 1))
+        ax.hist(vals, bins=bins, weights=weights, color=color, alpha=0.85, edgecolor="white")
+        ax.set_title(submitter)
+        ax.set_xlabel("Median Year")
+        ax.set_ylabel("Freq %")
+        ax.set_xlim(bins[0], bins[-1])
+        ax.set_xticks(np.arange(1870, 2031, 20))
+        ax.tick_params(axis="x", rotation=45, labelsize=8)
+    for ax in axes[len(submitters):]:
+        ax.set_visible(False)
+    fig.suptitle(title, y=0.995, fontsize=14, fontweight="bold")
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    pdf.savefig(fig)
+    plt.close(fig)
+    return 1
+
+
+def _write_pdf_war_histogram(pdf: PdfPages, usage_df: pd.DataFrame) -> int:
+    title = "Career WAR Distribution by User"
+    war_lookup = _load_career_war_lookup()
+    if not war_lookup:
+        return _write_pdf_message(pdf, title, "Career WAR cache is missing. Run `python src/scripts/build_baseball_cache.py`.")
+    merged = usage_df.assign(career_war=usage_df["player_norm"].map(war_lookup)).dropna(subset=["career_war"]).copy()
+    if merged.empty:
+        return _write_pdf_message(pdf, title, "No player usages could be mapped to career WAR.")
+    submitters = sorted(merged["submitter"].unique().tolist())
+    cols = 2
+    rows = int(np.ceil(len(submitters) / cols)) or 1
+    fig, axes = plt.subplots(rows, cols, figsize=(11, max(3.8 * rows, 4.5)))
+    axes = np.array(axes).reshape(-1)
+    bins = np.arange(-10, 106, 5)
+    for idx, submitter in enumerate(submitters):
+        ax = axes[idx]
+        vals = merged.loc[merged["submitter"] == submitter, "career_war"]
+        weights = np.ones(len(vals)) * (100.0 / max(len(vals), 1))
+        ax.hist(vals, bins=bins, weights=weights, color="#264653", alpha=0.85, edgecolor="white")
+        ax.set_title(submitter)
+        ax.set_xlabel("Career WAR")
+        ax.set_ylabel("Freq %")
+    for ax in axes[len(submitters):]:
+        ax.set_visible(False)
+    fig.suptitle("Career WAR Distribution by Submitter (Usage Weighted)", y=0.995, fontsize=14, fontweight="bold")
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    pdf.savefig(fig)
+    plt.close(fig)
+    return 1
+
+
+def _write_pdf_war_rarity_scatter(pdf: PdfPages, usage_df: pd.DataFrame) -> int:
+    title = "Avg Career WAR vs Grid Rarity (Scatter)"
+    war_lookup = _load_career_war_lookup()
+    rarity_df = _load_grid_rarity_scores()
+    if not war_lookup:
+        return _write_pdf_message(pdf, title, "Career WAR cache is missing. Run `python src/scripts/build_baseball_cache.py`.")
+    if rarity_df.empty:
+        return _write_pdf_message(pdf, title, "Rarity score data is missing. Refresh Texts in Add/Update Data.")
+    usage = usage_df.copy()
+    usage["grid_number"] = usage["grid_number"].map(_normalize_grid_number)
+    usage["career_war"] = usage["player_norm"].map(war_lookup)
+    by_submitter_grid = (
+        usage.groupby(["submitter", "grid_number"], as_index=False)
+        .agg(
+            avg_career_war=("career_war", "mean"),
+            mapped_players=("career_war", lambda s: int(s.notna().sum())),
+            total_players=("career_war", "size"),
+        )
+        .dropna(subset=["avg_career_war"])
+    )
+    merged = by_submitter_grid.merge(rarity_df, on=["submitter", "grid_number"], how="inner", validate="1:1")
+    if merged.empty:
+        return _write_pdf_message(pdf, title, "No submitter-grid rows had both rarity score and mapped career WAR.")
+    max_mapped = int(merged["mapped_players"].max()) if not merged.empty else 0
+    min_mapped = min(6, max(1, max_mapped))
+    plot_df = merged[merged["mapped_players"] >= min_mapped].copy()
+    if plot_df.empty:
+        return _write_pdf_message(pdf, title, f"No rows remain after requiring at least {min_mapped} mapped players.")
+    submitters = sorted(plot_df["submitter"].astype(str).unique().tolist())
+    cols = 2
+    rows = int(np.ceil(len(submitters) / cols)) or 1
+    fig, axes = plt.subplots(rows, cols, figsize=(11, max(4.0 * rows, 4.5)), sharex=True, sharey=True)
+    axes = np.array(axes).reshape(-1)
+    for idx, submitter in enumerate(submitters):
+        ax = axes[idx]
+        sub = plot_df[plot_df["submitter"] == submitter].copy()
+        ax.scatter(sub["rarity_score"], sub["avg_career_war"], alpha=0.75, s=28, color="#1f77b4")
+        x = pd.to_numeric(sub["rarity_score"], errors="coerce")
+        y = pd.to_numeric(sub["avg_career_war"], errors="coerce")
+        valid = x.notna() & y.notna()
+        if valid.sum() >= 2:
+            slope, intercept = np.polyfit(x[valid], y[valid], 1)
+            x_line = np.linspace(float(x[valid].min()), float(x[valid].max()), 100)
+            ax.plot(x_line, slope * x_line + intercept, color="#d62828", linewidth=2, alpha=0.9)
+        ax.set_title(f"{submitter} (n={len(sub)})")
+        ax.set_xlabel("Grid Score (Lower = Rarer)")
+        ax.set_ylabel("Avg Career WAR")
+        ax.grid(alpha=0.2)
+    for ax in axes[len(submitters):]:
+        ax.set_visible(False)
+    fig.suptitle(f"{title} | min mapped players: {min_mapped}", y=0.995, fontsize=14, fontweight="bold")
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    pdf.savefig(fig)
+    plt.close(fig)
+    return 1
+
+
+def _build_fudged_position_tables(usage_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, str | None]:
+    if usage_df.empty or "grid_number" not in usage_df.columns or "position_key" not in usage_df.columns:
+        return pd.DataFrame(), pd.DataFrame(), "No parsed player responses with grid/position metadata are available."
+    prompt_lookup = _load_prompt_position_lookup()
+    if not prompt_lookup:
+        return pd.DataFrame(), pd.DataFrame(), "No prompt position mapping is available from `bin/csv/prompts.csv`."
+    pos_frac = _load_career_position_fraction_table()
+    if pos_frac.empty:
+        return pd.DataFrame(), pd.DataFrame(), "No career position fractions are available in `bin/baseball_cache`."
+    work = usage_df.copy()
+    work["grid_number_norm"] = work["grid_number"].map(_normalize_grid_number)
+    work["position_key"] = work["position_key"].astype(str).str.strip()
+    work["prompt_position"] = work.apply(
+        lambda r: prompt_lookup.get((r.get("grid_number_norm", ""), r.get("position_key", ""))),
+        axis=1,
+    )
+    work = work.dropna(subset=["prompt_position", "player_norm", "submitter", "player"]).copy()
+    if work.empty:
+        return pd.DataFrame(), pd.DataFrame(), "No usages intersected with position-specific prompts."
+    grouped = (
+        work.groupby(["submitter", "player", "player_norm", "prompt_position"], as_index=False)
+        .agg(
+            grid_uses=("grid_number_norm", "size"),
+            grid_ids=("grid_number_norm", lambda s: ", ".join(sorted({str(v) for v in s if str(v).strip()}, key=lambda x: (0, int(x)) if str(x).isdigit() else (1, str(x))))),
+        )
+        .rename(columns={"prompt_position": "position", "player": "mlb_player"})
+    )
+    merged = grouped.merge(pos_frac[["player_norm", "position", "fractional_appearance"]], on=["player_norm", "position"], how="left")
+    merged = merged.dropna(subset=["fractional_appearance"]).copy()
+    merged["fractional_appearance"] = pd.to_numeric(merged["fractional_appearance"], errors="coerce")
+    merged = merged[merged["fractional_appearance"] > 0].copy()
+    if merged.empty:
+        return pd.DataFrame(), pd.DataFrame(), "No rows remain after mapping to positive career position fractions."
+    merged["fudge_score"] = merged["grid_uses"] / merged["fractional_appearance"]
+    merged["log_fractional_appearance"] = np.log(merged["fractional_appearance"])
+    merged["fractional_appearance"] = merged["fractional_appearance"].round(4)
+    merged["log_fractional_appearance"] = merged["log_fractional_appearance"].round(4)
+    merged["fudge_score"] = merged["fudge_score"].round(2)
+    merged = merged.sort_values(["fudge_score", "grid_uses", "submitter", "mlb_player", "position"], ascending=[False, False, True, True, True]).reset_index(drop=True)
+    merged["rank"] = np.arange(1, len(merged) + 1)
+    submitter_agg = (
+        merged.groupby("submitter", as_index=False)
+        .agg(
+            grid_uses_total=("grid_uses", "sum"),
+            unique_player_positions=("position", "size"),
+            weighted_mean_log_fractional_appearance=("log_fractional_appearance", lambda s: np.average(s, weights=merged.loc[s.index, "grid_uses"]) if len(s) else np.nan),
+            mean_fractional_appearance=("fractional_appearance", "mean"),
+        )
+    )
+    submitter_agg["submitter_fudge_index"] = -submitter_agg["weighted_mean_log_fractional_appearance"]
+    for col in ["weighted_mean_log_fractional_appearance", "mean_fractional_appearance", "submitter_fudge_index"]:
+        submitter_agg[col] = pd.to_numeric(submitter_agg[col], errors="coerce").round(4)
+    submitter_agg = submitter_agg.sort_values(["submitter_fudge_index", "grid_uses_total", "submitter"], ascending=[False, False, True]).reset_index(drop=True)
+    submitter_agg["cheat_rank"] = np.arange(1, len(submitter_agg) + 1)
+    submitter_agg["saint_rank"] = submitter_agg["submitter_fudge_index"].rank(method="min", ascending=True).astype(int)
+    rollup = submitter_agg[
+        [
+            "cheat_rank",
+            "saint_rank",
+            "submitter",
+            "submitter_fudge_index",
+            "weighted_mean_log_fractional_appearance",
+            "mean_fractional_appearance",
+            "grid_uses_total",
+            "unique_player_positions",
+        ]
+    ]
+    detail = merged[
+        [
+            "rank",
+            "submitter",
+            "mlb_player",
+            "position",
+            "fractional_appearance",
+            "log_fractional_appearance",
+            "grid_uses",
+            "grid_ids",
+            "fudge_score",
+        ]
+    ].head(120)
+    return rollup, detail, None
+
+
+def _write_pdf_fudged_position_usage(pdf: PdfPages, usage_df: pd.DataFrame) -> int:
+    rollup, detail, message = _build_fudged_position_tables(usage_df)
+    if message:
+        return _write_pdf_message(pdf, "Fudged Position Usage", message)
+    pages = _write_pdf_text_table(pdf, "Fudged Position Usage: Submitter Rollup", rollup, rows_per_page=18)
+    pages += _write_pdf_text_table(
+        pdf,
+        "Fudged Position Usage: Top 120 Player-Position Rows",
+        detail,
+        rows_per_page=28,
+        max_pages=4,
+    )
+    return pages
+
+
+def _write_dynamic_pdf_report(pdf: PdfPages, report: dict, ctx: dict) -> int:
+    func = report.get("func")
+    if func not in PDF_DYNAMIC_REPORT_FUNCS:
+        return _write_pdf_message(pdf, report.get("title", "Report"), "This interactive report is available in Streamlit preview only.")
+    usage_df = _usage_for_pdf(ctx)
+    if usage_df.empty:
+        return _write_pdf_message(pdf, report.get("title", "Report"), "No parsed player responses available in image metadata.")
+    if func == "dynamic_tableau_mosaic_view":
+        return _write_pdf_tableau_mosaic(pdf, usage_df)
+    if func == "dynamic_median_year_hist_view":
+        return _write_pdf_median_year_histogram(pdf, usage_df, unique_players=False)
+    if func == "dynamic_median_year_hist_unique_view":
+        return _write_pdf_median_year_histogram(pdf, usage_df, unique_players=True)
+    if func == "dynamic_war_hist_view":
+        return _write_pdf_war_histogram(pdf, usage_df)
+    if func == "dynamic_war_rarity_scatter_view":
+        return _write_pdf_war_rarity_scatter(pdf, usage_df)
+    if func == "dynamic_fudged_position_usage_view":
+        return _write_pdf_fudged_position_usage(pdf, usage_df)
+    return _write_pdf_message(pdf, report.get("title", "Report"), "No PDF renderer is available for this report.")
+
+
 def _write_pdf_report_result(pdf: PdfPages, report: dict, result, max_pages: int | None = None) -> int:
     if isinstance(result, dict) and "__error__" in result:
         fig, ax = plt.subplots(figsize=(8.5, 11))
@@ -480,12 +947,7 @@ def _write_pdf_report_result(pdf: PdfPages, report: dict, result, max_pages: int
         return 1
     if isinstance(result, pd.DataFrame):
         return _save_pdf_table(pdf, report["title"], result.reset_index(drop=True), max_pages=max_pages)
-    fig, ax = plt.subplots(figsize=(8.5, 11))
-    ax.axis("off")
-    ax.text(0.5, 0.5, str(result), ha="center", va="center", wrap=True)
-    pdf.savefig(fig)
-    plt.close(fig)
-    return 1
+    return _write_pdf_text_pages(pdf, report["title"], str(result), max_pages=max_pages)
 
 
 def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df: pd.DataFrame) -> None:
@@ -646,15 +1108,7 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
             if selected_report["needs_person"]:
                 selected_person = st.selectbox("Select submitter", options=sorted(GRID_PLAYERS.keys()))
 
-            dynamic_func_to_view = {
-                "dynamic_player_search_view": "Player Search",
-                "dynamic_tableau_mosaic_view": "Tableau Mosaic",
-                "dynamic_median_year_hist_view": "Median Year Histogram by User (Usage Weighted)",
-                "dynamic_war_hist_view": "Career WAR Distribution by User",
-                "dynamic_war_rarity_scatter_view": "Avg Career WAR vs Grid Rarity (Scatter)",
-                "dynamic_fudged_position_usage_view": "Fudged Position Usage",
-            }
-            dynamic_view = dynamic_func_to_view.get(selected_report.get("func"))
+            dynamic_view = DYNAMIC_REPORT_FUNCS.get(selected_report.get("func"))
             if dynamic_view is not None:
                 st.caption(
                     "Median-year histograms link the refreshed responses in `bin/csv/images_metadata.csv` to Lahman appearances cached in `bin/baseball_cache` (keep it up-to-date with `python src/scripts/build_baseball_cache.py`)."
@@ -683,7 +1137,7 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
                         if selected_report.get("func") == "analyze_grid_overlap_submitters":
                             df_show = df_out.copy()
                             if {"grid_number", "submitter_1", "submitter_2"}.issubset(df_show.columns):
-                                st.dataframe(df_show, use_container_width=True)
+                                _render_dataframe_with_player_links(df_show, use_container_width=True)
                                 st.markdown("#### Drill Down")
                                 drill_idx = st.selectbox(
                                     "Select a row",
@@ -707,9 +1161,9 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
                                         str(sel["submitter_2"]),
                                     )
                             else:
-                                st.dataframe(df_show, use_container_width=True)
+                                _render_dataframe_with_player_links(df_show, use_container_width=True)
                         else:
-                            st.dataframe(df_out)
+                            _render_dataframe_with_player_links(df_out)
                     else:
                         st.text(output)
                 log_text = buf.getvalue()
@@ -720,18 +1174,36 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
     with export_tab:
         st.markdown("### Report export selection")
         st.caption("Choose which reports go into the PDF and which go into the Excel workbook.")
-        default_pdf = {r["title"] for r in all_reports if r.get("title") not in EXCEL_REPORT_TITLES}
-        default_excel = {r["title"] for r in all_reports if r.get("title") in EXCEL_REPORT_TITLES}
+        pdf_exportable_reports = [
+            r
+            for r in all_reports
+            if r.get("func") not in DYNAMIC_REPORT_FUNCS or r.get("func") in PDF_DYNAMIC_REPORT_FUNCS
+        ]
+        excel_exportable_reports = [r for r in all_reports if r.get("func") not in DYNAMIC_REPORT_FUNCS]
+        pdf_disabled_titles = {
+            r["title"]
+            for r in all_reports
+            if r.get("func") in DYNAMIC_REPORT_FUNCS and r.get("func") not in PDF_DYNAMIC_REPORT_FUNCS
+        }
+        excel_disabled_titles = {r["title"] for r in all_reports if r.get("func") in DYNAMIC_REPORT_FUNCS}
+        default_pdf = {r["title"] for r in pdf_exportable_reports if r.get("title") not in EXCEL_REPORT_TITLES}
+        default_pdf.update(PDF_ONLY_SECTION_TITLES)
+        default_excel = {r["title"] for r in excel_exportable_reports if r.get("title") in EXCEL_REPORT_TITLES}
         if "export_pdf_titles" not in st.session_state:
             st.session_state["export_pdf_titles"] = set(default_pdf)
+        else:
+            st.session_state["export_pdf_titles"] = set(st.session_state["export_pdf_titles"]) - pdf_disabled_titles
         if "export_excel_titles" not in st.session_state:
             st.session_state["export_excel_titles"] = set(default_excel)
+        else:
+            st.session_state["export_excel_titles"] = set(st.session_state["export_excel_titles"]) - excel_disabled_titles
 
         col_pdf, col_excel = st.columns(2)
         with col_pdf:
             st.markdown("**Include in PDF**")
             if st.button("PDF: Select all"):
                 st.session_state["export_pdf_titles"] = {r["title"] for r in all_reports}
+                st.session_state["export_pdf_titles"].update(PDF_ONLY_SECTION_TITLES)
             if st.button("PDF: Clear all"):
                 st.session_state["export_pdf_titles"] = set()
         with col_excel:
@@ -751,23 +1223,69 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
             all_reports,
             key=lambda r: (r.get("category", "Misc"), r.get("title", "")),
         )
+        pdf_only_rows = [
+            {
+                "title": RULE5_PDF_TITLE,
+                "category": "Controls & Restrictions",
+                "func": "__rule5_pdf_section__",
+            }
+        ]
+        for report in pdf_only_rows:
+            title = report["title"]
+            row = st.columns([2, 3, 1, 1])
+            row[0].write(report.get("category", "PDF Only"))
+            row[1].write(title)
+            pdf_checked = title in st.session_state["export_pdf_titles"]
+            if row[2].checkbox(
+                "Include in PDF",
+                value=pdf_checked,
+                key=f"pdf_{title}",
+                label_visibility="collapsed",
+            ):
+                st.session_state["export_pdf_titles"].add(title)
+            else:
+                st.session_state["export_pdf_titles"].discard(title)
+            row[3].checkbox(
+                "Include in Excel",
+                value=False,
+                key=f"excel_{title}",
+                label_visibility="collapsed",
+                disabled=True,
+            )
         for report in sorted_reports:
             title = report["title"]
             category = report.get("category", "Misc")
+            is_dynamic_report = report.get("func") in DYNAMIC_REPORT_FUNCS
+            is_pdf_only_dynamic = report.get("func") in PDF_DYNAMIC_REPORT_FUNCS
+            pdf_disabled = is_dynamic_report and report.get("func") not in PDF_DYNAMIC_REPORT_FUNCS
+            excel_disabled = is_dynamic_report
             row = st.columns([2, 3, 1, 1])
             row[0].write(category)
-            row[1].write(title)
+            if is_pdf_only_dynamic:
+                title_label = f"{title} (PDF visual)"
+            elif is_dynamic_report:
+                title_label = f"{title} (preview only)"
+            else:
+                title_label = title
+            row[1].write(title_label)
             pdf_checked = title in st.session_state["export_pdf_titles"]
             excel_checked = title in st.session_state["export_excel_titles"]
-            if row[2].checkbox("Include in PDF", value=pdf_checked, key=f"pdf_{title}", label_visibility="collapsed"):
+            if row[2].checkbox(
+                "Include in PDF",
+                value=pdf_checked and not pdf_disabled,
+                key=f"pdf_{title}",
+                label_visibility="collapsed",
+                disabled=pdf_disabled,
+            ):
                 st.session_state["export_pdf_titles"].add(title)
             else:
                 st.session_state["export_pdf_titles"].discard(title)
             if row[3].checkbox(
                 "Include in Excel",
-                value=excel_checked,
+                value=excel_checked and not excel_disabled,
                 key=f"excel_{title}",
                 label_visibility="collapsed",
+                disabled=excel_disabled,
             ):
                 st.session_state["export_excel_titles"].add(title)
             else:
@@ -790,7 +1308,17 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
         pdf_path = Path(tmp.name)
         tmp.close()
-        basic_reports = [r for r in all_reports if r.get("title") not in EXCEL_REPORT_TITLES]
+        include_rule5_pdf = RULE5_PDF_TITLE in st.session_state["export_pdf_titles"]
+        basic_reports = [
+            r
+            for r in all_reports
+            if r.get("title") not in EXCEL_REPORT_TITLES
+            and (
+                r.get("func") not in DYNAMIC_REPORT_FUNCS
+                or r.get("func") in PDF_DYNAMIC_REPORT_FUNCS
+            )
+        ]
+        basic_reports = _expanded_pdf_reports(basic_reports)
         total_steps = len(basic_reports) + 1
         progress_bar = st.progress(0.0)
         status_text = st.empty()
@@ -804,14 +1332,27 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
                 pdf.savefig(fig)
                 plt.close(fig)
 
-                status_text.write("Generating Basic Export: Rule 5 bans and screenshots")
-                _write_basic_rule5_pages(pdf, images_df)
+                toc_entries = [report["title"] for report in basic_reports]
+                if include_rule5_pdf:
+                    toc_entries = [RULE5_PDF_TITLE] + toc_entries
+                _write_pdf_table_of_contents(
+                    pdf,
+                    "Table of Contents",
+                    toc_entries,
+                )
+
+                if include_rule5_pdf:
+                    status_text.write("Generating Basic Export: Rule 5 bans and screenshots")
+                    _write_basic_rule5_pages(pdf, images_df)
                 progress_bar.progress(1 / max(total_steps, 1))
 
                 for idx, report in enumerate(basic_reports, start=1):
                     status_text.write(f"Generating Basic Export {idx}/{len(basic_reports)}: {report['title']}")
-                    result = run_report(report, ctx, None)
-                    _write_pdf_report_result(pdf, report, result, max_pages=5)
+                    if report.get("func") in PDF_DYNAMIC_REPORT_FUNCS:
+                        _write_dynamic_pdf_report(pdf, report, ctx)
+                    else:
+                        result = run_report(report, ctx, report.get("person"))
+                        _write_pdf_report_result(pdf, report, result, max_pages=5)
                     progress_bar.progress(min(1.0, (idx + 1) / max(total_steps, 1)))
         status_text.write("Completed Basic Export Mode PDF.")
         with open(pdf_path, "rb") as f:
@@ -826,11 +1367,21 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
         pdf_path = Path(tmp.name)
         tmp.close()
-        pdf_reports = [r for r in all_reports if r.get("title") in st.session_state["export_pdf_titles"]]
-        total_pdf = len(pdf_reports)
+        include_rule5_pdf = RULE5_PDF_TITLE in st.session_state["export_pdf_titles"]
+        pdf_reports = [
+            r
+            for r in all_reports
+            if r.get("title") in st.session_state["export_pdf_titles"]
+            and (
+                r.get("func") not in DYNAMIC_REPORT_FUNCS
+                or r.get("func") in PDF_DYNAMIC_REPORT_FUNCS
+            )
+        ]
+        pdf_reports = _expanded_pdf_reports(pdf_reports)
+        total_pdf = len(pdf_reports) + (1 if include_rule5_pdf else 0)
         progress_bar = st.progress(0.0) if total_pdf > 0 else None
         status_text = st.empty()
-        if not pdf_reports:
+        if not pdf_reports and not include_rule5_pdf:
             st.warning("No reports selected for PDF.")
             return
         with st.spinner("Generating exports..."):
@@ -844,28 +1395,28 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
                     pdf.savefig(fig)
                     plt.close(fig)
 
-                    # Table of contents
-                    fig, ax = plt.subplots(figsize=(8.5, 11))
-                    ax.axis("off")
-                    ax.text(0.5, 0.95, "Table of Contents", ha="center", va="top", fontsize=18, fontweight="bold")
-                    y = 0.9
-                    for i, rep in enumerate(pdf_reports, start=1):
-                        ax.text(0.1, y, f"{i}. {rep['title']}", ha="left", va="top", fontsize=10)
-                        y -= 0.03
-                        if y < 0.05:
-                            pdf.savefig(fig)
-                            plt.close(fig)
-                            fig, ax = plt.subplots(figsize=(8.5, 11))
-                            ax.axis("off")
-                            y = 0.95
-                    pdf.savefig(fig)
-                    plt.close(fig)
+                    _write_pdf_table_of_contents(
+                        pdf,
+                        "Table of Contents",
+                        ([RULE5_PDF_TITLE] if include_rule5_pdf else []) + [report["title"] for report in pdf_reports],
+                    )
 
-                    for idx, report in enumerate(pdf_reports, start=1):
+                    start_idx = 1
+                    if include_rule5_pdf:
+                        status_text.write("Generating PDF: Rule 5 bans and screenshots")
+                        _write_basic_rule5_pages(pdf, images_df)
+                        if progress_bar:
+                            progress_bar.progress(min(1.0, start_idx / max(total_pdf, 1)))
+                        start_idx += 1
+
+                    for idx, report in enumerate(pdf_reports, start=start_idx):
                         status_text.write(f"Generating PDF {idx}/{total_pdf}: {report['title']}")
                         if progress_bar:
                             progress_bar.progress(min(1.0, idx / max(total_pdf, 1)))
-                        result = run_report(report, ctx, None)
+                        if report.get("func") in PDF_DYNAMIC_REPORT_FUNCS:
+                            _write_dynamic_pdf_report(pdf, report, ctx)
+                            continue
+                        result = run_report(report, ctx, report.get("person"))
                         if isinstance(result, dict) and "__error__" in result:
                             fig, ax = plt.subplots(figsize=(8.5, 11))
                             ax.axis("off")
@@ -1016,7 +1567,12 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
             with open(pdf_path, "rb") as f:
                 st.download_button("Download PDF", data=f, file_name="analytics_report.pdf", mime="application/pdf")
     if generate_excel:
-        excel_reports = [r for r in all_reports if r.get("title") in st.session_state["export_excel_titles"]]
+        excel_reports = [
+            r
+            for r in all_reports
+            if r.get("title") in st.session_state["export_excel_titles"]
+            and r.get("func") not in DYNAMIC_REPORT_FUNCS
+        ]
         if not excel_reports:
             st.warning("No reports selected for Excel.")
             return
