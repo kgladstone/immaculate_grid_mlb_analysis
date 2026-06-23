@@ -351,9 +351,40 @@ class ImageProcessor():
         print(f"Image dates to parse: {image_dates_to_parse}")
         print("**" * 50)
 
-        # Prioritize filenames that explicitly include "Immaculate".
-        # After that, process non-Immaculate files by submitters with fewer such files first.
+        def _expected_grid_from_date(value) -> str:
+            try:
+                image_dt = pd.to_datetime(value).date()
+                start_dt = pd.to_datetime(ImmaculateGridUtils._fixed_date_from_grid_number(0)).date()
+                return str((image_dt - start_dt).days)
+            except Exception:
+                return ""
+
+        text_combinations = set()
+        if not messages_data.empty and {"grid_number", "name"}.issubset(messages_data.columns):
+            messages_for_priority = messages_data.copy()
+            messages_for_priority["grid_number_norm"] = (
+                messages_for_priority["grid_number"].astype(str).str.replace(".0", "", regex=False).str.strip()
+            )
+            messages_for_priority["submitter_norm"] = messages_for_priority["name"].astype(str).str.strip()
+            text_combinations = set(
+                zip(messages_for_priority["grid_number_norm"], messages_for_priority["submitter_norm"])
+            )
+
+        # Prioritize attachments likely to fill missing image coverage first.
+        # This uses image_date as a cheap pre-OCR grid estimate; OCR still confirms the grid later.
         results = results.copy()
+        results["expected_grid_norm"] = results["image_date"].map(_expected_grid_from_date)
+        results["submitter_norm"] = results["submitter"].astype(str).str.strip()
+        results["has_text_result"] = results.apply(
+            lambda row: (row["expected_grid_norm"], row["submitter_norm"]) in text_combinations,
+            axis=1,
+        )
+        results["has_image_metadata"] = results.apply(
+            lambda row: (row["expected_grid_norm"], row["submitter_norm"]) in existing_combinations,
+            axis=1,
+        )
+        results["priority_missing_text_image"] = results["has_text_result"] & ~results["has_image_metadata"]
+        results["priority_missing_image"] = ~results["has_image_metadata"]
         results["priority_immaculate_name"] = results["path"].astype(str).map(lambda p: Path(str(p)).name).str.contains(
             "immaculate", case=False, na=False
         )
@@ -371,12 +402,28 @@ class ImageProcessor():
             results["non_imm_submitter_count"],
         )
         results = results.sort_values(
-            by=["priority_immaculate_name", "non_imm_submitter_count", "submitter", "image_date"],
-            ascending=[False, True, True, False],
+            by=[
+                "priority_missing_text_image",
+                "priority_missing_image",
+                "priority_immaculate_name",
+                "non_imm_submitter_count",
+                "submitter",
+                "image_date",
+            ],
+            ascending=[False, False, False, True, True, False],
         )
         total = len(results)
+        path_hash_cache: dict[str, str] = {}
         # Process each attachment
         for idx, (_, result) in enumerate(results.iterrows(), start=1):
+            if bool(result.get("priority_missing_text_image")):
+                queue_phase = "Missing text+image coverage"
+            elif bool(result.get("priority_missing_image")):
+                queue_phase = "Missing image coverage"
+            elif bool(result.get("priority_immaculate_name")):
+                queue_phase = "Immaculate filename backlog"
+            else:
+                queue_phase = "Other image backlog"
             try:
                 path = self._resolve_attachment_path(result['path'])
             except FileNotFoundError as exc:
@@ -393,6 +440,7 @@ class ImageProcessor():
                             image_done=True,
                             result_message=str(exc),
                             parsed_responses=None,
+                            queue_phase=queue_phase,
                         )
                     except Exception:
                         pass
@@ -424,6 +472,7 @@ class ImageProcessor():
                             image_done=image_done,
                             result_message=result_message,
                             parsed_responses=parsed_responses_payload,
+                            queue_phase=queue_phase,
                         )
                     except Exception:
                         pass
@@ -441,27 +490,23 @@ class ImageProcessor():
 
             if path:
                 if os.path.exists(path):
+                    if path in existing_paths:
+                        parser_message = f"Warning: Skipping existing path {path}"
+                        print(parser_message)
+                        _emit("skip_existing_path", image_done=True, result_message=parser_message)
+                        continue
+
                     _emit("hash_check_start")
                     try:
-                        source_hash = self._file_sha256(path)
+                        if path in path_hash_cache:
+                            source_hash = path_hash_cache[path]
+                        else:
+                            source_hash = self._file_sha256(path)
+                            path_hash_cache[path] = source_hash
                         _emit("hash_checked")
                     except Exception as exc:
                         parser_message = f"Warning: Could not hash image ({exc})"
                         _emit("hash_failed")
-
-                    if path in existing_paths:
-                        parser_message = f"Warning: Skipping existing path {path}"
-                        print(parser_message)
-                        parser_data_entry = {
-                            "path": path,
-                            "submitter": submitter,
-                            "image_date": image_date,
-                            "parser_message": parser_message,
-                            "source_hash": source_hash,
-                        }
-                        self.save_parser_metadata(parser_data_entry)
-                        _emit("skip_existing_path", image_done=True, result_message=parser_message)
-                        continue
 
                     print("*" * 50)
                     print(f"Processing: {path} from {submitter} on {image_date}")
@@ -569,6 +614,7 @@ class ImageProcessor():
                         image_done=True,
                         result_message=parser_message,
                         parsed_responses=parsed_responses,
+                        queue_phase=queue_phase,
                     )
                 except Exception:
                     # Best-effort progress updates; don't crash processing
@@ -1414,19 +1460,6 @@ class ImageProcessor():
             parser_metadata["source_hash"] = ""
         if "source_hash" not in parser_data_new_entry:
             parser_data_new_entry["source_hash"] = ""
-        if len(parser_metadata) > 0:
-            def _ensure_hash(row):
-                existing = str(row.get("source_hash") or "").strip()
-                if existing:
-                    return existing
-                p = row.get("path")
-                if isinstance(p, str) and p and os.path.exists(p):
-                    try:
-                        return self._file_sha256(p)
-                    except Exception:
-                        return ""
-                return ""
-            parser_metadata["source_hash"] = parser_metadata.apply(_ensure_hash, axis=1)
 
         # Append the new metadata if no duplicate found
         parser_metadata = pd.concat(

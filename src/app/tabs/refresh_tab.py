@@ -574,6 +574,7 @@ def _render_dataset_refresh_panel(selected: str, local_cache_dir: Path) -> None:
                     image_done=False,
                     result_message=None,
                     parsed_responses=None,
+                    queue_phase=None,
                 ):
                     stage_labels = {
                         "start": "Start",
@@ -618,6 +619,7 @@ def _render_dataset_refresh_panel(selected: str, local_cache_dir: Path) -> None:
                     extra = ""
                     if current_date or current_submitter:
                         extra = f" | {current_date or '?'} / {current_submitter or '?'}"
+                    phase_msg = f" | Phase: {queue_phase}" if queue_phase else ""
                     filename_priority_tag = ""
                     if image_path:
                         is_immaculate_name = "immaculate" in Path(str(image_path)).name.lower()
@@ -630,7 +632,7 @@ def _render_dataset_refresh_panel(selected: str, local_cache_dir: Path) -> None:
                     if image_done and result_message:
                         reason_msg = f" | {result_message}"
                     progress_text.write(
-                        f"Processing images {done}/{total} ({pct*100:.1f}%){extra}{filename_priority_tag}{stage_msg}{reason_msg}"
+                        f"Processing images {done}/{total} ({pct*100:.1f}%){phase_msg}{extra}{filename_priority_tag}{stage_msg}{reason_msg}"
                     )
 
                     if not image_done:
