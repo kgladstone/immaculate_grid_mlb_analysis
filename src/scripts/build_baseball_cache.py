@@ -3,9 +3,14 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 from pathlib import Path
+import sys
 from typing import Callable
 
 import pandas as pd
+
+SRC_DIR = Path(__file__).resolve().parents[1]
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
 try:
     from scripts.lahman_box_crawler import (
@@ -33,6 +38,17 @@ def _emit(message: str, progress_cb: ProgressCb | None = None) -> None:
     print(message, flush=True)
     if progress_cb is not None:
         progress_cb(message)
+
+
+def _write_csv_exact_case(df: pd.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for existing in path.parent.iterdir():
+        if existing.name == path.name or existing.name.lower() != path.name.lower():
+            continue
+        temp_path = path.parent / f".{existing.name}.case-rename.tmp"
+        existing.replace(temp_path)
+        temp_path.unlink(missing_ok=True)
+    df.to_csv(path, index=False)
 
 
 def _load_required_tables(
@@ -212,12 +228,12 @@ def build_cache(
     teams = teams[pd.to_numeric(teams["yearID"], errors="coerce").fillna(0).astype(int) <= int(max_year)]
     teams["franchID"] = teams["franchID"].apply(canonicalize_franchid)
     teams = teams.drop_duplicates()
-    teams.to_csv(cache_dir / "teams.csv", index=False)
+    _write_csv_exact_case(teams, cache_dir / "teams.csv")
 
     people = people_raw.drop_duplicates()
     people.to_csv(cache_dir / "People.csv", index=False)
 
-    appearances.to_csv(cache_dir / "appearances.csv", index=False)
+    _write_csv_exact_case(appearances, cache_dir / "appearances.csv")
     _emit(
         f"[3/5] Wrote: teams.csv={len(teams):,}, People.csv={len(people):,}, appearances.csv={len(appearances):,}",
         progress_cb,

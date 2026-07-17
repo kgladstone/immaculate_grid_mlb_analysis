@@ -17,11 +17,29 @@ from scripts.build_baseball_cache import build_cache
 from scripts.build_career_war_cache import build_career_war_cache
 from config.constants import FRANCHID_MODERN_ALIGNMENT, GRID_PLAYERS, TEAM_LIST, canonicalize_franchid
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+BASEBALL_CACHE_DIR = REPO_ROOT / "bin" / "baseball_cache"
+CACHE_FILE_CANDIDATES = {
+    "teams.csv": ("teams.csv", "Teams.csv"),
+    "People.csv": ("People.csv", "people.csv"),
+    "appearances.csv": ("appearances.csv", "Appearances.csv"),
+    "player_first_team.csv": ("player_first_team.csv",),
+    "team_year_oldest_players.csv": ("team_year_oldest_players.csv",),
+}
+
+
+def _cache_file_path(cache_dir: Path, logical_name: str) -> Path:
+    for name in CACHE_FILE_CANDIDATES.get(logical_name, (logical_name,)):
+        candidate = cache_dir / name
+        if candidate.exists():
+            return candidate
+    return cache_dir / logical_name
+
 
 @st.cache_data(show_spinner=True)
 def _load_cached_baseball(cache_dir: Path) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    teams = pd.read_csv(cache_dir / "teams.csv")
-    players = pd.read_csv(cache_dir / "People.csv")
+    teams = pd.read_csv(_cache_file_path(cache_dir, "teams.csv"))
+    players = pd.read_csv(_cache_file_path(cache_dir, "People.csv"))
     players = players[
         ["playerID", "nameFirst", "nameLast", "birthYear", "birthMonth", "birthDay"]
     ].rename(
@@ -34,14 +52,14 @@ def _load_cached_baseball(cache_dir: Path) -> Tuple[pd.DataFrame, pd.DataFrame, 
             "birthDay": "birth_day",
         }
     )
-    appearances = pd.read_csv(cache_dir / "appearances.csv")
+    appearances = pd.read_csv(_cache_file_path(cache_dir, "appearances.csv"))
     return teams, players, appearances
 
 
 @st.cache_data(show_spinner=True)
 def _load_oldest_player_cache(cache_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
-    first_team_path = cache_dir / "player_first_team.csv"
-    oldest_path = cache_dir / "team_year_oldest_players.csv"
+    first_team_path = _cache_file_path(cache_dir, "player_first_team.csv")
+    oldest_path = _cache_file_path(cache_dir, "team_year_oldest_players.csv")
     first_team = pd.read_csv(first_team_path) if first_team_path.exists() else pd.DataFrame()
     oldest = pd.read_csv(oldest_path) if oldest_path.exists() else pd.DataFrame()
     return first_team, oldest
@@ -1418,11 +1436,11 @@ def _render_cache_viewer(cache_dir: Path) -> None:
         st.info("No `cache_meta.csv` found yet. Build the cache first.")
 
     file_rows = [
-        _csv_attrs(cache_dir / "teams.csv"),
-        _csv_attrs(cache_dir / "People.csv"),
-        _csv_attrs(cache_dir / "appearances.csv"),
-        _csv_attrs(cache_dir / "player_first_team.csv"),
-        _csv_attrs(cache_dir / "team_year_oldest_players.csv"),
+        _csv_attrs(_cache_file_path(cache_dir, "teams.csv")),
+        _csv_attrs(_cache_file_path(cache_dir, "People.csv")),
+        _csv_attrs(_cache_file_path(cache_dir, "appearances.csv")),
+        _csv_attrs(_cache_file_path(cache_dir, "player_first_team.csv")),
+        _csv_attrs(_cache_file_path(cache_dir, "team_year_oldest_players.csv")),
     ]
     st.write("Required cache files")
     st.dataframe(pd.DataFrame(file_rows), use_container_width=True)
@@ -1430,9 +1448,9 @@ def _render_cache_viewer(cache_dir: Path) -> None:
 
 def _render_data_explorer(cache_dir: Path) -> None:
     st.caption(f"Source directory: `{cache_dir}`")
-    people_path = cache_dir / "People.csv"
-    appearances_path = cache_dir / "appearances.csv"
-    teams_cache_path = cache_dir / "teams.csv"
+    people_path = _cache_file_path(cache_dir, "People.csv")
+    appearances_path = _cache_file_path(cache_dir, "appearances.csv")
+    teams_cache_path = _cache_file_path(cache_dir, "teams.csv")
 
     df = pd.DataFrame()
     source_name = ""
@@ -1572,9 +1590,9 @@ def _render_data_explorer(cache_dir: Path) -> None:
 def render_simulator_tab() -> None:
     st.write("Manage baseball-reference cache data and run team-intersection simulator checks.")
 
-    local_cache_dir = Path("bin/baseball_cache").resolve()
+    local_cache_dir = BASEBALL_CACHE_DIR
     required_files = ["teams.csv", "People.csv", "appearances.csv"]
-    missing_files = [name for name in required_files if not (local_cache_dir / name).exists()]
+    missing_files = [name for name in required_files if not _cache_file_path(local_cache_dir, name).exists()]
     run_simulator_tab, cache_tools_tab, instructions_tab = st.tabs(
         ["🎮 Play", "🧾 Cache Tools", "📘 Instructions"]
     )
@@ -1589,7 +1607,7 @@ def render_simulator_tab() -> None:
     with run_simulator_tab:
         st.write("Check if a player fits a team intersection using locally cached Lahman data.")
         team_master = player_master = appearances = None
-        missing_files = [name for name in required_files if not (local_cache_dir / name).exists()]
+        missing_files = [name for name in required_files if not _cache_file_path(local_cache_dir, name).exists()]
         if missing_files:
             st.error(
                 "Local baseball cache is incomplete. Missing: "

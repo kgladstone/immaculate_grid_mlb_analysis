@@ -34,6 +34,8 @@ from app.tabs.player_data_tab import (
 )
 
 ANALYTICS_CACHE_DIR = Path(".cache")
+REPO_ROOT = Path(__file__).resolve().parents[3]
+BASEBALL_CACHE_DIR = REPO_ROOT / "bin" / "baseball_cache"
 PDF_PERSON_REPORT_SUBMITTERS = sorted(GRID_PLAYERS_RESTRICTED.keys())
 EXCEL_REPORT_TITLES = {
     "Full Week Usage",
@@ -967,17 +969,22 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
         return
     st.markdown(
         "Prepare analytics data (image metadata is normalized via fuzzy correction; cached locally). "
-        "Rebuilding the cache now also downloads the latest Baseball-Reference WAR ZIP (first link alphabetically, Z→A) to refresh `bin/baseball_cache/war.csv`."
+        "Rebuilding the cache also downloads the latest dated Baseball-Reference WAR ZIP to refresh `bin/baseball_cache/war.csv`."
     )
     cache_path = _analytics_cache_path()
     input_fingerprint = _analytics_input_fingerprint()
     cache_payload = _load_analytics_cache(cache_path)
     cached_ctx = cache_payload.get("__ctx__") if isinstance(cache_payload, dict) else None
     cache_ready = cached_ctx is not None and _cache_matches_inputs(cache_payload, input_fingerprint)
-    status_emoji = "🟢" if cache_ready else "🔴"
-    st.write(f"Cache status: {status_emoji} {'ready' if cache_ready else 'not ready'}")
+    cache_usable = cached_ctx is not None
+    if cache_ready:
+        st.write("Cache status: 🟢 ready")
+    elif cache_usable:
+        st.write("Cache status: 🟡 using stale cache")
+    else:
+        st.write("Cache status: 🔴 not ready")
     if cached_ctx is not None and not cache_ready:
-        st.info("Cached analytics context is stale relative to current data files. Rebuild to refresh reports.")
+        st.warning("Cached analytics context is stale relative to current data files. Showing the existing cache; rebuild when you want refreshed reports.")
 
     build_clicked = st.button("Build/refresh analytics cache")
     if build_clicked:
@@ -1030,7 +1037,7 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
             build_career_war_cache(
                 None,
                 None,
-                Path("bin/baseball_cache"),
+                BASEBALL_CACHE_DIR,
                 auto_download=True,
                 progress_cb=_war_progress,
             )
@@ -1038,8 +1045,9 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
         except Exception as exc:
             st.warning(f"Could not refresh career WAR cache: {exc}")
         cache_ready = True
+        cache_usable = True
         cached_ctx = ctx
-    if not cache_ready:
+    if not cache_usable:
         st.info("Build the analytics cache first.")
         return
 

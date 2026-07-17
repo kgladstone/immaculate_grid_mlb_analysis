@@ -37,6 +37,8 @@ from scripts.build_career_war_cache import build_career_war_cache
 from app.services.data_loaders import load_image_metadata_df, resolve_path
 
 UPLOAD_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".heic"}
+REPO_ROOT = Path(__file__).resolve().parents[3]
+BASEBALL_CACHE_DIR = REPO_ROOT / "bin" / "baseball_cache"
 
 
 def _norm_grid_id(value) -> str:
@@ -444,8 +446,7 @@ def refresh_selected_data(
 
 
 def _render_local_chat_copy_command() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    repo_display_path = _display_path_with_tilde(repo_root)
+    repo_display_path = _display_path_with_tilde(REPO_ROOT)
     command = f"""cd {repo_display_path}
 python3 src/scripts/copy_chat_db.py"""
     st.markdown("### Local Messages Snapshot")
@@ -771,7 +772,7 @@ def render_refresh_tab() -> None:
             "Refresh one dataset at a time. Images also rebuild the derived CSV and fuzzy matching log when metadata is available."
         )
 
-        local_cache_dir = Path("bin/baseball_cache").resolve()
+        local_cache_dir = BASEBALL_CACHE_DIR
         prompts_tab, texts_tab, images_tab, mlb_cache_tab = st.tabs(
             ["Prompts", "Texts", "Images", "MLB Player Cache"]
         )

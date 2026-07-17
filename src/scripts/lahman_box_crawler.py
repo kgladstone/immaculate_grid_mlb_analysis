@@ -17,12 +17,16 @@ APPEARANCES_REQUIRED_COLUMNS = {"yearID", "teamID", "playerID", "G_all"}
 PEOPLE_REQUIRED_COLUMNS = {"playerID", "nameFirst", "nameLast"}
 TEAMS_REQUIRED_COLUMNS = {"yearID", "teamID", "franchID"}
 
+SABR_LAHMAN_DATABASE_URL = "https://sabr.org/lahman-database/"
+SABR_LAHMAN_CSV_BOX_URL = "https://sabr.app.box.com/s/y1prhc795jk8zvmelfd3jq7tl389y6cd"
 DEFAULT_DISCOVERY_PAGES = [
-    "https://sabr.org/lahman-database/",
+    SABR_LAHMAN_DATABASE_URL,
+    # Fallback to the current public CSV folder when SABR page parsing changes.
+    f"{SABR_LAHMAN_CSV_BOX_URL}?page=1",
+    f"{SABR_LAHMAN_CSV_BOX_URL}?page=2",
+    # Older public folder links remain useful as historical fallbacks.
     "https://sabr.app.box.com/s/rsry2en86bimvybwsorumfsxmf91002a?page=1",
     "https://sabr.app.box.com/s/rsry2en86bimvybwsorumfsxmf91002a?page=2",
-    "https://sabr.app.box.com/s/y1prhc795jk8zvmelfd3jq7tl389y6cd?page=1",
-    "https://sabr.app.box.com/s/y1prhc795jk8zvmelfd3jq7tl389y6cd?page=2",
 ]
 
 

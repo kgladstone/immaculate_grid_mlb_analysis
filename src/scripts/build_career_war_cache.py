@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import argparse
+from datetime import date
+import re
 import shutil
 import ssl
 import subprocess
+import sys
 import tempfile
 import urllib.error
 import urllib.parse
@@ -16,6 +19,10 @@ from typing import Callable, Iterable
 import certifi
 import pandas as pd
 import requests
+
+SRC_DIR = Path(__file__).resolve().parents[1]
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
 from data.io.mlb_reference import clean_name
 
@@ -100,6 +107,14 @@ class _WarLinkParser(HTMLParser):
         self.links.append((file_name, href))
 
 
+def _war_archive_date(file_name: str) -> date:
+    match = re.search(r"war_archive-(\d{4})-(\d{2})-(\d{2})\.zip$", file_name.lower())
+    if not match:
+        return date.min
+    year, month, day = (int(part) for part in match.groups())
+    return date(year, month, day)
+
+
 def _download_url(url: str, dest: Path):
     req = urllib.request.Request(url, headers=REQUEST_HEADERS)
     try:
@@ -132,7 +147,7 @@ def _fetch_latest_war_zip(dest_dir: Path, progress_cb: ProgressCb | None = None)
     if not parser.links:
         raise RuntimeError("Could not find any WAR ZIP links on Baseball-Reference data page.")
 
-    parser.links.sort(key=lambda entry: entry[0].lower(), reverse=True)
+    parser.links.sort(key=lambda entry: (_war_archive_date(entry[0]), entry[0].lower()), reverse=True)
 
     file_name, href = parser.links[0]
     absolute_url = urllib.parse.urljoin(BASEBALL_REFERENCE_WAR_URL, href)
