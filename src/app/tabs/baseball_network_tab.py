@@ -63,6 +63,12 @@ def _render_chain(network: BaseballNetwork, hops: list[TeammateHop] | None) -> N
     st.dataframe(_path_rows(network, hops), use_container_width=True, hide_index=True)
 
 
+def _preferred_player_index(player_ids: list[str], preferred_id: str, fallback: int = 0) -> int:
+    if preferred_id in player_ids:
+        return player_ids.index(preferred_id)
+    return min(max(fallback, 0), max(len(player_ids) - 1, 0))
+
+
 def render_baseball_network_tab(cache_dir: Path = BASEBALL_CACHE_DIR) -> None:
     st.subheader("⚾ Baseball Network")
     st.caption("Connect MLB history through shared team-season rosters without materializing every teammate pair.")
@@ -83,10 +89,26 @@ def render_baseball_network_tab(cache_dir: Path = BASEBALL_CACHE_DIR) -> None:
     player_tab, history_tab, oldest_tab, stats_tab = st.tabs(["Player → Player", "Across History", "Oldest Player Walk", "Network Statistics"])
 
     with player_tab:
+        st.caption("Search by opening either dropdown and typing a player's name or ID.")
         col_a, col_b = st.columns(2)
-        start = col_a.selectbox("Player A", player_ids, format_func=lambda player_id: labels[player_id], key="network_player_a")
-        target_index = min(1, len(player_ids) - 1)
-        target = col_b.selectbox("Player B", player_ids, index=target_index, format_func=lambda player_id: labels[player_id], key="network_player_b")
+        start_index = _preferred_player_index(player_ids, "batybr01")
+        target_index = _preferred_player_index(player_ids, "ansonca01", fallback=1)
+        start = col_a.selectbox(
+            "Player A",
+            player_ids,
+            index=start_index,
+            format_func=lambda player_id: labels[player_id],
+            key="network_player_a",
+            help="Type while the dropdown is open to search all cached players.",
+        )
+        target = col_b.selectbox(
+            "Player B",
+            player_ids,
+            index=target_index,
+            format_func=lambda player_id: labels[player_id],
+            key="network_player_b",
+            help="Type while the dropdown is open to search all cached players.",
+        )
         if st.button("Find shortest teammate chain", key="network_shortest"):
             _render_chain(network, network.shortest_path(start, target))
 

@@ -13,6 +13,7 @@ import pandas as pd
 import streamlit as st
 from pathlib import Path
 from app.services.data_loaders import load_image_metadata_df
+from app.tabs.baseball_network_tab import render_baseball_network_tab
 from scripts.build_baseball_cache import build_cache
 from scripts.build_career_war_cache import build_career_war_cache
 from config.constants import FRANCHID_MODERN_ALIGNMENT, GRID_PLAYERS, TEAM_LIST, canonicalize_franchid
@@ -1593,9 +1594,12 @@ def render_simulator_tab() -> None:
     local_cache_dir = BASEBALL_CACHE_DIR
     required_files = ["teams.csv", "People.csv", "appearances.csv"]
     missing_files = [name for name in required_files if not _cache_file_path(local_cache_dir, name).exists()]
-    run_simulator_tab, cache_tools_tab, instructions_tab = st.tabs(
-        ["🎮 Play", "🧾 Cache Tools", "📘 Instructions"]
+    run_simulator_tab, player_connections_tab, cache_tools_tab, instructions_tab = st.tabs(
+        ["🎮 Play", "⚾ Player Connections", "🧾 Cache Tools", "📘 Instructions"]
     )
+
+    with player_connections_tab:
+        render_baseball_network_tab(local_cache_dir)
 
     with cache_tools_tab:
         metadata_tab, explorer_tab = st.tabs(["🧾 Metadata", "🔎 Data Explorer"])

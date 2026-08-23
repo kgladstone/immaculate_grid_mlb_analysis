@@ -21,7 +21,6 @@ from app.tabs.data_viewer_tab import (
 )
 from app.tabs.analytics_tab import render_analytics
 from app.tabs.simulator_tab import render_simulator_tab
-from app.tabs.baseball_network_tab import render_baseball_network_tab
 from config.constants import IMAGES_METADATA_PATH
 
 
@@ -111,15 +110,11 @@ def main():
         render_refresh_tab()
 
     with analytics_tab:
-        report_tab, mini_games_tab, baseball_network_tab = st.tabs(
-            ["📋 Report", "🎮 Mini Games", "⚾ Baseball Network"]
-        )
+        report_tab, mini_games_tab = st.tabs(["📋 Report", "🎮 Mini Games"])
         with report_tab:
             render_analytics(prompts_df, texts_df, images_df)
         with mini_games_tab:
             render_simulator_tab()
-        with baseball_network_tab:
-            render_baseball_network_tab()
 
 
 if __name__ == "__main__":

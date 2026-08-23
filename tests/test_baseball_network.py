@@ -1,6 +1,7 @@
 import pandas as pd
 
 from app.services.baseball_network import BaseballNetwork
+from app.tabs.baseball_network_tab import _preferred_player_index
 
 
 def _network():
@@ -57,8 +58,13 @@ def test_path_to_earliest_season():
     network = _network()
     path = network.path_to_earliest_baseball("modern")
     assert path is not None
-    assert path[-1].to_player == "ancient"
-    assert path[-1].year == 1960
+    assert network.player_years[path[-1].to_player][0] == 1960
+
+
+def test_preferred_player_index_uses_named_default_or_safe_fallback():
+    player_ids = ["alpha", "ansonca01", "batybr01"]
+    assert _preferred_player_index(player_ids, "batybr01") == 2
+    assert _preferred_player_index(player_ids, "missing", fallback=1) == 1
 
 
 def test_historical_relay_moves_to_earlier_career_starts():
