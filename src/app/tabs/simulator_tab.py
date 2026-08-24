@@ -1594,12 +1594,9 @@ def render_simulator_tab() -> None:
     local_cache_dir = BASEBALL_CACHE_DIR
     required_files = ["teams.csv", "People.csv", "appearances.csv"]
     missing_files = [name for name in required_files if not _cache_file_path(local_cache_dir, name).exists()]
-    run_simulator_tab, player_connections_tab, cache_tools_tab, instructions_tab = st.tabs(
-        ["🎮 Play", "⚾ Player Connections", "🧾 Cache Tools", "📘 Instructions"]
+    run_simulator_tab, cache_tools_tab, instructions_tab = st.tabs(
+        ["🎮 Play", "🧾 Cache Tools", "📘 Instructions"]
     )
-
-    with player_connections_tab:
-        render_baseball_network_tab(local_cache_dir)
 
     with cache_tools_tab:
         metadata_tab, explorer_tab = st.tabs(["🧾 Metadata", "🔎 Data Explorer"])
@@ -1669,7 +1666,15 @@ def render_simulator_tab() -> None:
             st.session_state["sim_team1"] = t1
             st.session_state["sim_team2"] = t2
 
-        sim_mode_tab, study_mode_tab, oldest_mode_tab, random_grid_tab, random_cube_tab, reverse_grid_tab = st.tabs(
+        (
+            sim_mode_tab,
+            study_mode_tab,
+            oldest_mode_tab,
+            random_grid_tab,
+            random_cube_tab,
+            reverse_grid_tab,
+            player_connections_tab,
+        ) = st.tabs(
             [
                 "✅ Intersection Checker",
                 "📚 Study Guide",
@@ -1677,8 +1682,12 @@ def render_simulator_tab() -> None:
                 "🎲 Random Immaculate Grid",
                 "🧊 Random Immaculate Cube",
                 "🔁 Reverse Immaculate Grid",
+                "🔗 Player Connections",
             ]
         )
+
+        with player_connections_tab:
+            render_baseball_network_tab(local_cache_dir)
 
         with sim_mode_tab:
             st.markdown("### Pick teams")
