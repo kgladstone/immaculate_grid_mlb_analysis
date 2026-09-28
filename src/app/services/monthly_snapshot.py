@@ -243,6 +243,37 @@ def _normalize_player(value: object) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", "", str(value).strip().lower()))
 
 
+def _most_used_players(images_df: pd.DataFrame, report_end: pd.Timestamp) -> tuple[pd.DataFrame, int]:
+    """Rank recorded player names by distinct cohort grids across all history."""
+    columns = ["rank", "player", "grids", "share of grids"]
+    if images_df.empty:
+        return pd.DataFrame(columns=columns), 0
+    images = images_df[images_df["submitter"].isin(GRID_PLAYERS_RESTRICTED)].copy()
+    images["grid_number"] = pd.to_numeric(images["grid_number"], errors="coerce")
+    images = images.dropna(subset=["grid_number"])
+    images = images.drop_duplicates(["submitter", "grid_number"], keep="last")
+    rows = []
+    for row in images.itertuples(index=False):
+        grid = int(row.grid_number)
+        if pd.Timestamp(grid_to_date(grid)) > report_end or not isinstance(row.responses, dict):
+            continue
+        for value in row.responses.values():
+            if not isinstance(value, str) or not value.strip():
+                continue
+            key = _normalize_player(value)
+            if key:
+                rows.append({"key": key, "player": re.sub(r"\s+", " ", value.strip()), "grid": grid})
+    if not rows:
+        return pd.DataFrame(columns=columns), 0
+    cells = pd.DataFrame(rows)
+    total = int(cells["grid"].nunique())
+    counts = cells.groupby("key", as_index=False).agg(player=("player", "first"), grids=("grid", "nunique"))
+    counts = counts.sort_values(["grids", "key"], ascending=[False, True]).reset_index(drop=True)
+    counts["rank"] = counts["grids"].rank(method="min", ascending=False).astype(int)
+    counts["share of grids"] = counts["grids"].map(lambda count: f"{count / total:.1%}")
+    return counts[columns], total
+
+
 def _save_metrics(
     images_df: pd.DataFrame,
     report_end: pd.Timestamp,
@@ -611,6 +642,19 @@ def generate_monthly_snapshot_pdf(
 
     with PdfPages(output_path) as pdf:
         pdf.savefig(fig, facecolor=fig.get_facecolor())
+        if quarterly:
+            leaders, observed_days = _most_used_players(images_df, report_end)
+            leaders_fig = plt.figure(figsize=(11, 8.5), facecolor="#F4F7FB")
+            leaders_fig.text(0.06, 0.94, "Players on the Most Grids | All Time", fontsize=18, weight="bold", color="#14233B")
+            leaders_fig.text(0.06, 0.90, f"Through {report_end:%B %d, %Y} | {observed_days:,} grid days with parsed names | Top 20", fontsize=10, color="#526075")
+            for column in range(2):
+                leaders_ax = leaders_fig.add_axes([0.06 + column * 0.46, 0.18, 0.42, 0.67])
+                _draw_table(leaders_ax, "", leaders.iloc[column * 10:(column + 1) * 10],
+                            col_widths=[0.11, 0.49, 0.16, 0.24], font_size=8)
+            leaders_fig.text(0.06, 0.11, "One count per player name per grid, even if several people or cells use that name.\nShare = distinct grids featuring that name / grid days with at least one parsed name from the report group.\nAll available history is included; partial coverage counts. Shared names may combine different players.",
+                             fontsize=8, color="#526075", va="top", linespacing=1.5)
+            pdf.savefig(leaders_fig, facecolor=leaders_fig.get_facecolor())
+            plt.close(leaders_fig)
         if quarterly and (not shame_details.empty or not bans_display.empty):
             # Keep the full 90-day weekly detail legible instead of squeezing it
             # into the summary dashboard. Every row is retained across pages.

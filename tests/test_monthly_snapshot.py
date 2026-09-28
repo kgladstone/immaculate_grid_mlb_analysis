@@ -309,3 +309,24 @@ def test_save_denominator_requires_names_and_counts_partial_days_once(monkeypatc
     assert events.iloc[0]["prior player grids"] == 1
     assert events.iloc[0]["prior grids"] == 2
     assert events.iloc[0]["save significance"] == "1/2 (50.0%)"
+
+
+def test_most_used_players_counts_unique_grids_not_cells_or_submitters(monkeypatch):
+    from app.services.monthly_snapshot import _most_used_players
+    from analytics.analysis import grid_to_date
+    monkeypatch.setattr('app.services.monthly_snapshot.GRID_PLAYERS_RESTRICTED', {'A': {}, 'B': {}})
+    images = pd.DataFrame([
+        {'submitter': 'A', 'grid_number': 10, 'responses': {'a': 'Tom Seaver', 'b': 'Tom Seaver'}},
+        {'submitter': 'B', 'grid_number': 10, 'responses': {'a': 'tom seaver'}},
+        {'submitter': 'A', 'grid_number': 11, 'responses': {'a': 'Tom Seaver', 'b': 'Nolan Ryan'}},
+        {'submitter': 'B', 'grid_number': 12, 'responses': {'a': 'Nolan Ryan'}},
+        {'submitter': 'A', 'grid_number': 13, 'responses': {'a': '', 'b': None}},
+        {'submitter': 'Outsider', 'grid_number': 14, 'responses': {'a': 'Tom Seaver'}},
+        {'submitter': 'A', 'grid_number': 20, 'responses': {'a': 'Tom Seaver'}},
+    ])
+    leaders, total = _most_used_players(images, pd.Timestamp(grid_to_date(15)))
+    assert total == 3
+    assert leaders.player.tolist() == ['Nolan Ryan', 'Tom Seaver']
+    assert leaders.grids.tolist() == [2, 2]
+    assert leaders['rank'].tolist() == [1, 1]
+    assert leaders['share of grids'].tolist() == ['66.7%', '66.7%']
