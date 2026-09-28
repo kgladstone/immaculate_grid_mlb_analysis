@@ -2269,6 +2269,16 @@ def analyze_shame_index(images_df: pd.DataFrame, person: Optional[str] = None) -
     rows = []
     for (sub, wk), group in df.groupby(["submitter", "week_start"]):
         counts = group["players"].value_counts()
+        total_uses = int(counts.sum())
+        # Two Frank Thomases in different cells of one daily grid establish
+        # two distinct players. Allow those two initial uses, but retain any
+        # additional uses across grids as repeats. Without the same-grid pair,
+        # identical names across days remain ambiguous and are still flagged.
+        for player in counts.index:
+            if _player_key(player) == "frankthomas":
+                per_grid = group.loc[group["players"] == player].groupby("grid_number").size()
+                if per_grid.max() >= 2:
+                    counts.loc[player] -= 1
         repeat_shame = int(sum(max(c - 1, 0) for c in counts))
         repeated = counts[counts > 1].index.tolist()
         repeated_fmt = []
@@ -2306,7 +2316,7 @@ def analyze_shame_index(images_df: pd.DataFrame, person: Optional[str] = None) -
                 "repeated_count": len(repeated_fmt),
                 "rule5_banned_players": "\n".join(rule5_fmt),
                 "rule5_banned_count": rule5_count,
-                "total_uses": int(counts.sum()),
+                "total_uses": total_uses,
             }
         )
     return pd.DataFrame(rows, columns=columns).sort_values(by=["week_start", "submitter"], ascending=False)

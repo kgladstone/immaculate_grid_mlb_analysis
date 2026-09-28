@@ -142,19 +142,21 @@ class ImmaculateGridUtils:
         """
         matrix = []
         for text_row in text.split("\n"):
-            current = []
-            for char in text_row:
-                if ord(char) == 11036:  # "⬜️":
-                    current.append(False)
-                elif ord(char) == 129001:  # "🟩":
-                    current.append(True)
-            if len(current) > 0:
-                if len(current) != 3:
-                    print(row.text)
-                    assert len(current) == 3
-                else:
-                    matrix.append(current)
-        assert len(matrix) == 3
+            current = [
+                char == "🟩"
+                for char in text_row
+                if char in {"⬜", "🟩"}
+            ]
+            # Quoted/reaction text can contain truncated emoji fragments. Only
+            # complete three-cell rows belong to the shared grid.
+            if len(current) == 3:
+                matrix.append(current)
+
+        if len(matrix) != 3:
+            raise ValueError(
+                "Expected exactly 3 complete grid rows, "
+                f"found {len(matrix)} in message: {text!r}"
+            )
         matrix = str(matrix).lower()
         return matrix
 
@@ -203,5 +205,9 @@ class ImmaculateGridUtils:
                     if "Rarity: " in text:                    
                         # Has the proper immaculate grid format
                         if "Immaculate Grid " in text:
+                            try:
+                                ImmaculateGridUtils._matrix_from_text(text)
+                            except ValueError:
+                                return False
                             return True
         return False

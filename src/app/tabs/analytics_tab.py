@@ -19,6 +19,12 @@ from config.constants import GRID_PLAYERS, GRID_PLAYERS_RESTRICTED, IMAGES_METAD
 from config.constants import IMAGES_METADATA_PATH, IMAGES_PATH, MESSAGES_CSV_PATH, PROMPTS_CSV_PATH, RULE5_FULL_BANS_CSV_PATH
 from scripts.build_career_war_cache import build_career_war_cache
 from app.services.player_links import player_link_columns, player_link_html, player_link_html_table
+from app.services.monthly_snapshot import (
+    rolling_report_bounds,
+    format_report_title,
+    generate_monthly_snapshot_pdf,
+    report_filename,
+)
 from app.services.report_bank import load_report_bank, run_report
 from data.transforms.data_prep import preprocess_data_into_texts_structure, make_color_map, build_category_structure
 from data.io.mlb_reference import correct_typos_with_fuzzy_matching
@@ -1306,6 +1312,22 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
         )
         generate_basic_pdf = st.button("Generate Basic Export Mode PDF")
 
+        st.markdown("#### Quarterly Report - Rolling 90 Days")
+        st.caption(
+            "Scores, bans, saves, and Shame Index cover the 90 days ending on the selected date. "
+            "Trends and immaculate streaks retain all available history. Weekly details follow the summary page."
+        )
+        quarterly_texts = ctx.get("texts_raw", pd.DataFrame())
+        dates = pd.to_datetime(quarterly_texts.get("date", pd.Series(dtype=str)), errors="coerce").dropna()
+        default_end = min(dates.max().normalize(), pd.Timestamp.now().normalize()) if not dates.empty else pd.Timestamp.now().normalize()
+        quarterly_end = st.date_input(
+            "Report ending date", value=default_end.date(),
+            max_value=default_end.date(), key="quarterly_report_end_date",
+        )
+        report_start, report_end = rolling_report_bounds(quarterly_end)
+        st.caption(f"90-day window: {report_start:%B %d, %Y} through {report_end:%B %d, %Y}")
+        generate_monthly_pdf = st.button("Generate Quarterly Report PDF")
+
         export_col_pdf, export_col_excel = st.columns(2)
         with export_col_pdf:
             generate_pdf = st.button("Generate PDF 📄")
@@ -1369,6 +1391,23 @@ def render_analytics(prompts_df: pd.DataFrame, texts_df: pd.DataFrame, images_df
                 data=f,
                 file_name="basic_export_mode.pdf",
                 mime="application/pdf",
+            )
+
+    if generate_monthly_pdf:
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        pdf_path = Path(tmp.name)
+        tmp.close()
+        with st.spinner("Generating rolling 90-day report..."):
+            report_start, report_end = rolling_report_bounds(quarterly_end)
+            generate_monthly_snapshot_pdf(
+                ctx.get("texts_raw", pd.DataFrame()),
+                ctx.get("images", pd.DataFrame()), pdf_path,
+                end_date=report_end,
+            )
+        with open(pdf_path, "rb") as f:
+            st.download_button(
+                "Download Quarterly Report PDF", data=f,
+                file_name=report_filename(report_start, report_end), mime="application/pdf",
             )
 
     if generate_pdf:

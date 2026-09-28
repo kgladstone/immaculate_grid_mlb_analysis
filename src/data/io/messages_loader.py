@@ -5,6 +5,7 @@ import datetime
 import re
 import shutil
 import tempfile
+import json
 from pathlib import Path
 
 from data.io.loader import Loader
@@ -12,6 +13,10 @@ from utils.grid_utils import ImmaculateGridUtils
 from config.constants import GRID_PLAYERS
 
 class MessagesLoader(Loader):
+    # Explicit submitter corrections; use the complete replacement submission
+    # (including its rarity score and matrix), never just change the count.
+    CORRECTED_SUBMISSIONS = {("Will", 1274): 8}  # Retracted banned Johnny Damon.
+
     def __init__(self, db_path, cache_path):
         print("*"*20)
         print("Loading messages from Apple Messages database...")
@@ -24,6 +29,36 @@ class MessagesLoader(Loader):
             dedupe_subset=["name", "grid_number"],
             dedupe_keep="first",
         )
+
+    def _fetch_new_data(self):
+        data = super()._fetch_new_data()
+        self._corrected_rows = []
+        if data is not None:
+            for (name, grid), correct in self.CORRECTED_SUBMISSIONS.items():
+                candidates = data[
+                    data["name"].eq(name)
+                    & pd.to_numeric(data["grid_number"], errors="coerce").eq(grid)
+                ]
+                # Will edited the squares and rarity but left the 9/9 header.
+                # For this explicitly approved correction, trust the matrix.
+                matches = candidates[candidates["matrix"].map(
+                    lambda value: sum(cell for row in json.loads(value) for cell in row) == correct
+                )].copy()
+                if not matches.empty:
+                    matches["correct"] = correct
+                    self._corrected_rows.append(matches.iloc[[-1]])
+        return data
+
+    def _save_to_cache(self):
+        # Loader normally keeps cached/first submissions. Apply approved
+        # replacements after that merge so an older 9/9 cannot win on refresh.
+        for replacement in getattr(self, "_corrected_rows", []):
+            row = replacement.iloc[0]
+            old = self.data["name"].eq(row["name"]) & pd.to_numeric(
+                self.data["grid_number"], errors="coerce"
+            ).eq(int(row["grid_number"]))
+            self.data = pd.concat([self.data.loc[~old], replacement], ignore_index=True)
+        super()._save_to_cache()
 
     def _fetch_messages(self, db_path):
         # Extract data from SQL database

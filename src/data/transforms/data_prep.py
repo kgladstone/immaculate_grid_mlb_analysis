@@ -605,6 +605,14 @@ def create_disaggregated_results_df(
     ]
     out = combined[final_cols].copy()
     out["grid_number"] = pd.to_numeric(out["grid_number"], errors="coerce")
+    # Will retracted Johnny Damon in grid 1274 (top middle), submitting 8/9.
+    # Preserve the screenshot/OCR source; exclude that answer only downstream.
+    retracted = (
+        out["submitter"].eq("Will")
+        & out["grid_number"].eq(1274)
+        & out["position"].eq("top_center")
+    )
+    out.loc[retracted, "response"] = ""
     position_order = [
         "top_left",
         "top_center",
