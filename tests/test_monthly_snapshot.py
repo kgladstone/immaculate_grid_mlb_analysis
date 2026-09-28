@@ -191,14 +191,14 @@ def test_save_metrics_use_only_history_before_each_save(monkeypatch):
     assert events.loc[0, "saved by"] == "D"
     assert events.loc[0, "used instead"] == "Unique D 20"
     assert events.loc[0, "prior player grids"] == 1
-    assert events.loc[0, "prior grids"] == 20
-    assert events.loc[0, "save significance"] == "1/20 (5.0%)"
+    assert events.loc[0, "prior grids"] == 2
+    assert events.loc[0, "save significance"] == "1/2 (50.0%)"
     assert players.to_dict("records") == [
         {
             "player": "Popular Player",
             "saves": 1,
             "last saved on": "20 | Apr 22 23",
-            "save significance": "1/20 (5.0%)",
+            "save significance": "1/2 (50.0%)",
         }
     ]
 
@@ -253,8 +253,8 @@ def test_save_metrics_limit_events_to_eight_weeks_but_keep_all_prior_usage(monke
     assert events["grid"].tolist() == [200]
     assert events.loc[0, "used instead"] == "Unique D 200"
     assert events.loc[0, "prior player grids"] == 2
-    assert events.loc[0, "prior grids"] == 200
-    assert events.loc[0, "save significance"] == "2/200 (1.0%)"
+    assert events.loc[0, "prior grids"] == 3
+    assert events.loc[0, "save significance"] == "2/3 (66.7%)"
     assert players.loc[0, "saves"] == 1
 
 
@@ -291,3 +291,21 @@ def test_shame_window_excludes_incidents_outside_exact_dates(monkeypatch):
     monkeypatch.setattr("app.services.monthly_snapshot.analyze_shame_index", capture)
     _shame_incidents(images, pd.Timestamp(grid_to_date(1274)), pd.Timestamp(grid_to_date(1185)))
     assert seen == [1185, 1274]
+
+
+
+def test_save_denominator_requires_names_and_counts_partial_days_once(monkeypatch):
+    monkeypatch.setattr("app.services.monthly_snapshot.GRID_PLAYERS_RESTRICTED", {n: {} for n in "ABCD"})
+    images = pd.DataFrame([
+        {"submitter": "A", "grid_number": 10, "responses": {"top_left": "Saved Player"}},
+        {"submitter": "B", "grid_number": 10, "responses": {"top_left": "Other"}},
+        {"submitter": "A", "grid_number": 12, "responses": {"top_left": "Other"}},
+        {"submitter": "B", "grid_number": 15, "responses": {"top_left": "", "top_right": "  "}},
+        {"submitter": "Outsider", "grid_number": 16, "responses": {"top_left": "Other"}},
+        {"submitter": "A", "grid_number": 30, "responses": {"top_left": "Saved Player"}},
+        *[{"submitter": n, "grid_number": 20, "responses": {"top_left": "Saved Player" if n != "D" else "Other"}} for n in "ABCD"],
+    ])
+    events, _ = _save_metrics(images, pd.Timestamp("2023-05-01"))
+    assert events.iloc[0]["prior player grids"] == 1
+    assert events.iloc[0]["prior grids"] == 2
+    assert events.iloc[0]["save significance"] == "1/2 (50.0%)"

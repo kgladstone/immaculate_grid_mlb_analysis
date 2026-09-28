@@ -254,7 +254,7 @@ def _save_metrics(
     same player in the same cell and the fourth submitted that grid but did not.
     Only saves in the reporting window are returned. Save significance still uses
     all history strictly before that grid: distinct prior grids featuring the MLB
-    player divided by all grids that had occurred before the save.
+    player divided by prior grids with at least one parsed cohort player name.
     """
     event_columns = [
         "player", "saved by", "used instead", "grid", "date", "prior player grids",
@@ -319,6 +319,7 @@ def _save_metrics(
     restricted_submissions = submissions[submissions["submitter"].isin(cohort)]
     submitted_by_grid = restricted_submissions.groupby("grid_number")["submitter"].agg(set).to_dict()
     restricted_cells = cells[cells["submitter"].isin(cohort)]
+    observed_grid_ids = set(restricted_cells["grid_number"])
 
     raw_events = []
     for (grid_number, position, player_key), group in restricted_cells.groupby(
@@ -348,10 +349,9 @@ def _save_metrics(
                 "grid_number",
             ].nunique()
         )
-        # Grid IDs are a zero-based, uninterrupted daily sequence, so the save
-        # grid ID is exactly the number of grids that occurred before it.  This
-        # keeps the denominator independent of who happened to submit results.
-        prior_grids = max(int(grid_number), 0)
+        # Use the same observed player-name population as the numerator.
+        # Text-only days and screenshots without any parsed names do not count.
+        prior_grids = sum(0 <= prior < grid_number for prior in observed_grid_ids)
         significance = prior_player_grids / prior_grids if prior_grids else 0.0
         raw_events.append(
             {
@@ -643,8 +643,8 @@ def generate_monthly_snapshot_pdf(
             definitions = [
                 ("Reporting window", "Scores, saves, bans, and Shame Index cover the 90 calendar days ending on the report date, inclusive. Trend charts and longest immaculate streaks use all available history through that date."),
                 ("What counts as a save?", "All four report participants must have submitted the grid. Three use the same player in the same cell; the fourth uses someone else or leaves it blank. The fourth participant gets the save. Saves are counted per player, cell, and grid."),
-                ("Save significance", "Prior player grids / prior grids, expressed as a percentage. Prior player grids counts distinct earlier grid IDs where at least one report participant used that player in any cell. Multiple uses on one grid count once. Prior grids is every grid before the save grid, including grids with no recorded submissions (the save grid ID). The save grid itself and all later grids are excluded."),
-                ("How to read it", "Example: 121 / 1,237 = 9.8%. The player appeared in the group's recorded answers on 121 earlier grids out of 1,237 possible prior grids. A higher percentage means a more historically common player was saved; it is not a probability or a measure of statistical significance. Missing historical screenshots can lower the numerator."),
+                ("Save significance", "Prior player grids / prior grids, expressed as a percentage. Prior player grids counts distinct earlier grid IDs where at least one report participant used that player in any cell. Multiple uses on one grid count once. Prior grids counts distinct earlier grid days with at least one parsed player name from a report participant. Text-only days, days without screenshots, and screenshots with no parsed names are excluded. Multiple submitters on one day count once; partial group coverage is sufficient. The save grid itself and all later grids are excluded."),
+                ("How to read it", "Example: Tom Seaver appeared on 121 of 956 earlier grid days with parsed player names, giving 12.7% save significance. A higher percentage means a more historically common player was saved; it is not a probability or a measure of statistical significance. Coverage may be partial: a qualifying day need not have names for every participant. Missing screenshots can still lower the numerator."),
                 ("Save tables", "Most Popular Saves ranks individual save events by significance at the time of the save. Players Saved Most counts saves within the 90-day window; its Last Saved On and Save Significance describe that player's latest save in the window. Each summary table shows its top eight entries."),
                 ("Shame Index", "Within each Monday-Sunday week, each use of a repeated player after the first adds one point. Each player used on a grid after their Rule 5 ban adds one more point. Weeks counts weeks with at least one point. Boundary weeks include only grids inside the 90-day window."),
                 ("Same-name exception: Frank Thomas", "Two uses on the same grid establish the two distinct Frank Thomases, so that pair adds no repeat point. Further uses in the week still count as repeats. Without a same-grid pair, uses on separate grids remain ambiguous and are still flagged. This exception does not remove Rule 5 ban checks."),
