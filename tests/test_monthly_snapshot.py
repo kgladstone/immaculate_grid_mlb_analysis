@@ -31,7 +31,7 @@ def _sample_results() -> pd.DataFrame:
             correct = 9 - ((day + offset) % 3)
             rows.append(
                 {
-                    "grid_number": day,
+                    "grid_number": int((date - pd.Timestamp("2023-04-02")).days),
                     "name": name,
                     "correct": correct,
                     "score": 40 + (offset * 30) + day,
@@ -131,7 +131,7 @@ def test_custom_range_validation_preserves_single_page_limit():
         pd.Timestamp("2026-07-01"),
         pd.Timestamp("2026-07-31"),
     )
-    with pytest.raises(ValueError, match="90 days"):
+    with pytest.raises(ValueError, match="92 days"):
         _date_bounds("2026-06-01", "2026-09-01")
 
 
@@ -157,7 +157,7 @@ def test_shame_incidents_include_repeated_and_rule5_player_names(monkeypatch):
 
     incidents = _shame_incidents(pd.DataFrame(), pd.Timestamp("2026-07-31"))
 
-    assert incidents.loc[0, "players used"] == "Tyler Clippard; Alex Bregman [R5]"
+    assert incidents.loc[0, "players used"] == "Tyler Clippard [Repeated]; Alex Bregman [Banned]"
     assert incidents.loc[0, "index"] == 2
 
 
@@ -184,7 +184,12 @@ def test_save_metrics_use_only_history_before_each_save(monkeypatch):
                     "responses": responses,
                 }
             )
-    events, players = _save_metrics(pd.DataFrame(rows), pd.Timestamp("2023-05-31"))
+    prompts = pd.DataFrame([
+        {"grid_id": 20, "top_left": "('New York Mets', 'Boston   Red Sox')", "top_right": "('Wrong', 'Cell')"},
+        {"grid_id": 30, "top_left": "('Wrong', 'Grid')"},
+    ])
+    events, players = _save_metrics(pd.DataFrame(rows), pd.Timestamp("2023-05-31"), prompts_df=prompts)
+    assert events.loc[0, "prompt"] == "New York Mets / Boston Red Sox"
 
     assert len(events) == 1
     assert events.loc[0, "player"] == "Popular Player"
@@ -255,7 +260,13 @@ def test_save_metrics_limit_events_to_eight_weeks_but_keep_all_prior_usage(monke
     assert events.loc[0, "prior player grids"] == 2
     assert events.loc[0, "prior grids"] == 3
     assert events.loc[0, "save significance"] == "2/3 (66.7%)"
-    assert players.loc[0, "saves"] == 1
+    assert players.loc[0, "saves"] == 2
+
+    no_recent_events, historical_players = _save_metrics(
+        pd.DataFrame(rows), pd.Timestamp("2023-10-31"), pd.Timestamp("2023-10-30")
+    )
+    assert no_recent_events.empty
+    assert historical_players.loc[0, "saves"] == 2
 
 
 def test_monthly_snapshot_is_a_single_landscape_pdf(tmp_path):
@@ -330,3 +341,19 @@ def test_most_used_players_counts_unique_grids_not_cells_or_submitters(monkeypat
     assert leaders.grids.tolist() == [2, 2]
     assert leaders['rank'].tolist() == [1, 1]
     assert leaders['share of grids'].tolist() == ['66.7%', '66.7%']
+
+
+def test_full_calendar_quarter_accepts_92_days():
+    start, end = _date_bounds("2026-07-01", "2026-09-30")
+    assert (end - start).days + 1 == 92
+    assert "Q3 2026" in format_report_title(start, end)
+    assert report_filename(start, end) == "immaculate_grid_quarterly_report_2026_Q3.pdf"
+    with pytest.raises(ValueError, match="92 days"):
+        _date_bounds("2026-06-30", "2026-09-30")
+
+
+def test_report_uses_grid_date_for_late_submissions():
+    raw = pd.DataFrame([{"name": "Sam", "grid_number": 1277, "correct": 8, "score": 120, "date": "2026-10-01"}])
+    result = _prepare_results(raw, pd.Timestamp("2026-09-30"))
+    assert len(result) == 1
+    assert result.iloc[0]["date"] == pd.Timestamp("2026-09-30")

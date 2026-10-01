@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import ast
 import textwrap
 
 import matplotlib.dates as mdates
@@ -11,12 +12,12 @@ import pandas as pd
 from matplotlib.backends.backend_pdf import PdfPages
 
 from analytics.analysis import analyze_shame_index, grid_to_date
-from config.constants import GRID_PLAYERS, GRID_PLAYERS_RESTRICTED, RULE5_FULL_BANS_CSV_PATH
+from config.constants import GRID_PLAYERS, GRID_PLAYERS_RESTRICTED, RULE5_FULL_BANS_CSV_PATH, PROMPTS_CSV_PATH
 
 
 MOVING_AVERAGE_WINDOW = 28
 WEEK_COUNT = 8
-MAX_CUSTOM_RANGE_DAYS = 90
+MAX_CUSTOM_RANGE_DAYS = 92
 ROLLING_REPORT_DAYS = 90
 
 
@@ -39,9 +40,14 @@ def _date_bounds(start_date: str | pd.Timestamp, end_date: str | pd.Timestamp) -
     day_count = int((end - start).days) + 1
     if day_count > MAX_CUSTOM_RANGE_DAYS:
         raise ValueError(
-            f"Custom report ranges are limited to {MAX_CUSTOM_RANGE_DAYS} days to preserve the single-page layout."
+            f"Custom report ranges are limited to {MAX_CUSTOM_RANGE_DAYS} days."
         )
     return start, end
+
+
+def _is_complete_calendar_quarter(start: pd.Timestamp, end: pd.Timestamp) -> bool:
+    quarter = start.to_period("Q")
+    return start == quarter.start_time.normalize() and end == quarter.end_time.normalize()
 
 
 def _is_complete_calendar_month(start: pd.Timestamp, end: pd.Timestamp) -> bool:
@@ -50,6 +56,8 @@ def _is_complete_calendar_month(start: pd.Timestamp, end: pd.Timestamp) -> bool:
 
 def format_report_title(start: pd.Timestamp, end: pd.Timestamp) -> str:
     """Return a deterministic title for a complete month or an arbitrary date range."""
+    if _is_complete_calendar_quarter(start, end):
+        return f"Immaculate Grid Quarterly Report | Q{start.quarter} {start.year} | {start:%b %d} - {end:%b %d}"
     if (end - start).days + 1 == ROLLING_REPORT_DAYS:
         return f"Immaculate Grid Quarterly Report | {start:%b %d, %Y} - {end:%b %d, %Y}"
     if _is_complete_calendar_month(start, end):
@@ -66,6 +74,8 @@ def format_report_title(start: pd.Timestamp, end: pd.Timestamp) -> str:
 
 
 def report_filename(start: pd.Timestamp, end: pd.Timestamp) -> str:
+    if _is_complete_calendar_quarter(start, end):
+        return f"immaculate_grid_quarterly_report_{start.year}_Q{start.quarter}.pdf"
     if (end - start).days + 1 == ROLLING_REPORT_DAYS:
         return f"immaculate_grid_quarterly_report_{end:%Y_%m_%d}.pdf"
     if _is_complete_calendar_month(start, end):
@@ -86,6 +96,8 @@ def _prepare_results(texts_df: pd.DataFrame, report_end: pd.Timestamp) -> pd.Dat
     results["date"] = pd.to_datetime(results["date"], errors="coerce").dt.normalize()
     results = results.dropna(subset=["grid_number", "name", "correct", "score", "date"])
     results = results[results["name"].isin(GRID_PLAYERS_RESTRICTED)]
+    # Calendar reports follow the grid day, even when a result is shared later.
+    results["date"] = results["grid_number"].map(lambda grid: pd.Timestamp(grid_to_date(int(grid))).normalize())
     results = results[results["date"] <= report_end]
     if results.empty:
         return results
@@ -179,7 +191,7 @@ def _shame_incidents(
         for line in str(value or "").splitlines():
             name = re.sub(r"\s+\([^)]*\)\s*$", "", line).strip()
             if name:
-                names.append(f"{name} [R5]" if rule5 else name)
+                names.append(f"{name} [Banned]" if rule5 else f"{name} [Repeated]")
         return names
 
     shame = shame.copy()
@@ -196,7 +208,7 @@ def _shame_incidents(
         player_names = _player_names(row.repeated_players)
         player_names.extend(_player_names(row.rule5_banned_players, rule5=True))
         players_text = "; ".join(player_names) if player_names else "Unspecified"
-        players_text = "\n".join(textwrap.wrap(players_text, width=36, max_lines=3, placeholder="..."))
+        players_text = "\n".join(textwrap.wrap(players_text, width=85))
         rows.append(
             {
                 "week": row.week_start.strftime("%b %-d"),
@@ -274,21 +286,34 @@ def _most_used_players(images_df: pd.DataFrame, report_end: pd.Timestamp) -> tup
     return counts[columns], total
 
 
+def _intersection_prompt(value: object) -> str:
+    if isinstance(value, str):
+        try:
+            value = ast.literal_eval(value)
+        except (ValueError, SyntaxError):
+            return re.sub(r"\s+", " ", value).strip() or "Unavailable"
+    if isinstance(value, (tuple, list)) and len(value) == 2:
+        return " / ".join(re.sub(r"\s+", " ", str(part)).strip() for part in value)
+    return "Unavailable"
+
+
 def _save_metrics(
     images_df: pd.DataFrame,
     report_end: pd.Timestamp,
     report_start: pd.Timestamp | None = None,
+    prompts_df: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Build leakage-free save metrics for the eight weeks through ``report_end``.
+    """Build reporting-window save events and all-time player save totals.
 
     A save occurs when three members of the restricted four-person cohort use the
     same player in the same cell and the fourth submitted that grid but did not.
-    Only saves in the reporting window are returned. Save significance still uses
+    Individual events cover the reporting window; player totals cover all history
+    through report_end. Save significance still uses
     all history strictly before that grid: distinct prior grids featuring the MLB
     player divided by prior grids with at least one parsed cohort player name.
     """
     event_columns = [
-        "player", "saved by", "used instead", "grid", "date", "prior player grids",
+        "player", "prompt", "saved by", "used instead", "grid", "date", "prior player grids",
         "prior grids", "save significance",
     ]
     player_columns = ["player", "saves", "last saved on", "save significance"]
@@ -352,6 +377,14 @@ def _save_metrics(
     restricted_cells = cells[cells["submitter"].isin(cohort)]
     observed_grid_ids = set(restricted_cells["grid_number"])
 
+    prompt_lookup = {}
+    if prompts_df is not None and "grid_id" in prompts_df.columns:
+        for record in prompts_df.to_dict("records"):
+            grid = pd.to_numeric(record.get("grid_id"), errors="coerce")
+            if pd.notna(grid):
+                for position, value in record.items():
+                    if position != "grid_id":
+                        prompt_lookup[(int(grid), position)] = _intersection_prompt(value)
     raw_events = []
     for (grid_number, position, player_key), group in restricted_cells.groupby(
         ["grid_number", "position", "player_key"], sort=False
@@ -361,8 +394,6 @@ def _save_metrics(
             continue
         saver = next(iter(cohort - users))
         event_date = pd.Timestamp(group["date"].min()).normalize()
-        if not event_start <= event_date <= report_end:
-            continue
         saver_cell = restricted_cells[
             restricted_cells["grid_number"].eq(grid_number)
             & restricted_cells["position"].eq(position)
@@ -387,6 +418,7 @@ def _save_metrics(
         raw_events.append(
             {
                 "player": display_names[player_key],
+                "prompt": prompt_lookup.get((int(grid_number), position), "Unavailable"),
                 "saved by": saver,
                 "used instead": used_instead,
                 "grid": int(grid_number),
@@ -429,6 +461,9 @@ def _save_metrics(
             latest.sort_values(["saves", "_significance_sort", "player"], ascending=[False, False, True])
             .reset_index(drop=True)
         )
+        events = events[events["date"].between(event_start, report_end)].copy().reset_index(drop=True)
+        if events.empty:
+            return events[event_columns], players[player_columns]
         events["date"] = pd.to_datetime(events["date"]).dt.strftime("%b %-d %y")
         events["save significance"] = events.apply(
             lambda row: (
@@ -451,7 +486,7 @@ def _style_axis(ax, title: str, ylabel: str) -> None:
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%b\n%Y"))
 
 
-def _draw_table(ax, title: str, frame: pd.DataFrame, col_widths=None, font_size: float = 6.2) -> None:
+def _draw_table(ax, title: str, frame: pd.DataFrame, col_widths=None, font_size: float = 6.2, fit_multiline: bool = False) -> None:
     ax.axis("off")
     ax.set_title(title, loc="left", fontsize=9.2, fontweight="bold", pad=5, color="#17243A")
     display = frame.copy()
@@ -467,6 +502,13 @@ def _draw_table(ax, title: str, frame: pd.DataFrame, col_widths=None, font_size:
         colWidths=col_widths,
         bbox=[0, 0, 1, 0.92],
     )
+    if fit_multiline:
+        weights = [1.5] + [
+            0.6 + max(str(value).count("\n") + 1 for value in row)
+            for row in display.astype(str).values
+        ]
+        for (row, _), cell in table.get_celld().items():
+            cell.set_height(weights[row] / sum(weights))
     table.auto_set_font_size(False)
     table.set_fontsize(font_size)
     for (row, _), cell in table.get_celld().items():
@@ -506,9 +548,10 @@ def generate_monthly_snapshot_pdf(
     event_start = report_start if custom_range else None
     period_label = "Selected Range" if custom_range else "Last 8 Weeks"
     score_period_label = "Selected Range" if custom_range else "Report Month"
-    quarterly = (report_end - report_start).days + 1 == ROLLING_REPORT_DAYS
+    calendar_quarter = _is_complete_calendar_quarter(report_start, report_end)
+    quarterly = calendar_quarter or (report_end - report_start).days + 1 >= ROLLING_REPORT_DAYS
     if quarterly:
-        period_label = score_period_label = "Last 90 Days"
+        period_label = score_period_label = f"Q{report_start.quarter} {report_start.year}" if calendar_quarter else f"Last {(report_end - report_start).days + 1} Days"
     title = format_report_title(report_start, report_end)
 
     results = _prepare_results(texts_df, report_end)
@@ -520,7 +563,8 @@ def generate_monthly_snapshot_pdf(
     best, worst = _score_extremes(results, report_start, report_end)
     shame = _shame_incidents(images_df, report_end, event_start)
     bans = _recent_bans(report_end, event_start)
-    save_events, saved_players = _save_metrics(images_df, report_end, event_start)
+    prompts = pd.read_csv(PROMPTS_CSV_PATH) if PROMPTS_CSV_PATH.exists() else None
+    save_events, saved_players = _save_metrics(images_df, report_end, event_start, prompts_df=prompts)
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -529,7 +573,7 @@ def generate_monthly_snapshot_pdf(
     fig = plt.figure(figsize=(11, 8.5), facecolor="#F4F7FB")
     gs = fig.add_gridspec(
         4, 12,
-        height_ratios=[0.38, 2.05, 2.45, 2.25],
+        height_ratios=[0.38, 1.9, 2.3, 2.8],
         left=0.045, right=0.975, top=0.96, bottom=0.055,
         hspace=0.48, wspace=0.72,
     )
@@ -609,30 +653,27 @@ def generate_monthly_snapshot_pdf(
         font_size=5.25,
     )
 
-    popular_saves_ax = fig.add_subplot(gs[3, 0:6])
-    popular_saves = save_events.head(8)
-    if not popular_saves.empty:
-        popular_saves = popular_saves.copy()
-        popular_saves["used instead"] = popular_saves["used instead"].map(
-            lambda value: "\n".join(textwrap.wrap(str(value), width=17, max_lines=2, placeholder="..."))
+    popular_saves_ax = fig.add_subplot(gs[3, :] if quarterly else gs[3, 0:6])
+    popular_saves = save_events.head(8).copy()
+    for column, width in [("prompt", 36), ("used instead", 19), ("player", 20)]:
+        popular_saves[column] = popular_saves[column].map(
+            lambda value: "\n".join(textwrap.wrap(str(value), width=width))
         )
+    popular_saves["grid / date"] = popular_saves.apply(
+        lambda row: f"{row['grid']} | {row['date']}", axis=1
+    ) if not popular_saves.empty else pd.Series(dtype=str)
     _draw_table(
         popular_saves_ax,
         f"Most Popular Saves at Time of Save - {period_label}",
-        popular_saves.rename(columns={"prior player grids": "prior player\ngrids"}),
-        col_widths=[0.17, 0.10, 0.17, 0.06, 0.10, 0.12, 0.09, 0.19],
-        font_size=4.25,
+        popular_saves[["player", "prompt", "saved by", "used instead", "grid / date", "save significance"]],
+        col_widths=[0.16, 0.29, 0.08, 0.16, 0.14, 0.17],
+        font_size=6.4 if quarterly else 4.25, fit_multiline=True,
     )
-
-    saved_players_ax = fig.add_subplot(gs[3, 6:12])
     saved_players_display = saved_players.head(8).copy()
-    _draw_table(
-        saved_players_ax,
-        f"Players Saved Most - {period_label}",
-        saved_players_display,
-        col_widths=[0.31, 0.11, 0.30, 0.28],
-        font_size=5.15,
-    )
+    if not quarterly:
+        saved_players_ax = fig.add_subplot(gs[3, 6:12])
+        _draw_table(saved_players_ax, "Players Saved Most - All Time",
+                    saved_players_display, col_widths=[0.31, 0.11, 0.30, 0.28], font_size=5.15)
 
     fig.text(
         0.975, 0.018,
@@ -648,11 +689,14 @@ def generate_monthly_snapshot_pdf(
             leaders_fig.text(0.06, 0.94, "Players on the Most Grids | All Time", fontsize=18, weight="bold", color="#14233B")
             leaders_fig.text(0.06, 0.90, f"Through {report_end:%B %d, %Y} | {observed_days:,} grid days with parsed names | Top 20", fontsize=10, color="#526075")
             for column in range(2):
-                leaders_ax = leaders_fig.add_axes([0.06 + column * 0.46, 0.18, 0.42, 0.67])
+                leaders_ax = leaders_fig.add_axes([0.06 + column * 0.46, 0.43, 0.42, 0.42])
                 _draw_table(leaders_ax, "", leaders.iloc[column * 10:(column + 1) * 10],
                             col_widths=[0.11, 0.49, 0.16, 0.24], font_size=8)
-            leaders_fig.text(0.06, 0.11, "One count per player name per grid, even if several people or cells use that name.\nShare = distinct grids featuring that name / grid days with at least one parsed name from the report group.\nAll available history is included; partial coverage counts. Shared names may combine different players.",
-                             fontsize=8, color="#526075", va="top", linespacing=1.5)
+            saved_ax = leaders_fig.add_axes([0.06, 0.14, 0.88, 0.23])
+            _draw_table(saved_ax, "Players Saved Most - All Time", saved_players_display,
+                        col_widths=[0.31, 0.11, 0.30, 0.28], font_size=6.8)
+            leaders_fig.text(0.06, 0.09, "One count per player name per grid, even if several people or cells use that name.\nShare = distinct grids featuring that name / grid days with at least one parsed name from the report group.\nAll available history is included; partial coverage counts. Shared names may combine different players.",
+                             fontsize=7, color="#526075", va="top", linespacing=1.4)
             pdf.savefig(leaders_fig, facecolor=leaders_fig.get_facecolor())
             plt.close(leaders_fig)
         if quarterly and (not shame_details.empty or not bans_display.empty):
@@ -666,7 +710,7 @@ def generate_monthly_snapshot_pdf(
                     detail_grid = detail_fig.add_gridspec(2, 1, height_ratios=[max(5, len(shame_details) - offset), max(4, len(bans_display))], hspace=0.3)
                     detail_ax = detail_fig.add_subplot(detail_grid[0])
                     bans_detail_ax = detail_fig.add_subplot(detail_grid[1])
-                    _draw_table(bans_detail_ax, "Rule 5 Bans - Last 90 Days", bans_display,
+                    _draw_table(bans_detail_ax, f"Rule 5 Bans - {period_label}", bans_display,
                                 col_widths=[0.13, 0.22, 0.10, 0.55], font_size=7)
                 else:
                     detail_ax = detail_fig.add_subplot(111)
@@ -678,19 +722,19 @@ def generate_monthly_snapshot_pdf(
                     detail_ax,
                     f"Shame Index Details | {report_start:%b %d} - {report_end:%b %d, %Y}",
                     shame_details.iloc[offset:offset + 16],
-                    col_widths=[0.12, 0.15, 0.08, 0.65], font_size=8,
+                    col_widths=[0.12, 0.15, 0.08, 0.65], font_size=8, fit_multiline=True,
                 )
-                detail_fig.text(0.94, 0.025, f"Rolling 90-day report | Detail page {offset // 16 + 1}", ha="right", fontsize=6, color="#526075")
+                detail_fig.text(0.94, 0.025, f"{period_label} report | Detail page {offset // 16 + 1}", ha="right", fontsize=6, color="#526075")
                 pdf.savefig(detail_fig, facecolor=detail_fig.get_facecolor())
                 plt.close(detail_fig)
         if quarterly:
             definitions = [
-                ("Reporting window", "Scores, saves, bans, and Shame Index cover the 90 calendar days ending on the report date, inclusive. Trend charts and longest immaculate streaks use all available history through that date."),
+                ("Reporting window", f"Scores, saves, bans, and Shame Index cover {report_start:%B %d, %Y} through {report_end:%B %d, %Y}, inclusive ({(report_end - report_start).days + 1} days). Trend charts and longest immaculate streaks use all available history through the end date."),
                 ("What counts as a save?", "All four report participants must have submitted the grid. Three use the same player in the same cell; the fourth uses someone else or leaves it blank. The fourth participant gets the save. Saves are counted per player, cell, and grid."),
                 ("Save significance", "Prior player grids / prior grids, expressed as a percentage. Prior player grids counts distinct earlier grid IDs where at least one report participant used that player in any cell. Multiple uses on one grid count once. Prior grids counts distinct earlier grid days with at least one parsed player name from a report participant. Text-only days, days without screenshots, and screenshots with no parsed names are excluded. Multiple submitters on one day count once; partial group coverage is sufficient. The save grid itself and all later grids are excluded."),
                 ("How to read it", "Example: Tom Seaver appeared on 121 of 956 earlier grid days with parsed player names, giving 12.7% save significance. A higher percentage means a more historically common player was saved; it is not a probability or a measure of statistical significance. Coverage may be partial: a qualifying day need not have names for every participant. Missing screenshots can still lower the numerator."),
-                ("Save tables", "Most Popular Saves ranks individual save events by significance at the time of the save. Players Saved Most counts saves within the 90-day window; its Last Saved On and Save Significance describe that player's latest save in the window. Each summary table shows its top eight entries."),
-                ("Shame Index", "Within each Monday-Sunday week, each use of a repeated player after the first adds one point. Each player used on a grid after their Rule 5 ban adds one more point. Weeks counts weeks with at least one point. Boundary weeks include only grids inside the 90-day window."),
+                ("Save tables", "Most Popular Saves ranks individual save events by significance at the time of the save. Players Saved Most counts all saves through the report end date; its Last Saved On and Save Significance describe that player's latest save through that date. Each summary table shows its top eight entries."),
+                ("Shame Index", "Within each Monday-Sunday week, each use of a repeated player after the first adds one point. Each player used on a grid after their Rule 5 ban adds one more point. Weeks counts weeks with at least one point. Boundary weeks include only grids inside the report window."),
                 ("Same-name exception: Frank Thomas", "Two uses on the same grid establish the two distinct Frank Thomases, so that pair adds no repeat point. Further uses in the week still count as repeats. Without a same-grid pair, uses on separate grids remain ambiguous and are still flagged. This exception does not remove Rule 5 ban checks."),
             ]
             definition_fig = plt.figure(figsize=(11, 8.5), facecolor="#F4F7FB")
